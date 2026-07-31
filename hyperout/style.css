@@ -137,8 +137,7 @@ body {
   display: block;
   width: 100%;
   height: auto;
-  mix-blend-mode: screen;
-  opacity: 0.92;
+  opacity: 0.95;
 }
 
 /* ---------- Menu / panels ---------- */

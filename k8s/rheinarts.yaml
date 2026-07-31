@@ -1,0 +1,68 @@
+# Rhein Arts — Kubernetes manifests (k3s + MetalLB)
+# Image:   ghcr.io/g33kde/rheinarts:v1  (public GHCR package -> no pull secret)
+# Service: type LoadBalancer -> MetalLB auto-assigns an IP from its pool.
+# Apply:   kubectl apply -f k8s/rheinarts.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rheinarts
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rheinarts
+  namespace: rheinarts
+  labels:
+    app: rheinarts
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rheinarts
+  template:
+    metadata:
+      labels:
+        app: rheinarts
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/g33kde/rheinarts:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rheinarts
+  namespace: rheinarts
+  labels:
+    app: rheinarts
+spec:
+  type: LoadBalancer          # MetalLB assigns an IP from its pool
+  selector:
+    app: rheinarts
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

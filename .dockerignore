@@ -1,0 +1,8 @@
+**/.DS_Store
+**/*.md
+.git
+.gitignore
+.claude
+k8s
+Dockerfile
+.dockerignore
