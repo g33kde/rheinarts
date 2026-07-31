@@ -1,0 +1,12 @@
+*.local
+.env
+.env.*
+local/
+*.secret
+*.key
+# OS cruft
+.DS_Store
+**/.DS_Store
+
+# local Claude Code settings
+.claude/settings.local.json

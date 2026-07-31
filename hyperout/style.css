@@ -1,0 +1,378 @@
+:root {
+  --bg: #05060a;
+  --grid-line: rgba(60, 120, 160, 0.09);
+  --p1: #00e5ff;
+  --p1-dim: #0891a3;
+  --p2: #ff9d00;
+  --p2-dim: #a86700;
+  --ink: #cfeffb;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { height: 100%; }
+
+/* Body fills the whole viewport and centers the stage. It must NOT shrink to
+   the stage, or its overflow:hidden would clip the scaled-up stage on big
+   screens. (Keeping html as a flex parent made body shrink-to-fit — the bug.) */
+body {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  color: var(--ink);
+  font-family: "Courier New", ui-monospace, monospace;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+}
+
+#stage {
+  position: relative;
+  width: 960px;
+  height: 720px;
+  flex: 0 0 auto;              /* keep the layout box fixed; JS scales it */
+  transform-origin: center center;
+  will-change: transform;
+  background: var(--bg);
+  box-shadow: 0 0 60px rgba(0, 180, 220, 0.15), inset 0 0 120px rgba(0,0,0,0.9);
+  overflow: hidden;
+}
+
+/* Fullscreen toggle — fixed to the viewport so it isn't affected by the scale */
+.fs-btn {
+  position: fixed;
+  top: 14px; right: 14px;
+  z-index: 100;
+  width: 42px; height: 42px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  color: var(--ink);
+  background: rgba(3, 6, 12, 0.55);
+  border: 1px solid rgba(160, 200, 220, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.fs-btn:hover { opacity: 1; color: var(--p1); border-color: var(--p1); }
+
+#game {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Subtle CRT scanline + vignette overlay */
+.crt {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,0) 0px,
+      rgba(0,0,0,0) 2px,
+      rgba(0,0,0,0.18) 3px,
+      rgba(0,0,0,0) 4px
+    ),
+    radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.hidden { display: none !important; }
+
+/* Splash / title screen */
+#splash {
+  z-index: 45;
+  cursor: pointer;
+  background: #000;
+}
+.splash-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;   /* show the whole artwork; dark edges blend into black */
+  display: block;
+}
+.press-key {
+  position: absolute;
+  bottom: 6%;
+  left: 0; right: 0;
+  text-align: center;
+  font-size: 22px;
+  letter-spacing: 7px;
+  font-weight: 700;
+  color: #eaffff;
+  text-shadow: 0 0 12px var(--p1), 0 0 30px var(--p1);
+  animation: press-blink 1.1s steps(1, end) infinite;
+}
+@keyframes press-blink { 0%, 55% { opacity: 1; } 55.01%, 100% { opacity: 0; } }
+
+/* Studio logo, lower-right. A faint dark scrim separates it from the art; the
+   box is isolated so the logo's screen blend (which drops its black background)
+   plays against the scrim, keeping the logo crisp. */
+.splash-credit {
+  position: absolute;
+  right: 12%;                /* clears the ~11.2% pillarbox bar → sits inside the artwork */
+  bottom: 2.5%;
+  box-sizing: content-box;   /* width applies to the logo */
+  width: 15%;
+  pointer-events: none;
+}
+.splash-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  mix-blend-mode: screen;
+  opacity: 0.92;
+}
+
+/* ---------- Menu / panels ---------- */
+.panel {
+  background: rgba(3, 6, 12, 0.82);
+  backdrop-filter: blur(2px);
+  gap: 22px;
+}
+
+.title {
+  font-size: 92px;
+  letter-spacing: 14px;
+  font-weight: 900;
+  color: #fff;
+  text-shadow:
+    0 0 10px var(--p1),
+    0 0 30px var(--p1),
+    0 0 60px var(--p1);
+  animation: flicker 4s infinite;
+}
+
+@keyframes flicker {
+  0%, 92%, 100% { opacity: 1; }
+  93% { opacity: 0.55; }
+  94% { opacity: 1; }
+  96% { opacity: 0.7; }
+}
+
+.tagline {
+  font-size: 16px;
+  letter-spacing: 3px;
+  color: #7fb4c8;
+  margin-top: -8px;
+}
+
+.legend {
+  display: flex;
+  gap: 60px;
+  margin: 8px 0;
+}
+
+.ctl { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.ctl .who { font-size: 13px; letter-spacing: 3px; }
+.ctl.p1 .who { color: var(--p1); text-shadow: 0 0 8px var(--p1); }
+.ctl.p2 .who { color: var(--p2); text-shadow: 0 0 8px var(--p2); }
+.keys { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.keys .row { display: flex; gap: 6px; }
+.key {
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(160, 200, 220, 0.4);
+  border-radius: 5px;
+  font-size: 15px;
+  color: var(--ink);
+  background: rgba(255,255,255,0.03);
+}
+.ctl.p1 .key { border-color: var(--p1-dim); }
+.ctl.p2 .key { border-color: var(--p2-dim); }
+.key.wide { width: auto; padding: 0 10px; font-size: 12px; letter-spacing: 1px; }
+.boost-key { margin-top: 4px; font-size: 11px; letter-spacing: 2px; color: #7fb4c8; display: flex; align-items: center; gap: 8px; }
+
+/* Mode segmented control */
+.seg { gap: 0; border: 1px solid rgba(160,200,220,0.25); border-radius: 6px; overflow: hidden; }
+.seg-btn {
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 3px;
+  padding: 10px 22px;
+  background: transparent;
+  color: #6f96a6;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.seg-btn.active { background: var(--p1); color: #001015; font-weight: 700; }
+.seg-btn:not(.active):hover { color: var(--ink); background: rgba(0,229,255,0.08); }
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 15px;
+  letter-spacing: 3px;
+}
+.target-btn {
+  width: 32px; height: 32px;
+  background: transparent;
+  border: 1px solid var(--p1-dim);
+  color: var(--p1);
+  font-size: 20px;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.target-btn:hover { background: rgba(0, 229, 255, 0.12); }
+.target-val { min-width: 30px; font-size: 24px; color: #fff; }
+
+.toggle { cursor: pointer; }
+.toggle input { width: 16px; height: 16px; accent-color: var(--p2); cursor: pointer; }
+
+.big-btn {
+  margin-top: 6px;
+  padding: 14px 54px;
+  font-family: inherit;
+  font-size: 24px;
+  letter-spacing: 8px;
+  color: #001015;
+  background: var(--p1);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 700;
+  box-shadow: 0 0 24px var(--p1);
+  transition: transform 0.08s, box-shadow 0.2s;
+}
+.big-btn:hover { transform: scale(1.05); box-shadow: 0 0 40px var(--p1); }
+.big-btn:active { transform: scale(0.98); }
+
+/* ---------- HUD ---------- */
+#hud {
+  z-index: 30;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 18px 34px;
+  pointer-events: none;
+}
+.pside { display: flex; flex-direction: column; gap: 8px; }
+.pside.right { align-items: flex-end; }
+.score { display: flex; align-items: baseline; gap: 12px; font-size: 44px; font-weight: 900; }
+.score .label { font-size: 15px; letter-spacing: 2px; }
+.score.p1 { color: var(--p1); text-shadow: 0 0 14px var(--p1); }
+.score.p2 { color: var(--p2); text-shadow: 0 0 14px var(--p2); }
+.round-info { font-size: 15px; letter-spacing: 4px; color: #6f96a6; margin-top: 14px; }
+
+/* Boost charge pips (3 per round) */
+.boost-pips { display: flex; gap: 5px; }
+.boost-pips span {
+  width: 28px; height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.10);
+  transition: background 0.1s;
+}
+.boost-pips.p1 span.filled { background: var(--p1-dim); }
+.boost-pips.p2 span.filled { background: var(--p2-dim); }
+.boost-pips.p1 span.active { background: var(--p1); box-shadow: 0 0 10px var(--p1); animation: pip-pulse 0.5s infinite alternate; }
+.boost-pips.p2 span.active { background: var(--p2); box-shadow: 0 0 10px var(--p2); animation: pip-pulse 0.5s infinite alternate; }
+@keyframes pip-pulse { from { opacity: 1; } to { opacity: 0.35; } }
+
+/* Pause menu */
+.pause-title {
+  font-size: 64px;
+  font-weight: 900;
+  letter-spacing: 12px;
+  color: #fff;
+  text-shadow: 0 0 22px var(--p1);
+  margin-bottom: 8px;
+}
+.menu-btn {
+  font-family: inherit;
+  font-size: 18px;
+  letter-spacing: 4px;
+  padding: 12px 44px;
+  min-width: 220px;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid rgba(160, 200, 220, 0.4);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.menu-btn:hover { background: rgba(0, 229, 255, 0.10); border-color: var(--p1); }
+
+/* Volume sliders (menu + pause menu) */
+.audio-settings {
+  display: flex;
+  gap: 26px;
+  margin-top: 6px;
+}
+.vol {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #7fb4c8;
+}
+.vol input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 120px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(160, 200, 220, 0.25);
+  cursor: pointer;
+}
+.vol input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--p1);
+  box-shadow: 0 0 8px var(--p1);
+}
+.vol input[type="range"]::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--p1);
+  box-shadow: 0 0 8px var(--p1);
+}
+
+/* ---------- Banner ---------- */
+.banner-title {
+  font-size: 56px;
+  font-weight: 900;
+  letter-spacing: 6px;
+  color: #fff;
+}
+.banner-sub { font-size: 18px; letter-spacing: 4px; color: #7fb4c8; margin-top: 12px; }
+
+/* ---------- Countdown ---------- */
+#countdown {
+  z-index: 35;
+  font-size: 180px;
+  font-weight: 900;
+  color: #fff;
+  pointer-events: none;
+}
+#countdown span {
+  text-shadow: 0 0 30px var(--p1), 0 0 80px var(--p1);
+  animation: pop 1s ease-out;
+}
+@keyframes pop {
+  0% { transform: scale(2.2); opacity: 0; }
+  30% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0.85); opacity: 0.6; }
+}

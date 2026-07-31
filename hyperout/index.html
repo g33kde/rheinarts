@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HyperOut</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <button id="fsBtn" class="fs-btn" title="Fullscreen (F)" aria-label="Toggle fullscreen">&#9974;</button>
+  <div id="stage">
+    <div class="crt"></div>
+
+    <!-- Game canvas -->
+    <canvas id="game" width="960" height="720"></canvas>
+
+    <!-- Splash / title screen (press any key) -->
+    <div id="splash" class="overlay">
+      <img src="assets/splash.png" alt="HYPEROUT" class="splash-img" />
+      <div class="splash-credit"><img src="assets/rhein-arts.png" alt="Rhein Arts" class="splash-logo" /></div>
+      <div class="press-key">PRESS ANY KEY</div>
+    </div>
+
+    <!-- HUD (visible during play) -->
+    <div id="hud" class="overlay hidden">
+      <div class="pside left">
+        <div class="score p1"><span class="label">P1</span><span id="s1">0</span></div>
+        <div class="boost-pips p1" id="boost1"><span></span><span></span><span></span></div>
+      </div>
+      <div class="round-info">ROUND <span id="roundNum">1</span></div>
+      <div class="pside right">
+        <div class="score p2"><span id="s2">0</span><span class="label">P2</span></div>
+        <div class="boost-pips p2" id="boost2"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+
+    <!-- Menu -->
+    <div id="menu" class="overlay panel hidden">
+      <h1 class="title" data-text="HYPEROUT">HYPEROUT</h1>
+      <p class="tagline">Two light cycles. One grid. Don't get boxed in.</p>
+
+      <div class="legend">
+        <div class="ctl p1">
+          <div class="who">PLAYER 1</div>
+          <div class="keys">
+            <span class="key">W</span>
+            <div class="row"><span class="key">A</span><span class="key">S</span><span class="key">D</span></div>
+          </div>
+          <div class="boost-key">BOOST <span class="key wide">L-SHIFT</span></div>
+        </div>
+        <div class="ctl p2">
+          <div class="who" id="p2who">PLAYER 2</div>
+          <div class="keys">
+            <span class="key">&uarr;</span>
+            <div class="row"><span class="key">&larr;</span><span class="key">&darr;</span><span class="key">&rarr;</span></div>
+          </div>
+          <div class="boost-key">BOOST <span class="key wide">R-SHIFT</span></div>
+        </div>
+      </div>
+
+      <div class="opt seg" id="modeSeg">
+        <button class="seg-btn" data-mode="cpu">1 PLAYER</button>
+        <button class="seg-btn active" data-mode="2p">2 PLAYERS</button>
+      </div>
+
+      <div class="opt">
+        <span>FIRST TO</span>
+        <button class="target-btn" data-d="-1">&minus;</button>
+        <span id="targetVal" class="target-val">5</span>
+        <button class="target-btn" data-d="1">&plus;</button>
+      </div>
+
+      <label class="opt toggle">
+        <input type="checkbox" id="shrinkMode" />
+        <span>SHRINKING ARENA</span>
+      </label>
+
+      <button id="startBtn" class="big-btn">START</button>
+
+      <div class="audio-settings">
+        <label class="vol"><span>MUSIC</span><input type="range" id="musicVolMenu" min="0" max="100" value="50" /></label>
+        <label class="vol"><span>SFX</span><input type="range" id="sfxVolMenu" min="0" max="100" value="70" /></label>
+      </div>
+    </div>
+
+    <!-- Round / Match transition overlay -->
+    <div id="banner" class="overlay panel hidden">
+      <div id="bannerTitle" class="banner-title">PLAYER 1 WINS</div>
+      <div id="bannerSub" class="banner-sub"></div>
+      <button id="rematchBtn" class="big-btn hidden">REMATCH</button>
+    </div>
+
+    <!-- Pause menu -->
+    <div id="pauseMenu" class="overlay panel hidden">
+      <h2 class="pause-title">PAUSED</h2>
+      <button id="pauseContinue" class="big-btn">CONTINUE</button>
+      <button id="pauseRestart" class="menu-btn">RESTART</button>
+      <button id="pauseMainMenu" class="menu-btn">MAIN MENU</button>
+
+      <div class="audio-settings">
+        <label class="vol"><span>MUSIC</span><input type="range" id="musicVolPause" min="0" max="100" value="50" /></label>
+        <label class="vol"><span>SFX</span><input type="range" id="sfxVolPause" min="0" max="100" value="70" /></label>
+      </div>
+    </div>
+
+    <!-- Countdown -->
+    <div id="countdown" class="overlay hidden"><span id="cdNum">3</span></div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
