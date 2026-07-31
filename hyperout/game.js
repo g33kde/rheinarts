@@ -35,10 +35,12 @@
 
   // AI
   const AI_FLOOD_LIMIT = 180;  // cap on space-fill evaluation
-  const AI_BOOST_RUNWAY = 30;  // clear cells ahead needed before CPU boosts
-  const AI_TRAP_SPACE = 22;    // open space below this = CPU considers itself boxed in
+  const AI_TRAP_SPACE = 14;    // open space below this = CPU is nearly trapped (boosts to escape)
   const AI_PHASE_REACH = 6;    // cells the CPU will phase across to escape a trap
   const AI_PHASE_GAIN = 30;    // phasing must open at least this much extra space
+
+  // Honor the OS "reduce motion" setting (skips screen shake + decorative CSS animation)
+  const reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   const COLORS = {
     1: { head: "#eaffff", trail: "#00e5ff" },
@@ -545,8 +547,8 @@
     gameMusic.volume = clamp01(musicVol * musicDuck * gameFade);
     menuMusic.volume = clamp01(musicVol * menuFade);
   }
-  function setMusicVol(v) { musicVol = Math.max(0, Math.min(1, v)); applyMusicVol(); syncAudioSliders(); }
-  function setSfxVol(v) { sfxVol = Math.max(0, Math.min(1, v)); if (sfxGain) sfxGain.gain.value = sfxVol; syncAudioSliders(); }
+  function setMusicVol(v) { musicVol = Math.max(0, Math.min(1, v)); applyMusicVol(); syncAudioSliders(); saveSettings(); }
+  function setSfxVol(v) { sfxVol = Math.max(0, Math.min(1, v)); if (sfxGain) sfxGain.gain.value = sfxVol; syncAudioSliders(); saveSettings(); }
   function toggleMusicMute() {
     if (musicVol > 0) { lastMusicVol = musicVol; setMusicVol(0); }
     else { setMusicVol(lastMusicVol || 0.5); }
@@ -554,6 +556,32 @@
   function syncAudioSliders() {
     [el.musicVolMenu, el.musicVolPause].forEach((s) => { if (s) s.value = Math.round(musicVol * 100); });
     [el.sfxVolMenu, el.sfxVolPause].forEach((s) => { if (s) s.value = Math.round(sfxVol * 100); });
+  }
+
+  // ---------- Persisted settings (localStorage) ----------
+  const SETTINGS_KEY = "rheinarts.hyperout.v1";
+  function saveSettings() {
+    try {
+      const active = el.modeSeg && el.modeSeg.querySelector(".active");
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        musicVol, sfxVol,
+        target: el.targetVal ? parseInt(el.targetVal.textContent, 10) : 5,
+        shrink: el.shrinkMode ? el.shrinkMode.checked : false,
+        mode: active ? active.dataset.mode : "2p",
+      }));
+    } catch (e) {}
+  }
+  function loadSettings() {
+    let s;
+    try { s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null"); } catch (e) { s = null; }
+    if (!s) return;
+    if (typeof s.musicVol === "number") musicVol = s.musicVol;
+    if (typeof s.sfxVol === "number") sfxVol = s.sfxVol;
+    if (el.targetVal && s.target) el.targetVal.textContent = Math.max(1, Math.min(15, s.target));
+    if (el.shrinkMode && typeof s.shrink === "boolean") el.shrinkMode.checked = s.shrink;
+    if (el.modeSeg && s.mode) {
+      el.modeSeg.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === s.mode));
+    }
   }
 
   // ---------- Game state ----------
@@ -735,11 +763,12 @@
       if (score > bestScore) { bestScore = score; best = dir; }
     }
 
-    // Offensive boost: long clear runway with a charge to spare → flashy reposition.
-    let boost = p.boostCharges > 0 && !p.boostLatch && clearAhead(p) > AI_BOOST_RUNWAY;
+    // Boosts are held in reserve — the CPU never boosts offensively. It only
+    // boosts to escape an otherwise-certain crash (the defensive phase below).
+    let boost = false;
 
-    // Defensive phase: boxed in → look for a thin wall to boost through into
-    // open space on the far side.
+    // Defensive phase: nearly trapped → look for a thin wall to boost through
+    // into open space on the far side.
     if (bestScore < AI_TRAP_SPACE && p.boostCharges > 0 && !p.boostLatch) {
       let phaseDir = null, phaseScore = bestScore + AI_PHASE_GAIN;
       for (const dir of opts) {
@@ -823,7 +852,7 @@
         enginePowerDown(p.id); // that bike's engine winds down
       }
     }
-    if (died) { derez(); game.shake = 16; }
+    if (died) { derez(); game.shake = reduceMotion ? 0 : 16; }
 
     const survivors = game.players.filter((p) => p.alive);
     updateBoostUI();
@@ -1239,6 +1268,7 @@
       let v = parseInt(el.targetVal.textContent, 10) + parseInt(b.dataset.d, 10);
       v = Math.max(1, Math.min(15, v));
       el.targetVal.textContent = v;
+      saveSettings();
     });
   });
   el.modeSeg.querySelectorAll(".seg-btn").forEach((b) => {
@@ -1246,8 +1276,10 @@
       el.modeSeg.querySelectorAll(".seg-btn").forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
       applyModeLabel();
+      saveSettings();
     });
   });
+  if (el.shrinkMode) el.shrinkMode.addEventListener("change", saveSettings);
 
   // Volume sliders (menu + pause menu share the same state)
   function bindVol(elm, setter) { if (elm) elm.addEventListener("input", () => setter(elm.value / 100)); }
@@ -1255,6 +1287,8 @@
   bindVol(el.musicVolPause, setMusicVol);
   bindVol(el.sfxVolMenu, setSfxVol);
   bindVol(el.sfxVolPause, setSfxVol);
+  loadSettings();    // restore saved prefs before first paint
+  applyMusicVol();   // apply loaded music volume to the audio elements
   syncAudioSliders();
 
   // Retro "press any key" — a click/tap also dismisses the splash.

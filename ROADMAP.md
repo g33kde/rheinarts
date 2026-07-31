@@ -12,7 +12,7 @@ Ideas and planned work, captured for later. Unchecked = not started.
   short intro sting. Decide whether to reuse `menu.mp3` or add a dedicated splash
   track.
 
-- [ ] **Smarter CPU boost usage.**
+- [x] **Smarter CPU boost usage.** _(done — CPU now holds boosts in reserve and only phases to escape an inevitable crash.)_
   Today the CPU spends all 3 boosts immediately on the opening straightaway. It
   should hold boosts in reserve and only fire one when a crash is otherwise
   **inevitable** (defensive phase-escape through a wall), or for a genuinely
@@ -61,10 +61,10 @@ Ideas and planned work, captured for later. Unchecked = not started.
 
 ## UX & accessibility
 
-- [ ] **Persist settings (localStorage).** Music/SFX volume, mute, mode, "first to",
+- [x] **Persist settings (localStorage).** _(done — volume, mute, mode, first-to and shrinking arena persist across loads.)_ Music/SFX volume, mute, mode, "first to",
   and shrinking-arena all reset on every load today — remember them.
 
-- [ ] **Respect `prefers-reduced-motion`.** Dial back CRT scanlines, grid scroll,
+- [x] **Respect `prefers-reduced-motion`.** _(done — CSS animations disabled and screen-shake skipped when the OS setting is on.)_ Dial back CRT scanlines, grid scroll,
   logo float, and screen shake for motion-sensitive players (portal + game).
 
 - [ ] **Colorblind support + help screen.** Add shapes/labels alongside the
@@ -80,10 +80,10 @@ Ideas and planned work, captured for later. Unchecked = not started.
 
 ## Portal (rheinarts.de)
 
-- [ ] **README + LICENSE.** A landing `README.md` (what Rhein Arts is, how to run
+- [x] **README + LICENSE.** _(done — README front page + MIT license for code, assets reserved.)_ A landing `README.md` (what Rhein Arts is, how to run
   locally, deploy pointer) as the public repo's front page, plus a license.
 
-- [ ] **Metadata & sharing.** Favicon, page title/description, and Open Graph tags
+- [x] **Metadata & sharing.** _(done — favicon, title/description, Open Graph tags, and a retro 404 page.)_ Favicon, page title/description, and Open Graph tags
   so links to the site preview nicely. A retro-styled 404 page.
 
 - [ ] **Grow the arcade.** Replace the "coming soon" cabinets with real games as
@@ -91,7 +91,7 @@ Ideas and planned work, captured for later. Unchecked = not started.
 
 ## Tech, build & ops
 
-- [ ] **Asset cache-busting.** `nginx.conf` caches JS/CSS/images for 7 days, so a
+- [x] **Asset cache-busting.** _(done — nginx serves HTML/JS/CSS with `no-cache` (revalidate), so redeploys show immediately.)_ `nginx.conf` caches JS/CSS/images for 7 days, so a
   redeploy can serve stale files to returning visitors. Add content-hashed
   filenames or a version query so updates take effect immediately.
 

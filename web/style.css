@@ -208,3 +208,12 @@ footer {
   color: #5f7688; display: flex; gap: 12px; align-items: center;
 }
 footer .dot { color: var(--pink); }
+
+/* Respect the OS "reduce motion" preference: calm the scanlines, grid scroll,
+   logo float, hue shift and blinking. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
