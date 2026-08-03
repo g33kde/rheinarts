@@ -18,6 +18,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "4181", "--directory", "web"],
       "port": 4181
+    },
+    {
+      "name": "godspeed",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "godspeed/game"],
+      "port": 5174
     }
   ]
 }

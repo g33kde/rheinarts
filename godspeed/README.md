@@ -29,10 +29,11 @@ Future milestones include local co-op, branching biomes, and an Electron desktop
 If you are an AI coding agent (ChatGPT, Codex, Cursor, Claude Code, GitHub Copilot, or similar), **read the following documents before generating or modifying any code**:
 
 1. `docs/ai_development_guide.md` **(Required)**
-2. `docs/vision.md`
-3. `docs/gameplay.md`
-4. `docs/art_direction.md`
-5. `docs/technical_design.md`
+2. `CHANGELOG.md` **(Required)** — what has already been built, and what hasn't
+3. `docs/vision.md`
+4. `docs/gameplay.md`
+5. `docs/art_direction.md`
+6. `docs/technical_design.md`
 
 The **AI Development Guide** is the authoritative source for:
 
