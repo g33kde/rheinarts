@@ -1,9 +1,9 @@
 # RHEIN ARTS
 
 A retro synthwave **browser arcade** — a portal that hosts multiple games, starting
-with **HyperOut**. Made im Düsseldorf. 🌆
+with **HyperOut**. Made in Düsseldorf. 🌆
 
-Live (soon): [www.rheinarts.de](https://www.rheinarts.de)
+Live (if k8s cluster is up): [www.rheinarts.de](https://www.rheinarts.de)
 
 ---
 
