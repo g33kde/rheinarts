@@ -10,6 +10,8 @@ export const COLORS = {
   pickupSpeed: 0x2de1c2,
   pickupRapidFire: 0xffb400,
   pickupExtraLife: 0x9b59b6,
+  pickupShield: 0x5dade2,
+  bulwarkRing: 0x9b59b6,
 } as const;
 
 export const PLAYER = {
@@ -42,11 +44,37 @@ export const MAZE = {
   braidChance: 0.6, // fraction of extra (non-tree) walls knocked down to add loops/open rooms
 } as const;
 
+// Baseline chaser, named "Drone" in docs/enemy_design.md. Kept as ENEMY
+// (not DRONE) since this constant predates the multi-type roster and is
+// still the default Enemy() falls back to when no stat override is given.
 export const ENEMY = {
   radius: 14,
   speed: 110, // px/sec - slower than the player, so it's outrunnable
   count: 3,
   pathUpdateIntervalMs: 300,
+} as const;
+
+export const SENTINEL = {
+  radius: 14,
+  speed: 110, // same pace as a Drone once awake - the threat is the ambush, not raw speed
+  triggerDistance: 130, // px; stays parked until the player is this close
+} as const;
+
+export const SEEKER = {
+  radius: 10, // smaller than a Drone - reads as quick/light
+  speed: 165, // ~1.5x Drone
+} as const;
+
+export const BULWARK = {
+  radius: 18,
+  speed: 70, // slower than a Drone - the threat is durability, not pace
+  maxHits: 2,
+} as const;
+
+export const SKIRMISHER = {
+  radius: 12,
+  speed: 120,
+  fleeDistance: 90, // px; below this range it backs off instead of closing in
 } as const;
 
 export const BOSS = {
@@ -56,14 +84,34 @@ export const BOSS = {
   attackCooldownMs: 1400,
 } as const;
 
+export const FLOOR_DIFFICULTY = {
+  // Applied per floor beyond the first (floor 1 = no scaling). Kept small
+  // and linear on purpose - the roster composition (see
+  // systems/FloorRoster.ts) is what mainly drives difficulty; these are a
+  // secondary nudge, not the primary lever.
+  enemySpeedStepPercent: 0.08,
+  bossHitsStepPerFloor: 1,
+  bossAttackCooldownStepMs: 100,
+  bossAttackCooldownFloorMs: 700, // never faster than this, regardless of floor
+} as const;
+
 export const PICKUP = {
   radius: 10,
-  count: 3, // one of each UpgradeType, see systems/UpgradeSystem.ts
+  count: 4, // one of each UpgradeType, see systems/UpgradeSystem.ts
 } as const;
 
 export const UPGRADE_EFFECTS = {
-  speedMultiplier: 1.35,
-  fireCooldownMultiplier: 0.6,
+  // Speed/Rapid Fire pickups are guaranteed one per floor (see
+  // systems/FloorPickups.ts), so an uncapped multiplicative stack
+  // compounds every floor regardless of skill - by floor 5 that was 3.3x
+  // speed and ~7.7x fire rate. speedMultiplierCap/fireCooldownMultiplierFloor
+  // put a ceiling on both; per-pickup growth stays the same, it just stops
+  // mattering once you hit the cap.
+  speedMultiplierPerPickup: 1.35,
+  speedMultiplierCap: 2, // never faster than 2x base move speed
+  fireCooldownMultiplierPerPickup: 0.6,
+  fireCooldownMultiplierFloor: 0.3, // never faster than ~3.3x base fire rate
+  shieldChargesGranted: 1, // each pickup grants one block-the-next-hit charge, stacks
 } as const;
 
 export interface BiomeTheme {

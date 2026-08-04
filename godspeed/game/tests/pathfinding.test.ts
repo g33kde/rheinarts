@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextStepToward } from '../src/ai/ChaseBehavior';
+import { nextStepAway, nextStepToward } from '../src/ai/ChaseBehavior';
 import { computeDistanceField, openNeighbors } from '../src/ai/Pathfinding';
 import type { Maze, MazeCell } from '../src/systems/MazeGenerator';
 
@@ -64,5 +64,30 @@ describe('computeDistanceField / nextStepToward', () => {
     expect(distances[0]![0]).toBe(Number.POSITIVE_INFINITY);
     expect(distances[0]![1]).toBe(0);
     expect(nextStepToward(maze, { row: 0, col: 0 }, distances)).toBeNull();
+  });
+});
+
+describe('nextStepAway', () => {
+  it('picks the neighbor that increases distance from the target', () => {
+    const maze: Maze = {
+      rows: 1,
+      cols: 3,
+      cells: [[cell({ east: false }), cell({ east: false, west: false }), cell({ west: false })]],
+    };
+    const distances = computeDistanceField(maze, { row: 0, col: 0 });
+
+    expect(nextStepAway(maze, { row: 0, col: 1 }, distances)).toEqual({ row: 0, col: 2 });
+  });
+
+  it('returns null when cornered - no neighbor is farther from the target', () => {
+    const maze: Maze = {
+      rows: 1,
+      cols: 2,
+      cells: [[cell({ east: false }), cell({ west: false })]],
+    };
+    const distances = computeDistanceField(maze, { row: 0, col: 0 });
+
+    // at col 1, the only neighbor (col 0) is *closer*, not farther
+    expect(nextStepAway(maze, { row: 0, col: 1 }, distances)).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { nextStepToward } from '../ai/ChaseBehavior';
+import { nextStepAway, nextStepToward } from '../ai/ChaseBehavior';
 import { computeDistanceField, type Cell } from '../ai/Pathfinding';
 import {
   ARENA_HEIGHT,
@@ -11,16 +11,24 @@ import {
   PICKUP,
   PLAYER,
   PROJECTILE,
+  SENTINEL,
 } from '../config/GameConfig';
 import { Boss } from '../entities/Boss';
+import { Bulwark } from '../entities/Bulwark';
 import { Enemy } from '../entities/Enemy';
+import { createEnemy } from '../entities/EnemyFactory';
 import { MazeView } from '../entities/MazeView';
 import { Pickup } from '../entities/Pickup';
 import { Player } from '../entities/Player';
 import { Projectile } from '../entities/Projectile';
+import { Sentinel } from '../entities/Sentinel';
+import { Skirmisher } from '../entities/Skirmisher';
 import { selectBiome } from '../systems/BiomeSelection';
 import { canFire, projectileVelocity } from '../systems/CombatSystem';
 import { circleIntersectsAnyRect, circlesIntersect } from '../systems/CollisionSystem';
+import { difficultyForFloor, type FloorDifficulty } from '../systems/FloorDifficulty';
+import { pickupTypesForFloor } from '../systems/FloorPickups';
+import { enemyRosterForFloor } from '../systems/FloorRoster';
 import { applyHit, grantExtraLife, isGameOver, isInvulnerable } from '../systems/HealthSystem';
 import { InputSystem } from '../systems/InputSystem';
 import { chooseSpawnCells } from '../systems/PickupPlacement';
@@ -31,7 +39,13 @@ import {
   saveProgression,
   type ProgressionState,
 } from '../systems/ProgressionStorage';
-import { applyUpgrade, defaultUpgradeState, type UpgradeState } from '../systems/UpgradeSystem';
+import {
+  applyUpgrade,
+  consumeShieldCharge,
+  defaultUpgradeState,
+  hasShieldCharge,
+  type UpgradeState,
+} from '../systems/UpgradeSystem';
 import { HUD } from '../ui/HUD';
 import type { Rect } from '../utilities/Rect';
 import type { Vector2 } from '../utilities/Vector2';
@@ -47,9 +61,13 @@ const ENEMY_SPAWN_CELLS: Cell[] = [
 // occupies it, so it doesn't need its own dedicated spawn point.
 const BOSS_SPAWN_CELL: Cell = ENEMY_SPAWN_CELLS[0]!;
 
-const PICKUP_TYPES = ['speed', 'rapidFire', 'extraLife'] as const;
-
 type RunState = 'playing' | 'gameover' | 'victory';
+
+interface RunData {
+  floor?: number;
+  lives?: number;
+  upgrades?: UpgradeState;
+}
 
 export class GameScene extends Phaser.Scene {
   private maze!: MazeView;
@@ -65,6 +83,8 @@ export class GameScene extends Phaser.Scene {
   private pickups: Pickup[] = [];
   private upgrades: UpgradeState = defaultUpgradeState();
   private progression: ProgressionState = { mazesCleared: 0 };
+  private difficulty: FloorDifficulty = difficultyForFloor(1);
+  private floor = 1;
   private lastFiredAtMs = 0;
   private lastPathUpdateAtMs = 0;
   private lastHitAtMs = -Infinity;
@@ -75,9 +95,13 @@ export class GameScene extends Phaser.Scene {
     super('Game');
   }
 
-  create(): void {
+  create(data?: RunData): void {
+    this.floor = data?.floor ?? 1;
+    const continuingRun = this.floor > 1;
+    this.difficulty = difficultyForFloor(this.floor);
+
     this.progression = loadProgression(localStorage);
-    const biome = selectBiome(this.progression.mazesCleared, BIOMES);
+    const biome = selectBiome(this.floor - 1, BIOMES);
 
     this.cameras.main.setBackgroundColor(biome.background);
 
@@ -90,19 +114,33 @@ export class GameScene extends Phaser.Scene {
     this.input$ = new InputSystem(this);
     this.hud = new HUD(this);
 
-    this.lives = PLAYER.lives + bonusStartingLives(this.progression);
-    this.upgrades = defaultUpgradeState();
+    if (continuingRun) {
+      this.lives = data?.lives ?? PLAYER.lives;
+      this.upgrades = data?.upgrades ?? defaultUpgradeState();
+    } else {
+      this.lives = PLAYER.lives + bonusStartingLives(this.progression);
+      this.upgrades = defaultUpgradeState();
+    }
+
     this.lastHitAtMs = -Infinity;
     this.state = 'playing';
     this.boss = undefined;
     this.bossProjectiles = [];
 
-    this.showBiomeIntro(biome.name);
+    this.showBiomeIntro(`Floor ${this.floor} — ${biome.name}`);
 
-    const enemyCells = ENEMY_SPAWN_CELLS.slice(0, ENEMY.count);
-    this.enemies = enemyCells.map(
-      (cell) => new Enemy(this, cell, this.maze.cellCenter(cell.row, cell.col)),
-    );
+    const roster = enemyRosterForFloor(this.floor);
+    const enemyCells = ENEMY_SPAWN_CELLS.slice(0, roster.length);
+    this.enemies = roster.map((type, index) => {
+      const cell = enemyCells[index]!;
+      return createEnemy(
+        this,
+        type,
+        cell,
+        this.maze.cellCenter(cell.row, cell.col),
+        this.difficulty.enemySpeedMultiplier,
+      );
+    });
 
     const pickupCells = chooseSpawnCells(
       MAZE.rows,
@@ -110,9 +148,10 @@ export class GameScene extends Phaser.Scene {
       [centerCell, ...enemyCells],
       PICKUP.count,
     );
+    const pickupTypes = pickupTypesForFloor(this.floor);
     this.pickups = pickupCells.map(
       (cell, index) =>
-        new Pickup(this, this.maze.cellCenter(cell.row, cell.col), PICKUP_TYPES[index]!),
+        new Pickup(this, this.maze.cellCenter(cell.row, cell.col), pickupTypes[index]!),
     );
   }
 
@@ -168,15 +207,27 @@ export class GameScene extends Phaser.Scene {
       if (this.enemies.length === 0 && !this.boss) {
         this.spawnBoss();
       } else if (this.boss && !this.boss.isAlive) {
-        this.enterVictory();
+        this.enterFloorCleared();
       }
     }
 
-    this.hud.update(this.lives, this.enemies.length, this.boss?.hitsRemaining ?? null);
+    this.hud.update({
+      floor: this.floor,
+      lives: this.lives,
+      shieldCharges: this.upgrades.shieldCharges,
+      enemiesRemaining: this.enemies.length,
+      bossHitsRemaining: this.boss?.hitsRemaining ?? null,
+    });
   }
 
   private updateEnemies(nowMs: number, deltaSeconds: number): void {
     const chasers = this.activeChasers;
+
+    for (const chaser of chasers) {
+      if (chaser instanceof Sentinel) {
+        chaser.activateIfNear(this.player.position, SENTINEL.triggerDistance);
+      }
+    }
 
     if (nowMs - this.lastPathUpdateAtMs >= ENEMY.pathUpdateIntervalMs) {
       this.lastPathUpdateAtMs = nowMs;
@@ -184,8 +235,10 @@ export class GameScene extends Phaser.Scene {
       const distanceField = computeDistanceField(this.maze.maze, playerCell);
 
       for (const chaser of chasers) {
+        if (chaser instanceof Sentinel && !chaser.isActive) continue;
         if (!chaser.hasArrived) continue;
-        const next = nextStepToward(this.maze.maze, chaser.cell, distanceField);
+
+        const next = this.chooseNextStep(chaser, distanceField);
         if (next) {
           chaser.setTarget(next, this.maze.cellCenter(next.row, next.col));
         }
@@ -195,6 +248,13 @@ export class GameScene extends Phaser.Scene {
     for (const chaser of chasers) {
       chaser.update(deltaSeconds);
     }
+  }
+
+  private chooseNextStep(chaser: Enemy, distanceField: number[][]): Cell | null {
+    if (chaser instanceof Skirmisher && chaser.shouldFlee(this.player.position)) {
+      return nextStepAway(this.maze.maze, chaser.cell, distanceField);
+    }
+    return nextStepToward(this.maze.maze, chaser.cell, distanceField);
   }
 
   private updateBossAttack(nowMs: number): void {
@@ -220,7 +280,7 @@ export class GameScene extends Phaser.Scene {
           circlesIntersect(projectile.position, PROJECTILE.radius, chaser.position, chaser.radius)
         ) {
           projectile.destroy();
-          if (chaser instanceof Boss) {
+          if (chaser instanceof Boss || chaser instanceof Bulwark) {
             chaser.takeHit();
           } else {
             chaser.destroy();
@@ -253,6 +313,12 @@ export class GameScene extends Phaser.Scene {
 
     hitByBossProjectile?.destroy();
     this.lastHitAtMs = nowMs;
+
+    if (hasShieldCharge(this.upgrades)) {
+      this.upgrades = consumeShieldCharge(this.upgrades);
+      return;
+    }
+
     this.lives = applyHit(this.lives);
     this.player.teleportTo(this.spawnPoint);
 
@@ -285,9 +351,9 @@ export class GameScene extends Phaser.Scene {
     this.player.playShoot();
   }
 
-  private showBiomeIntro(biomeName: string): void {
+  private showBiomeIntro(label: string): void {
     const intro = this.add
-      .text(ARENA_WIDTH / 2, 32, biomeName.toUpperCase(), {
+      .text(ARENA_WIDTH / 2, 32, label.toUpperCase(), {
         fontFamily: 'monospace',
         fontSize: '20px',
         color: '#ffffff',
@@ -301,6 +367,8 @@ export class GameScene extends Phaser.Scene {
       this,
       BOSS_SPAWN_CELL,
       this.maze.cellCenter(BOSS_SPAWN_CELL.row, BOSS_SPAWN_CELL.col),
+      this.difficulty.bossMaxHits,
+      this.difficulty.bossAttackCooldownMs,
     );
     this.playBossEntranceEffect();
 
@@ -326,17 +394,20 @@ export class GameScene extends Phaser.Scene {
 
   private enterGameOver(): void {
     this.state = 'gameover';
-    this.showEndScreen('GAME OVER', COLORS.danger);
+    this.showEndScreen('GAME OVER', COLORS.danger, () => this.scene.restart());
   }
 
-  private enterVictory(): void {
+  private enterFloorCleared(): void {
     this.state = 'victory';
     this.progression = recordMazeCleared(this.progression);
     saveProgression(this.progression, localStorage);
-    this.showEndScreen('MAZE CLEARED', COLORS.player);
+    const nextFloor = this.floor + 1;
+    this.showEndScreen(`FLOOR ${this.floor} CLEARED`, COLORS.player, () => {
+      this.scene.restart({ floor: nextFloor, lives: this.lives, upgrades: this.upgrades });
+    });
   }
 
-  private showEndScreen(message: string, color: number): void {
+  private showEndScreen(message: string, color: number, onContinue: () => void): void {
     this.add
       .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 20, message, {
         fontFamily: 'monospace',
@@ -353,6 +424,6 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.input.keyboard?.once('keydown-SPACE', () => this.scene.restart());
+    this.input.keyboard?.once('keydown-SPACE', onContinue);
   }
 }

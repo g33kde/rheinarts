@@ -10,6 +10,419 @@ milestone, per the Documentation Rule and Definition of Done in
 
 ---
 
+## 2026-08-04 — Deployment wiring: Docker/nginx (roadmap items 9-10, prep only)
+
+### What was built
+
+After confirming the balance fix worked, user said "continue" with no
+further direction. Rather than re-asking after already getting an
+explicit answer to "what's next" two entries ago, picked the next
+unambiguous, unstarted roadmap work: items 9-10 (Docker image,
+Kubernetes deployment) were the only ones with zero design/game-feel
+judgment calls left in them - purely mechanical, and the repo already has
+a working pattern to extend (HyperOut's static-file deploy).
+
+- **Root `Dockerfile`** gained a `node:22-alpine` build stage
+  (`npm ci && npm run build`) ahead of the existing `nginx:1.27-alpine`
+  stage - godspeed is a Vite/TypeScript build, unlike HyperOut and the
+  portal, which are plain static files copied straight in. The built
+  `dist/` gets copied to `/usr/share/nginx/html/godspeed/` alongside the
+  existing `web/` and `hyperout/` copies.
+- **`godspeed/game/vite.config.ts`** gained `base: '/godspeed/'` for
+  production builds only (dev server keeps `base: '/'`) - without this,
+  every asset reference in the built `index.html`/JS would resolve against
+  the site root instead of the `/godspeed/` subpath and the deployed page
+  would load blank. Caught and fixed *before* it could ship broken -
+  verified by actually running `npm run build` and reading the emitted
+  `dist/index.html`: asset `src` correctly changed from `/assets/...` to
+  `/godspeed/assets/...`. Confirmed the dev server was unaffected
+  (`npm run dev` still serves `/src/main.ts` at root, as before).
+- **`.dockerignore`** gained `**/node_modules` and `godspeed/game/dist` -
+  without this, `COPY godspeed/game/ ./` in the new build stage would have
+  pulled the *host's* locally-built `node_modules` (Windows binaries, wrong
+  platform for the Linux container) and a stale local `dist/` straight
+  into the image, either breaking `npm ci` or silently shipping stale
+  assets. Caught by inspecting exactly what that `COPY` would actually
+  pick up, not by trusting the pattern already worked for HyperOut (which
+  has no `node_modules`/`dist` of its own, so this gap was invisible until
+  a Node-based sub-project existed).
+- **`nginx.conf`** gained a `/godspeed` → `/godspeed/` redirect, mirroring
+  the existing `/hyperout` one - no other server-block changes needed, the
+  existing generic `.js`/`.css`/`.png` caching rules already cover
+  godspeed's build output by extension.
+- **Root `README.md`** and **`DEPLOYMENT.md`** updated to mention
+  Godspeed's path and its build-step difference from HyperOut.
+  **`godspeed/docs/roadmap.md`** updated - deliberately *not* marked
+  fully done, see below.
+- Did **not** touch `web/index.html`'s "coming soon" cabinet placeholders
+  or add a live Godspeed card to the portal - whether an early, mostly-
+  unplaytested prototype should be publicly linked from the arcade site is
+  a visibility call for the user to make, not something to do as a side
+  effect of wiring up the build.
+- Did **not** run `docker build`, `docker push`, or `kubectl apply`.
+  Building an image is reversible and local, but no Docker is installed in
+  this dev environment, so even the local build couldn't be exercised.
+  Pushing to GHCR and applying to the live k3s cluster are exactly the
+  "affects shared state, hard to reverse" actions that need the user's own
+  hands on them, not something to run unprompted regardless of tooling
+  availability.
+
+### Key decisions
+
+- Chose to fix the `base` path and `.dockerignore` gaps proactively rather
+  than write the obvious/expected Dockerfile and call it done. Both are
+  the specific kind of bug that only shows up *after* a real build/deploy
+  cycle (a working `npm run dev` gives zero signal that the production
+  `base` path is wrong; a Dockerfile that "looks right" gives zero signal
+  that its build context has a bloat/platform-mismatch problem) - exactly
+  the failure mode of assuming a locally-tested thing will also work once
+  containerized and subpath-deployed.
+- Left roadmap items 9-10 explicitly *not* checked off. The Dockerfile is
+  written and traced by hand, and the one piece that could be verified
+  locally (the actual `vite build` output) was verified - but "the config
+  should work" and "this was built and confirmed to work" are different
+  claims, and the changelog's own standing rule throughout this project
+  has been not to conflate them.
+
+### Verified
+
+- `npm run lint` / `npm run test` (85/85) / `npm run build` — all pass,
+  unaffected by the `vite.config.ts` change (only production `base`
+  changed; dev mode identical).
+- Manually inspected `dist/index.html` after building: script `src`
+  correctly rewritten to `/godspeed/assets/...`.
+- Confirmed `npm run dev` still serves correctly from `/` (unaffected by
+  the prod-only `base` change).
+- **Not verified**: the actual Docker build. No `docker` binary available
+  in this environment (checked - not installed). The multi-stage
+  Dockerfile, the `.dockerignore` fix, and the nginx redirect are all
+  reasoned through by hand against the actual file layout, not exercised
+  end-to-end. This is a meaningfully different (weaker) confidence level
+  than every other "traced by hand" claim in this project, because unlike
+  game logic, a container build has real external-tool behavior (Alpine's
+  package resolution, `npm ci` in a clean environment, Docker's layer/COPY
+  semantics) that hand-tracing can miss even when the reasoning is sound.
+
+### Not done yet
+
+- **Run `docker build` at least once** before trusting this - the single
+  most important unverified thing in this entry, more so than any
+  previous game-feel question, because a broken container build fails
+  loudly and completely rather than just feeling off.
+- Push to GHCR and `kubectl apply` - both require the user's explicit
+  go-ahead and credentials, not something to do from here.
+- Decide whether/when Godspeed gets a real portal card instead of staying
+  reachable only by typing `/godspeed/` directly.
+- Everything else still open from prior entries (real enemy art, Skirmisher
+  flee tuning, cap-value feel, menu alignment, asset compression, roadmap
+  items 11-12).
+
+**2026-08-04 follow-up:** user installed Docker. Ran the actual build this
+time - `docker build --platform linux/amd64 -t rheinarts:test .` - and it
+succeeded cleanly end to end: `npm ci` in the `node:22-alpine` stage found
+0 vulnerabilities and installed correctly (confirming the `.dockerignore`
+fix actually worked - no host `node_modules` conflict), `npm run build`
+produced the identical output already verified locally, and the final
+`COPY --from=godspeed-build` into the nginx stage completed with no
+errors. Didn't stop at "the build succeeded" - ran the resulting image
+(`docker run -p 8099:80 ...`) and curled it directly: portal `/` → 200,
+`/godspeed` → 301 redirect to `/godspeed/`, `/godspeed/` → serves the
+real `index.html`, the hashed JS bundle and a bundled PNG under
+`/godspeed/assets/` both → 200 (confirms the `base: '/godspeed/'` fix
+resolves correctly in a real deployed container, not just in the local
+`dist/index.html` text), `/hyperout/` → still 200 (regression check - the
+new stage didn't break the existing game), `/healthz` → still 200. Stopped
+and removed the test container afterward; left the `rheinarts:test` image
+(136MB) in the local Docker cache in case retagging it directly to
+`ghcr.io/g33kde/rheinarts:v1` is more convenient than rebuilding.
+
+Roadmap item 9 (Docker image) is now genuinely done, not just "wired." Item
+10 (Kubernetes) still isn't - the local build proves the image is correct,
+it doesn't push anything to GHCR or touch the live cluster, which stays the
+user's action per DEPLOYMENT.md.
+
+---
+
+## 2026-08-04 — Godspeed added to the portal cabinet view (BETA)
+
+### What was built
+
+User asked for Godspeed to appear in the arcade portal's cabinet grid with
+a "beta" highlight, linking to the game the same way HyperOut's card does,
+then asked how to deploy to Kubernetes.
+
+- `web/index.html` - added a Godspeed `<a class="card live">` card between
+  HyperOut's and the remaining "coming soon" placeholder (there were two;
+  Godspeed's card took one of those two slots, matching root `ROADMAP.md`'s
+  existing "replace the coming soon cabinets with real games as they land"
+  item). Links to `/godspeed/index.html`, same pattern as HyperOut's card.
+  Also updated the page's `<meta name="description">` and `og:description`
+  to mention both games instead of just HyperOut.
+- `web/img/godspeed.png` - copied from
+  `godspeed/artwork/godspeed-start-screen.png` (the hero/splash art already
+  used inside the game itself) as the cabinet thumbnail, same pattern as
+  `hyperout.png`.
+- `web/style.css` - added `.badge.beta`: orange (`var(--orange)`) instead
+  of the existing `.badge`'s cyan, so PLAYABLE and BETA read as distinct
+  statuses at a glance, not just distinguishable by reading the text.
+- Verified through the **actual deployment pipeline**, not a standalone
+  preview: rebuilt the real multi-stage Docker image (`docker build
+  --platform linux/amd64 -t rheinarts:test .`), ran it, and curled the
+  live nginx-served portal - confirmed the Godspeed card's markup, the
+  `badge beta` class, the `/godspeed/index.html` link, the thumbnail image,
+  and the new CSS rule are all actually being served, and that `/godspeed/`
+  itself still resolves the real game. An earlier attempt at a quick
+  standalone Node static-file server (to avoid needing Docker for a fast
+  check) hit a Windows path-separator bug in the throwaway script itself
+  and was abandoned in favor of the real pipeline instead of debugging
+  disposable tooling.
+
+### Key decisions
+
+- Took one of the two remaining "coming soon" slots rather than adding a
+  fourth grid card - the portal's grid was designed around a specific
+  rhythm (1 live + N soon), and Godspeed replacing a placeholder reads as
+  "the arcade is filling up," which is the actual intent of that section,
+  rather than just appending an entry.
+- Reused the game's own splash art as the cabinet thumbnail instead of
+  commissioning/generating a separate marketing image - it's already the
+  right aspect ratio for a hero shot, already on-theme, and avoids a
+  second asset to keep in sync with the game's actual look.
+- BETA status is honest, not just decorative - roadmap items 3-8 are all
+  "done" in the sense of being built and unit-tested, but almost none of
+  them have been played by a human yet (see the standing caveats
+  throughout this file). An orange "beta" badge next to HyperOut's cyan
+  "playable" is an accurate signal, not hedging.
+
+### Verified
+
+- Full rebuild of the Docker image with the portal changes included, run,
+  and curled: portal `/` (200), Godspeed card present in the served HTML,
+  `badge beta` class present, `href="/godspeed/index.html"` present,
+  `img/godspeed.png` (200), the `.badge.beta` CSS rule present in the
+  served `style.css`, and `/godspeed/` itself still resolves (200).
+- **Not verified**: actual visual appearance (card layout, badge
+  positioning/contrast, thumbnail crop) in a real browser - same standing
+  limitation as every visual change in this project. The HTML/CSS
+  structure and server-side wiring are confirmed correct; whether it
+  *looks* right is not.
+
+### Not done yet
+
+- Look at the actual rendered portal in a browser.
+- Push the rebuilt image to GHCR and apply to the cluster if the user
+  wants the portal change live - see the deployment walkthrough given in
+  this same conversation turn.
+- The rest of root `ROADMAP.md`'s "Grow the arcade" item (About blurb,
+  DE/EN toggle) and its one remaining "coming soon" slot.
+
+---
+
+## 2026-08-04 — Balance fix: capped Speed/Rapid Fire, curbed Extra Life
+
+### What was built
+
+User played the new multi-floor build and reported the Warden getting
+faster every floor, and effectively firing more (higher rate of fire)
+every floor, both unwanted. Root cause, traced back to the previous
+entry's own design rather than a new bug: `FloorPickups`-equivalent logic
+at the time spawned one guaranteed pickup of every type every floor, and
+Speed/Rapid Fire are multiplicative and persist across floors within a
+run - so a normal player who just explores picks up both every floor,
+compounding forever with zero choice involved. By floor 5 that's ~3.3x
+move speed (`1.35^4`) and ~7.7x fire rate (`1/0.6^4`). Laid out all 4
+current powerups with their mechanics before touching anything, then
+asked the user to decide the fix direction rather than picking one
+unilaterally, since "cap the numbers" vs. "make pickups random" vs.
+"reset every floor instead of every run" are genuinely different game-feel
+bets, not a correctness question with one right answer.
+
+- **Speed and Rapid Fire are now capped.** `UPGRADE_EFFECTS.speedMultiplierCap`
+  (2x) and `fireCooldownMultiplierFloor` (~3.3x fire rate) in
+  `GameConfig.ts`; `UpgradeSystem.applyUpgrade` clamps with `Math.min`/
+  `Math.max` instead of multiplying unboundedly. Per-pickup growth is
+  unchanged - pickups past the cap are harmless no-ops, not wasted.
+- **Pickups stayed guaranteed** (user's choice, not randomized) - now that
+  stacking has a ceiling, "reliable" isn't the same problem "unbounded"
+  was.
+- **Extra Life curbed to odd floors** (user's choice, over leaving it
+  alone) via new `src/systems/FloorPickups.ts`'s `pickupTypesForFloor(floor)`.
+  Its slot on even floors becomes a second Shield charge rather than
+  disappearing, so every floor still has exactly 4 pickups. `GameScene`'s
+  `create()` now calls this instead of using a fixed `PICKUP_TYPES`
+  constant.
+- **Shield was left alone** (user's choice) - it doesn't compound the way
+  a multiplier does (a charge is *consumed*, not multiplied), so stacking
+  charges doesn't distort movement/combat feel the way runaway speed or
+  fire rate did.
+- New tests: cap/floor behavior in `upgradeSystem.test.ts` (20 pickups in
+  a row still lands exactly on the cap, not past it), full
+  `floorPickups.test.ts` (odd floors have Extra Life, even floors have two
+  Shields instead, always exactly 4 pickups including Speed and Rapid
+  Fire). Suite is now 85 tests, all passing.
+
+### Key decisions
+
+- Presented the full powerup list and the three-question fix-direction
+  choice to the user instead of silently picking "cap the numbers" myself.
+  The previous entry's own changelog had already flagged the compounding
+  math as something nobody had watched happen in a browser yet - once it
+  did happen and got reported, the right move was surfacing the actual
+  tradeoffs (cap vs. diminishing returns vs. reset-per-floor; guaranteed
+  vs. random pickups; curb Extra Life or not) rather than guessing which
+  one the user would have wanted.
+- Capped via clamping the *result* of each pickup (`Math.min`/`Math.max`
+  after multiplying) rather than, say, precomputing "how many pickups
+  until cap" and rejecting pickups past that count. The clamp approach is
+  simpler, and means a future balance change (different cap value, or a
+  pickup that temporarily lifts the cap) only ever touches the one
+  clamped line, not a separate counting mechanism.
+
+### Verified
+
+- `npm run lint` — clean.
+- `npm run test` — 85/85 passing.
+- `npm run build` — succeeds.
+- `npm run dev` — serves and returns 200.
+- **Not verified**: whether the chosen cap values (2x speed, ~3.3x fire
+  rate) themselves feel right - "capped" fixes the specific "keeps getting
+  faster forever" complaint, but 2x could still feel too twitchy or too
+  tame at floor 4+, and there's no way to know without playing several
+  floors deep again. Same for whether losing Extra Life every other floor
+  feels like a fair trade for an extra Shield charge, or just feels like a
+  downgrade. Both are exactly the kind of thing this session cannot judge
+  without a browser.
+
+### Not done yet
+
+- Confirm the new cap values and the Extra-Life-for-Shield trade actually
+  feel right once played, not just "no longer literally unbounded."
+- Everything still open from the previous entry (real art for the 4 new
+  enemy types, floor-depth/shield UI beyond the HUD, roadmap items 9-12).
+
+---
+
+## 2026-08-04 — Multi-floor progression, full 5-enemy roster, Shield upgrade
+
+### What was built
+
+User picked "keep building gameplay" from a menu of next-step options
+(more art / deployment / clean up debt / more gameplay) after confirming
+the Warden sprite integration worked. This is the biggest single-entry
+change so far - three linked pieces:
+
+- **Multi-floor descent.** Defeating the boss now shows "FLOOR N CLEARED"
+  and, on continue, calls `this.scene.restart({ floor: floor + 1, lives,
+  upgrades })` - Phaser's `Scene.restart(data)` accepts an arbitrary
+  payload that the next `create(data)` call receives, which is what makes
+  carrying lives/upgrades across floors possible without any external
+  state manager. Game over still calls `scene.restart()` with no payload,
+  which resets to floor 1. Biome selection was switched from keying off
+  `progression.mazesCleared` (lifetime win count) to `floor` (in-run
+  depth) - `selectBiome(floor - 1, BIOMES)` - since "which environment am I
+  in" is much more naturally a function of how deep into a run you are
+  than how many runs you've ever finished.
+- **All 5 enemy types, not 1.** `Sentinel` (dormant until the player is
+  within `SENTINEL.triggerDistance`, then chases), `Seeker` (smaller,
+  ~1.5x speed, otherwise a plain stat variant - no subclass needed),
+  `Bulwark` (`extends Enemy`, 2 hit points via the same `applyHit`/
+  `isGameOver` reuse pattern `Boss` already established, no ranged attack),
+  and `Skirmisher` (`extends Enemy`, backs away when the player is within
+  `SKIRMISHER.fleeDistance` via a new `nextStepAway` in `ChaseBehavior.ts`
+  - the mirror of the existing `nextStepToward`, picks the neighbor that's
+  *farther* instead of closer). `src/systems/FloorRoster.ts`'s
+  `enemyRosterForFloor(floor)` decides which 3 of the 5 types spawn
+  together, introducing one new type per floor through floor 4, then
+  holding steady. `src/entities/EnemyFactory.ts` maps a roster entry to
+  the right constructor call.
+- **Difficulty scaling.** `src/systems/FloorDifficulty.ts`'s
+  `difficultyForFloor(floor)` — small linear bumps to enemy speed and boss
+  hit points/attack cooldown, layered on top of whatever the roster itself
+  already does. `Boss`'s `maxHits`/`attackCooldownMs` became constructor
+  parameters (defaulting to the existing constants) specifically so this
+  could scale them without the Boss class needing to know floors exist.
+- **Shield upgrade.** A 4th `UpgradeType`. Grants a charge
+  (`UPGRADE_EFFECTS.shieldChargesGranted`, stacks) that blocks the next hit
+  entirely - no life lost, no teleport-to-spawn, no hurt animation -
+  consumed in `resolvePlayerContact` before life loss is even considered.
+  `PICKUP.count` went from 3 to 4 to fit it (one of each type per maze,
+  same as before).
+- HUD gained a floor-number line and, conditionally, a shield-charge
+  count (only shown once you have at least one charge, to avoid a
+  permanent "Shield: 0" line cluttering the display).
+- New tests: `floorDifficulty.test.ts`, `floorRoster.test.ts`, `nextStepAway`
+  cases added to `pathfinding.test.ts`, shield cases added to
+  `upgradeSystem.test.ts`. Suite is now 80 tests, all passing.
+
+### Key decisions
+
+- Went with exactly 3 stat/behavior *variants* on the existing chase
+  system (Sentinel's trigger, Seeker's stats, Bulwark's hit points,
+  Skirmisher's flee) rather than inventing new movement/targeting
+  infrastructure per type. Every one of them still moves through the same
+  `Enemy.update()`/pathfinding loop; the only new piece of actual
+  targeting logic across all four is `nextStepAway`, which is a
+  three-line mirror of code that already existed. This was a deliberate
+  ceiling on scope - "5 enemy types" could easily have meant 5 bespoke AI
+  systems, which wasn't achievable as one coherent, testable increment.
+- Floor-to-floor difficulty is the roster composition *first*,
+  `FloorDifficulty`'s stat multipliers *second*. Chose not to lean harder
+  on stat scaling alone (e.g. "same 3 Drones but progressively faster
+  forever") because introducing new *behavior* reads as the run getting
+  more interesting, not just more of a damage-sponge grind - matches
+  "smarter enemy AI" over "bigger numbers" in `docs/game_ideas.md`'s own
+  stated direction.
+- `mazesCleared` (the permanent-unlock counter) stays a lifetime count,
+  not reset by starting a new run, while the new `floor` field resets to 1
+  every game over. These are deliberately two different numbers measuring
+  two different things ("how many floors have I ever cleared" vs "how deep
+  is my current run") - documented explicitly in `docs/progression.md`
+  since conflating them would have been an easy, quiet bug.
+- Skirmisher's flee/chase switch is a hard distance threshold, not
+  hysteresis (a wider "keep fleeing until X" than "start fleeing at Y").
+  Flagged in `docs/enemy_design.md` as a known rough edge - a player
+  hovering right at the threshold could see it flicker direction every
+  repath tick. Didn't add hysteresis speculatively for a feel problem that
+  hasn't been confirmed to exist without playtesting it first.
+
+### Verified
+
+- `npm run lint` — clean.
+- `npm run test` — 80/80 passing.
+- `npm run build` — succeeds.
+- `npm run dev` — serves and returns 200.
+- Traced the full state-machine by hand rather than only trusting green
+  tests, since `scene.restart(data)` plumbing is exactly the kind of thing
+  that type-checks fine while being logically wrong (e.g. double-applying
+  the permanent life bonus on every floor instead of once per run):
+  confirmed fresh-run vs continuing-run branches in `create()` apply
+  `bonusStartingLives` exactly once per run, confirmed `mazesCleared`
+  isn't reset by a fresh run while `floor` is, confirmed a dormant
+  Sentinel can still be shot and still deals contact damage if walked
+  into (intentional - "dormant" means "doesn't chase," not "harmless").
+- **Not verified**: any of this in an actual browser. This is the largest
+  single change yet to core loop state, and none of it has been played -
+  does floor 2's Sentinel ambush read as intended, does Skirmisher's
+  flee look controlled or erratic, does the difficulty curve feel fair
+  floor-to-floor, does Shield's "no animation, no flinch" absorb read as
+  satisfying or confusing. All open questions a browser session would
+  answer immediately and code review cannot.
+
+### Not done yet
+
+- Confirm the whole floor-progression loop in a browser - this is now the
+  single most load-bearing unverified thing in the project, given how much
+  new state-machine logic this entry adds.
+- Retune Skirmisher's flee threshold if the no-hysteresis flicker turns
+  out to be a real problem once seen.
+- Real art for any of the 4 new enemy types (still red circles with
+  different sizes/rings) - see `docs/art_direction.md`.
+- Any UI beyond the HUD for floor depth, shield charges, or which enemy
+  types are new this floor.
+- Roadmap items 9-12 (Docker, Kubernetes, Electron, co-op) untouched.
+
+---
+
 ## 2026-08-03 — Real player sprite: the Warden (idle/walk/shoot/hurt/die)
 
 ### What was built

@@ -4,20 +4,52 @@ Initial release: 5 enemy types and 1 boss.
 
 ## Current implementation (v0.1)
 
-One behavior exists so far — a chaser:
+All five non-boss types now exist and are named. All share the same
+underlying movement (`src/ai/Pathfinding.ts` computes a BFS distance-from-
+player field over the maze's cell graph, recomputed on a fixed interval,
+`ENEMY.pathUpdateIntervalMs`, rather than every frame; `src/entities/
+Enemy.ts` moves in a straight line cell-center to cell-center toward its
+current target, snapping on arrival). What differs per type is stats,
+which cell/behavior each one asks for from that shared movement system,
+and (for two of them) hit points instead of dying in one shot. Colors are
+still all `COLORS.danger` red per `docs/art_direction.md` ("red reserved
+for danger") - types are told apart by size and a stroke ring, not hue.
 
-- `src/ai/Pathfinding.ts` computes a BFS distance-from-player field over the
-  maze's cell graph, recomputed on a fixed interval
-  (`ENEMY.pathUpdateIntervalMs` in `GameConfig.ts`) rather than every frame.
-- `src/ai/ChaseBehavior.ts` picks, per enemy, whichever open neighbor cell
-  is strictly closer to the player according to that field.
-- `src/entities/Enemy.ts` moves in a straight line cell-center to
-  cell-center toward that target, snapping on arrival (no overshoot/jitter).
-- Enemies die in one hit from a player projectile
-  (`circlesIntersect` in `CollisionSystem.ts`); touching the player costs a
-  life (see `docs/gameplay.md`).
-- `ENEMY.count` (currently 3) spawn at the maze's four corners at scene
-  start; no waves, respawning, or difficulty scaling yet.
+- **Drone** (`ENEMY.*` config, plain `Enemy` instance - no subclass) - the
+  original type. Direct chaser, dies in one hit, no gimmick. Baseline for
+  comparison against the other four.
+- **Sentinel** (`src/entities/Sentinel.ts`) - parked and inert (rendered at
+  half alpha) until the player wanders within `SENTINEL.triggerDistance`
+  (130px), then permanently wakes up and chases exactly like a Drone. An
+  ambush type - reacting to the player's approach rather than always
+  hunting, per the "react to sound or player movement" idea in
+  `docs/game_ideas.md`. Can still be shot and killed while dormant.
+- **Seeker** (`SEEKER.*` config, plain `Enemy` instance) - smaller
+  (radius 10 vs 14) and faster (~1.5x) than a Drone. A stat variant, not a
+  new behavior - the pressure comes from speed, not cleverness.
+- **Bulwark** (`src/entities/Bulwark.ts`) - bigger and slower than a Drone,
+  takes `BULWARK.maxHits` (2) projectile hits instead of one. A violet
+  stroke ring marks it as tougher-than-normal, distinct from the boss's
+  gold ring so the two are never confused at a glance. No ranged attack -
+  that's the one thing reserved for the actual boss.
+- **Skirmisher** (`src/entities/Skirmisher.ts`) - backs away
+  (`ai/ChaseBehavior.ts`'s `nextStepAway`, the mirror of the normal chase
+  function - picks the neighbor cell that's farther from the player instead
+  of closer) whenever the player closes to within `SKIRMISHER.fleeDistance`
+  (90px), chases normally otherwise. A "hit and run" type per the
+  "retreat or regroup" idea in `docs/game_ideas.md`. Known rough edge:
+  the flee/chase switch is a hard distance threshold with no hysteresis,
+  so a player hovering right at that distance could see it flicker
+  direction each repath tick (every 300ms) - untested in an actual
+  browser, flagged as a thing to watch for.
+- Which types appear together, and how many, is decided by
+  `src/systems/FloorRoster.ts`'s `enemyRosterForFloor(floor)` - see
+  `docs/progression.md` for the floor-by-floor breakdown. Always exactly
+  3 enemies (the maze has 4 corner spawn points; the 4th is reserved for
+  the boss).
+- `src/systems/FloorDifficulty.ts` additionally scales enemy speed and
+  boss stats up with floor depth, on top of whatever the roster itself
+  does - see `docs/progression.md`.
 
 ## Boss (v0.1)
 

@@ -16,14 +16,26 @@ import { Enemy } from './Enemy';
  * duplicating "decrement, floor at zero, defeated at zero" under a new
  * name - the math is identical to player lives, just applied to a
  * different counter.
+ *
+ * maxHits/attackCooldownMs are constructor params (default to BOSS.*) so
+ * FloorDifficulty.ts can scale the boss up on deeper floors without this
+ * class needing to know anything about floors.
  */
 export class Boss extends Enemy {
   hitsRemaining: number;
+  private readonly attackCooldownMs: number;
   private lastAttackAtMs = -Infinity;
 
-  constructor(scene: Phaser.Scene, spawnCell: Cell, spawnPixel: Vector2) {
+  constructor(
+    scene: Phaser.Scene,
+    spawnCell: Cell,
+    spawnPixel: Vector2,
+    maxHits: number = BOSS.maxHits,
+    attackCooldownMs: number = BOSS.attackCooldownMs,
+  ) {
     super(scene, spawnCell, spawnPixel, BOSS.radius, COLORS.danger, BOSS.speed);
-    this.hitsRemaining = BOSS.maxHits;
+    this.hitsRemaining = maxHits;
+    this.attackCooldownMs = attackCooldownMs;
     this.sprite.setStrokeStyle(4, COLORS.projectile);
   }
 
@@ -35,7 +47,7 @@ export class Boss extends Enemy {
   }
 
   canAttack(nowMs: number): boolean {
-    return canFire(this.lastAttackAtMs, nowMs, BOSS.attackCooldownMs);
+    return canFire(this.lastAttackAtMs, nowMs, this.attackCooldownMs);
   }
 
   recordAttack(nowMs: number): void {

@@ -6,3 +6,9 @@
 k8s
 Dockerfile
 .dockerignore
+
+# godspeed/game is a Node/Vite build - the image builds it fresh inside the
+# node:22-alpine stage via `npm ci`; a locally-built node_modules (wrong
+# platform binaries) or a stale local dist/ must never leak into that COPY.
+**/node_modules
+godspeed/game/dist

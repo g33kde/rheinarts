@@ -1,5 +1,15 @@
 # Rhein Arts — retro arcade portal + games, served by nginx.
 # Build from the repo root:  docker build --platform linux/amd64 -t ghcr.io/g33kde/rheinarts:v1 .
+
+# Godspeed (godspeed/game) is a Vite/TypeScript build, unlike the other
+# static-file games - needs an actual build stage before nginx can serve it.
+FROM node:22-alpine AS godspeed-build
+WORKDIR /app
+COPY godspeed/game/package.json godspeed/game/package-lock.json ./
+RUN npm ci
+COPY godspeed/game/ ./
+RUN npm run build
+
 FROM nginx:1.27-alpine
 
 # custom server config (healthz + gzip + caching)
@@ -8,6 +18,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # portal at web root, each game as a subpath
 COPY web/      /usr/share/nginx/html/
 COPY hyperout/ /usr/share/nginx/html/hyperout/
+COPY --from=godspeed-build /app/dist/ /usr/share/nginx/html/godspeed/
 
 EXPOSE 80
 

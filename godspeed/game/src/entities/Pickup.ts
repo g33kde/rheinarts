@@ -7,6 +7,7 @@ const PICKUP_COLOR: Record<UpgradeType, number> = {
   speed: COLORS.pickupSpeed,
   rapidFire: COLORS.pickupRapidFire,
   extraLife: COLORS.pickupExtraLife,
+  shield: COLORS.pickupShield,
 };
 
 export class Pickup {

@@ -88,6 +88,10 @@ Ideas and planned work, captured for later. Unchecked = not started.
 
 - [ ] **Grow the arcade.** Replace the "coming soon" cabinets with real games as
   they land; add a short "About Rhein Arts" blurb. Optional DE/EN toggle.
+  _(in progress — Godspeed now has a cabinet, marked `BETA` (orange badge,
+  distinct from HyperOut's cyan `PLAYABLE`), linking to `/godspeed/index.html`.
+  One "coming soon" slot remains. "About Rhein Arts" blurb and DE/EN toggle
+  still not done.)_
 
 ## Tech, build & ops
 
