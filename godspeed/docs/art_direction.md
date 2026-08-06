@@ -19,7 +19,19 @@ Dark stone, obsidian, gold, sapphire blue, violet, white. Red reserved for dange
   wired in). Animated states in use: idle, walk, shoot, hurt, die. The
   sheet also has attack/jump/fall/land rows, unused - this is a top-down
   maze shooter with no melee/jumping.
-- Every other entity (enemies, boss, projectiles, pickups, maze walls) is
-  still a flat Phaser primitive shape, not real art. The Warden is the
-  proof that swapping primitives for sprites is a contained, per-entity
-  change (see `docs/gameplay.md`) - not yet done for anything else.
+- **Pickups also have real art now**: animated icons (boot/bullet/heart/
+  shield, one looping animation per `UpgradeType`) from a user-provided
+  sheet, `godspeed/artwork/powerups-sprite-sheet.png` - see
+  `src/config/PowerupFrames.ts` and the CHANGELOG's "Real pickup sprite
+  art" entry for how frames were measured.
+- **The Boss has real art too** - a dark stone-and-gold guardian construct
+  with sapphire/violet energy accents, matching the palette above. Source:
+  `godspeed/artwork/boss-sprite-sheet.png`, user-provided, generated from a
+  prompt grounded in this doc plus `docs/vision.md`/`docs/enemy_design.md`.
+  See `src/config/BossFrames.ts` and the CHANGELOG's "Boss sprite art"
+  entry. It's the first *enemy* with real art - every regular enemy
+  (Drone/Sentinel/Seeker/Bulwark/Skirmisher) is still a flat primitive
+  circle, along with projectiles and maze walls.
+- The Warden, the pickups, and the Boss together are the proof that
+  swapping primitives for sprites is a contained, per-entity change (see
+  `docs/gameplay.md`) - not yet done for the regular enemy roster.

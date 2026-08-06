@@ -97,6 +97,9 @@
     pauseContinue: document.getElementById("pauseContinue"),
     pauseRestart: document.getElementById("pauseRestart"),
     pauseMainMenu: document.getElementById("pauseMainMenu"),
+    quitMenu: document.getElementById("quitMenu"),
+    quitYes: document.getElementById("quitYes"),
+    quitNo: document.getElementById("quitNo"),
     stage: document.getElementById("stage"),
     fsBtn: document.getElementById("fsBtn"),
     splash: document.getElementById("splash"),
@@ -585,7 +588,7 @@
   }
 
   // ---------- Game state ----------
-  const STATE = { SPLASH: "splash", MENU: "menu", COUNTDOWN: "countdown", PLAYING: "playing", PAUSED: "paused", ROUND_OVER: "roundOver", MATCH_OVER: "matchOver" };
+  const STATE = { SPLASH: "splash", MENU: "menu", QUIT_CONFIRM: "quitConfirm", COUNTDOWN: "countdown", PLAYING: "playing", PAUSED: "paused", ROUND_OVER: "roundOver", MATCH_OVER: "matchOver" };
 
   const game = {
     state: STATE.SPLASH,
@@ -660,6 +663,8 @@
     if (e.code === "Escape") {
       if (game.state === STATE.PLAYING) pauseGame();
       else if (game.state === STATE.PAUSED) resumeGame();
+      else if (game.state === STATE.MENU) openQuitConfirm();
+      else if (game.state === STATE.QUIT_CONFIRM) closeQuitConfirm();
       return;
     }
     if (e.code === "KeyM") { toggleMusicMute(); return; }
@@ -1243,6 +1248,27 @@
     resumeGameMusic();
   }
 
+  function openQuitConfirm() {
+    game.state = STATE.QUIT_CONFIRM;
+    hide(el.menu);
+    show(el.quitMenu);
+    fitOverlayText();
+  }
+
+  function closeQuitConfirm() {
+    hide(el.quitMenu);
+    game.state = STATE.MENU;
+    show(el.menu);
+  }
+
+  // Absolute path: correct once deployed (portal always serves from site
+  // root, this game from /hyperout/ - see root DEPLOYMENT.md). In a bare
+  // local dev server (e.g. `python3 -m http.server` from the repo root)
+  // there's no portal at "/", so this only resolves correctly in prod.
+  function quitToPortal() {
+    window.location.href = "/";
+  }
+
   function restartMatch() {
     hide(el.pauseMenu);
     game.scores = { 1: 0, 2: 0 };
@@ -1263,6 +1289,8 @@
   el.pauseContinue.addEventListener("click", resumeGame);
   el.pauseRestart.addEventListener("click", restartMatch);
   el.pauseMainMenu.addEventListener("click", backToMenu);
+  el.quitYes.addEventListener("click", quitToPortal);
+  el.quitNo.addEventListener("click", closeQuitConfirm);
   document.querySelectorAll(".target-btn").forEach((b) => {
     b.addEventListener("click", () => {
       let v = parseInt(el.targetVal.textContent, 10) + parseInt(b.dataset.d, 10);

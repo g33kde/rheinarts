@@ -1,11 +1,15 @@
 import Phaser from 'phaser';
+import { playLoopingMusic } from '../audio/MusicController';
 import { ARENA_HEIGHT, ARENA_WIDTH, COLORS } from '../config/GameConfig';
+import { MENU_MUSIC_KEY } from '../systems/MazeMusic';
 import { containScale } from '../utilities/ImageFit';
 
 interface MenuItem {
   label: string;
   enabled: boolean;
 }
+
+const QUIT_ITEMS = ['YES', 'NO'] as const;
 
 /**
  * Menu item hit-zones as fractions of the background art's own dimensions
@@ -33,14 +37,22 @@ const ITEM_SPACING_FRAC = 0.074;
 
 export class MenuScene extends Phaser.Scene {
   private selectedIndex = 0;
-  private highlights: Phaser.GameObjects.Rectangle[] = [];
   private comingSoonText: Phaser.GameObjects.Text | undefined;
+  private quitConfirmOpen = false;
+  private quitIndex = 0;
+  private quitTexts: Phaser.GameObjects.Text[] = [];
+  private quitOverlayObjects: Phaser.GameObjects.GameObject[] = [];
 
   constructor() {
     super('Menu');
   }
 
   create(): void {
+    // Already playing if we arrived from Splash (or looping since before -
+    // e.g. backed out of a game via the pause menu); only starts fresh if
+    // nothing is currently going.
+    playLoopingMusic(this, MENU_MUSIC_KEY);
+
     const background = this.add.image(ARENA_WIDTH / 2, ARENA_HEIGHT / 2, 'menuBackground');
     const scale = containScale(background.width, background.height, ARENA_WIDTH, ARENA_HEIGHT);
     background.setScale(scale);
@@ -54,26 +66,34 @@ export class MenuScene extends Phaser.Scene {
     const itemWidth = (ITEM_RIGHT_FRAC - ITEM_LEFT_FRAC) * displayWidth;
     const itemHeight = ITEM_HEIGHT_FRAC * displayHeight;
 
-    this.highlights = MENU_ITEMS.map((_item, index) => {
+    MENU_ITEMS.forEach((_item, index) => {
       const itemY = offsetY + (FIRST_ITEM_Y_FRAC + index * ITEM_SPACING_FRAC) * displayHeight;
       const zone = this.add
         .rectangle(itemX, itemY, itemWidth, itemHeight, 0x000000, 0)
-        .setOrigin(0, 0.5)
-        .setStrokeStyle(2, COLORS.projectile, 0);
+        .setOrigin(0, 0.5);
 
       zone.setInteractive({ useHandCursor: true });
       zone.on('pointerover', () => this.select(index));
       zone.on('pointerdown', () => this.activate(index));
-
-      return zone;
     });
 
-    this.refreshHighlight();
-
-    this.input.keyboard?.on('keydown-UP', () => this.move(-1));
-    this.input.keyboard?.on('keydown-DOWN', () => this.move(1));
-    this.input.keyboard?.on('keydown-SPACE', () => this.activate(this.selectedIndex));
-    this.input.keyboard?.on('keydown-ENTER', () => this.activate(this.selectedIndex));
+    this.input.keyboard?.on('keydown-UP', () => {
+      if (this.quitConfirmOpen) this.moveQuit(-1);
+      else this.move(-1);
+    });
+    this.input.keyboard?.on('keydown-DOWN', () => {
+      if (this.quitConfirmOpen) this.moveQuit(1);
+      else this.move(1);
+    });
+    this.input.keyboard?.on('keydown-SPACE', () => {
+      if (this.quitConfirmOpen) this.activateQuit();
+      else this.activate(this.selectedIndex);
+    });
+    this.input.keyboard?.on('keydown-ENTER', () => {
+      if (this.quitConfirmOpen) this.activateQuit();
+      else this.activate(this.selectedIndex);
+    });
+    this.input.keyboard?.on('keydown-ESC', () => this.toggleQuitConfirm());
   }
 
   private move(delta: number): void {
@@ -82,13 +102,6 @@ export class MenuScene extends Phaser.Scene {
 
   private select(index: number): void {
     this.selectedIndex = index;
-    this.refreshHighlight();
-  }
-
-  private refreshHighlight(): void {
-    this.highlights.forEach((zone, index) => {
-      zone.setStrokeStyle(2, COLORS.projectile, index === this.selectedIndex ? 1 : 0);
-    });
   }
 
   private activate(index: number): void {
@@ -119,5 +132,84 @@ export class MenuScene extends Phaser.Scene {
       this.comingSoonText?.destroy();
       this.comingSoonText = undefined;
     });
+  }
+
+  private toggleQuitConfirm(): void {
+    if (this.quitConfirmOpen) {
+      this.closeQuitConfirm();
+    } else {
+      this.openQuitConfirm();
+    }
+  }
+
+  private openQuitConfirm(): void {
+    this.quitConfirmOpen = true;
+    this.quitIndex = 0;
+
+    const backdrop = this.add.rectangle(
+      ARENA_WIDTH / 2,
+      ARENA_HEIGHT / 2,
+      ARENA_WIDTH,
+      ARENA_HEIGHT,
+      0x000000,
+      0.75,
+    );
+    const title = this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 40, 'QUIT GAME?', {
+        fontFamily: 'monospace',
+        fontSize: '28px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+
+    this.quitTexts = QUIT_ITEMS.map((label, index) =>
+      this.add
+        .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + 10 + index * 36, label, {
+          fontFamily: 'monospace',
+          fontSize: '20px',
+          color: '#ffffff',
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true })
+        .on('pointerover', () => {
+          this.quitIndex = index;
+          this.refreshQuitHighlight();
+        })
+        .on('pointerdown', () => this.activateQuit()),
+    );
+
+    this.quitOverlayObjects = [backdrop, title, ...this.quitTexts];
+    this.refreshQuitHighlight();
+  }
+
+  private closeQuitConfirm(): void {
+    this.quitConfirmOpen = false;
+    this.quitOverlayObjects.forEach((object) => object.destroy());
+    this.quitOverlayObjects = [];
+    this.quitTexts = [];
+  }
+
+  private refreshQuitHighlight(): void {
+    const selectedColor = Phaser.Display.Color.IntegerToColor(COLORS.projectile).rgba;
+    this.quitTexts.forEach((text, index) => {
+      text.setColor(index === this.quitIndex ? selectedColor : '#ffffff');
+    });
+  }
+
+  private moveQuit(delta: number): void {
+    this.quitIndex = (this.quitIndex + delta + QUIT_ITEMS.length) % QUIT_ITEMS.length;
+    this.refreshQuitHighlight();
+  }
+
+  private activateQuit(): void {
+    if (QUIT_ITEMS[this.quitIndex] === 'YES') {
+      // Absolute path: correct once deployed (portal always serves from
+      // site root, Godspeed from /godspeed/ - see root DEPLOYMENT.md). In
+      // Godspeed's own standalone Vite dev server this just reloads Boot,
+      // since there's no portal running at "/" there.
+      window.location.href = '/';
+    } else {
+      this.closeQuitConfirm();
+    }
   }
 }

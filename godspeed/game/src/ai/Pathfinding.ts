@@ -56,3 +56,34 @@ export function computeDistanceField(maze: Maze, target: Cell): number[][] {
 
   return distances;
 }
+
+/**
+ * True if `from` and `to` share a row or column and every wall between them
+ * along that straight line is open - i.e. a genuinely clear runway, not
+ * just "closer" per the distance field. Used by Drone's "lunge" and
+ * Bulwark's "charge" (driven from GameScene, see docs/enemy_design.md).
+ * False for non-aligned cells or the same cell (no corridor to speak of).
+ */
+export function hasClearCorridor(maze: Maze, from: Cell, to: Cell): boolean {
+  if (from.row === to.row && from.col !== to.col) {
+    const step = to.col > from.col ? 1 : -1;
+    const side: WallSide = step === 1 ? 'east' : 'west';
+    for (let col = from.col; col !== to.col; col += step) {
+      const cell = maze.cells[from.row]?.[col];
+      if (!cell || cell[side]) return false;
+    }
+    return true;
+  }
+
+  if (from.col === to.col && from.row !== to.row) {
+    const step = to.row > from.row ? 1 : -1;
+    const side: WallSide = step === 1 ? 'south' : 'north';
+    for (let row = from.row; row !== to.row; row += step) {
+      const cell = maze.cells[row]?.[from.col];
+      if (!cell || cell[side]) return false;
+    }
+    return true;
+  }
+
+  return false;
+}

@@ -10,6 +10,624 @@ milestone, per the Documentation Rule and Definition of Done in
 
 ---
 
+## 2026-08-06 — Boss attack frame reassigned from Walk
+
+### What was built
+
+On request: `attack`'s awkward second frame (the fused charge+fire pose,
+600px wide - see the previous entry's "measure, don't invent" note) is
+gone, replaced by what was `walk`'s 4th frame (arm extended, projectile
+glow just starting at the hand) - a cleaner, purpose-built windup pose.
+`walk` dropped from 4 frames to 3 accordingly. Both changes are in
+`src/config/BossFrames.ts` only - `BossAnimations.ts` reads frame counts
+from the data itself, no hardcoded assumptions to update elsewhere.
+Republished the animation-viewer artifact from the previous entry with
+the new frame data so it reflects the current state.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (110/110,
+  unchanged), `npm run build` all clean.
+
+### Not done yet
+
+- Same standing caveat as the previous entry - not yet seen animating in
+  a live browser, only in the canvas-based artifact viewer and via the
+  frame data itself.
+
+---
+
+## 2026-08-06 — Boss sprite art (animated, first enemy with real art)
+
+### What was built
+
+The Boss now renders real animated sprite art instead of a flat red circle
+with a gold ring: idle (loop, unused by gameplay yet), walk (loop, default
+state), attack (plays once per shot then returns to walk), die (plays once
+on defeat). Source art (`godspeed/artwork/boss-sprite-sheet.png`,
+user-provided, 1536x1024) followed the same measure-then-crop-verify
+process as the Warden and pickup sheets. New `src/config/BossFrames.ts` +
+`src/entities/BossAnimations.ts` mirror the established
+`WardenFrames.ts`/`WardenAnimations.ts` and
+`PowerupFrames.ts`/`PowerupAnimations.ts` split exactly.
+
+This required a real architecture change, unlike the pickups: `Enemy` (the
+base class every enemy including Boss extends) only ever built a flat
+Phaser `Arc` circle. `Enemy`'s `sprite` field is now typed
+`Phaser.GameObjects.Arc | Phaser.GameObjects.Sprite`, with a new optional
+`visual` constructor param (`{ textureKey, frameKey, scale }`) - when
+given, a real `Sprite` is built instead of a circle. `radius` (the
+collision hitbox) stays decoupled from the visual's `scale`, same as
+`PLAYER.radius`/`WARDEN_SPRITE.scale` already were. Bulwark and Skirmisher
+(the two other subclasses that call the Arc-only `setStrokeStyle` for
+their rings) needed a local cast since `sprite`'s static type is now a
+union - safe, since neither ever passes `visual`.
+
+### Key decisions
+
+- Two of the sheet's four rows (`walk`, `die`) needed a smaller gap-merge
+  threshold (8px) than the pickup sheet's alpha-scan used (20px) - both
+  have a genuine but narrow (~10-15px) transparent seam between poses that
+  the larger threshold was incorrectly bridging into one wide "frame."
+  Found by probing the alpha channel at full column resolution across the
+  suspiciously-merged region and finding a real (if narrow) near-zero dip,
+  not just noise.
+- `attack` ships as 2 frames, not the visually-implied 3 (windup / charge /
+  fire): probed every column across the "charge→fire" span and found zero
+  points below full opacity anywhere in it - the source art has no
+  transparent seam there at all, the two poses are fused. Rather than
+  invent a cut through connected artwork (which the earlier gap-merge fix
+  correctly does NOT paper over, since there's no gap of any size to find),
+  frame 1 covers both poses as a single wide frame. This is the same
+  "measure, don't invent" principle as the Skirmisher-sheet's genuinely-
+  6-frame Shield row two entries ago - respecting what's actually in the
+  pixels over what the thumbnail visually implied.
+- `Boss.destroy()` overrides the base class instead of just calling
+  `super.destroy()`: it sets `alive = false` immediately (Enemy's `alive`
+  field is now `protected`, not `private`, specifically for this) so
+  `GameScene`'s "boss defeated" checks fire on the correct frame, but
+  defers the actual `sprite.destroy()`/health-bar cleanup (extracted into
+  a new `protected destroyVisuals()` in the base class) until the `die`
+  animation's `ANIMATION_COMPLETE` event - the boss visibly crumbles while
+  the "FLOOR CLEARED" text appears, instead of vanishing instantly.
+- No separate "enraged" phase-two art exists in the delivered sheet (the
+  original prompt suggested one, but the user's actual art has 4 rows:
+  idle/walk/attack/die) - both phases share the same walk/attack
+  animations. Only the already-existing mechanical changes (faster
+  cooldown, spread shot) communicate phase two; not compensated for
+  visually here since the art to do so doesn't exist yet.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (110/110,
+  unchanged - no new pure logic), `npm run build` (confirms
+  `boss-sprite-sheet-*.png` bundles) all clean.
+- Dev server started and both the page and the new asset URL curled
+  directly (200/200).
+- All 13 frames (4+4+2+3) cropped to a contact sheet and visually
+  inspected before committing coordinates to `BossFrames.ts`.
+
+### Not done yet
+
+- Never seen actually animating in a live browser (no browser tool in
+  this environment) - confirms the asset loads and the frame math is
+  internally consistent, not that the animations play/transition
+  correctly at runtime (walk→attack→walk, or the die sequence timing
+  against `enterFloorCleared`'s own text/restart flow).
+- `idle` is registered but nothing in `GameScene`/`Boss` ever triggers it -
+  the boss is always either moving or attacking once spawned. Left wired
+  up for a possible future use (e.g. a brief pause during the entrance
+  banner) rather than removed, since it's real content from the sheet, not
+  dead code in the usual sense.
+
+---
+
+## 2026-08-05 — Real pickup sprite art (animated, replaces flat circles)
+
+### What was built
+
+Pickups now render as animated sprite icons instead of flat colored
+circles: boot (Speed), bullet (Rapid Fire), heart (Extra Life), shield
+(Shield), each looping a short idle animation. Source art
+(`godspeed/artwork/powerups-sprite-sheet.png`, user-provided, 1536x1024)
+had 5 rows - the 4th ("Extra Life," a duplicate of row 3 whose last frame
+morphs into a Shield icon mid-generation) was discarded per direct
+instruction. New `src/config/PowerupFrames.ts` (frame rects, keyed by the
+existing `UpgradeType` rather than a redundant parallel enum) and
+`src/entities/PowerupAnimations.ts` (registers sub-frames + builds one
+looping Phaser animation per type) follow the exact same split
+`WardenFrames.ts`/`WardenAnimations.ts` already established.
+`entities/Pickup.ts` swapped `scene.add.circle` for `scene.add.sprite`.
+
+### Key decisions
+
+- Frame boundaries were measured, not eyeballed - per the standing project
+  rule (this exact scenario burned real time on the Warden sheet
+  previously). Unlike the Warden sheet, this one already has real alpha-
+  channel transparency (confirmed by sampling pixels: corners/gaps are
+  A=0), so frames were found by scanning the alpha channel for content
+  bands/columns rather than a background-color-distance threshold. Raw
+  detection initially over-segmented (motion-blur/glow trails dipping
+  below the alpha threshold for a few px, splitting single icons into 2-3
+  pieces) - fixed by merging segments separated by a small gap and
+  dropping anything still under ~30px wide as residual noise. Every frame
+  was then cropped to a contact sheet and visually spot-checked before
+  committing the numbers to `PowerupFrames.ts`.
+- Shield's row only has 6 frames, not 7 like the other three - confirmed
+  by probing the alpha channel directly in the gap where a 7th frame would
+  sit (zero content across a ~65px span). The source sheet genuinely only
+  generated 6 shield icons; not a detection bug.
+- Removed `COLORS.pickupSpeed`/`pickupRapidFire`/`pickupExtraLife` from
+  `GameConfig.ts` - dead code once `Pickup.ts` stopped flat-tinting a
+  circle (each icon now carries its own baked-in color). Kept
+  `COLORS.pickupShield`: `HUD.ts`'s hand-drawn shield icon still uses it,
+  confirmed via a repo-wide grep before deciding what to keep.
+- New `POWERUP_SPRITE.scale` (0.22) targets ~26px on screen for a typical
+  ~120px-wide source frame - a bit bigger than the old flat circle's 20px
+  diameter, reads clearly in a 40px maze tile without dominating it. Each
+  animation's last frame is a wider "flash" pose in the source art (up to
+  224px for Speed) and reads noticeably bigger for that one frame -
+  intentional, left as-is rather than compensated for.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (110/110,
+  unchanged - no new pure logic), `npm run build` (confirms
+  `powerups-sprite-sheet-*.png` is bundled) all clean.
+- Started the Vite dev server and curled both the page and the new asset
+  URL directly (both 200), confirming it's actually served, not just
+  referenced.
+- Frame boundaries verified by cropping and visually inspecting a contact
+  sheet of all 27 frames (7+7+7+6) before wiring them into the game -
+  not just trusting the alpha-scan numbers blind.
+
+### Not done yet
+
+- Never seen actually rendering in a live browser (no browser tool in
+  this environment) - the dev-server check above confirms the asset
+  loads, not that `Phaser.Textures`' sub-frame registration or the
+  animations play correctly at runtime. Worth a real playtest.
+- No confirmation the 0.22 scale/8fps frame rate feel right in motion
+  against the maze - tuned by reasoning about pixel dimensions, not by
+  eye in-game.
+
+---
+
+## 2026-08-05 — Skirmisher snipes on sight, not just while fleeing
+
+### What was built
+
+The sniper shot (see the two entries below) fired only while `isFleeing`
+was true. On request, it now fires the moment it has a clear line of sight
+to the player and its cooldown is ready, regardless of whether it's
+currently fleeing or chasing - `updateSkirmisherAttacks` in `GameScene.ts`
+dropped the `isFleeing` check entirely. Movement (flee within 90px, chase
+otherwise) is unchanged; this only changed the firing trigger.
+
+### Key decisions
+
+- Removed `Skirmisher.isFleeing` entirely rather than leaving it as dead
+  code - it was only ever read by the one call site just removed, and
+  nothing else in the codebase referenced it (confirmed with a repo-wide
+  grep before deleting).
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (110/110,
+  unchanged - no new pure logic, just removed a condition) all clean.
+
+### Not done yet
+
+- Never seen in an actual browser (no browser tool in this environment) -
+  worth checking this doesn't feel like it fires *too* often now that it's
+  not gated to the retreat window (the 1600ms cooldown is the only
+  remaining rate limit).
+
+---
+
+## 2026-08-05 — Skirmisher green ring + confirmed floor-5 spawn gating
+
+### What was built
+
+Added a green stroke ring (`COLORS.skirmisherRing`, `0x2ecc71`) to the
+Skirmisher's sprite, on request - previously it had no ring at all (Bulwark
+gets violet, Boss gets gold, Skirmisher had nothing distinguishing it
+beyond size). Also investigated a "does the Skirmisher ever spawn?"
+question: confirmed via `systems/FloorRoster.ts` and its tests that yes, it
+does, but **only from floor 5 onward** - `enemyRosterForFloor` doesn't
+introduce it until the `floor >= 5` case (`['seeker', 'bulwark',
+'skirmisher']`); floors 1-4 never include it. If a run hasn't reached floor
+5, a Skirmisher is never going to have appeared - that's working as
+designed (one new type introduced per floor), not a bug, but easy to read
+as "broken" if you've been testing on earlier floors.
+
+### Key decisions
+
+- Green isn't in `docs/art_direction.md`'s documented palette (dark stone,
+  obsidian, gold, sapphire, violet, white) - added anyway since it was an
+  explicit request, but flagged here and in `enemy_design.md` rather than
+  silently expanding the palette without a note.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (110/110,
+  unchanged - this was a visual-only change) all clean.
+- The floor-5 spawn gating was confirmed by reading `FloorRoster.ts` and
+  its existing test suite directly, not by playtesting a run to floor 5.
+
+### Not done yet
+
+- Never seen in an actual browser (no browser tool in this environment) -
+  whether green reads clearly against the maze's per-biome wall/background
+  colors (see `BIOMES` in `GameConfig.ts`) hasn't been checked.
+
+---
+
+## 2026-08-05 — Fix: Skirmisher's sniper shot effectively never fired
+
+### What was built
+
+User-reported bug: the Skirmisher's sniper shot (added in the enemy
+enhancement pass, see below) essentially never fired in actual play. Root
+cause: its line-of-sight check was `ai/Pathfinding.ts`'s `hasClearCorridor`,
+which requires the Skirmisher and player to sit in *exactly* the same
+maze row or column, with every wall between them open. In an 11x7 grid
+that's already a narrow coincidence, and it doesn't account for diagonal
+sightlines at all - a Skirmisher one cell off either axis from the player
+could have an obviously clear view and still never qualify. Replaced it
+with a real pixel-space line-of-sight raycast: new `CollisionSystem.ts`
+functions `segmentIntersectsRect` (slab-method line segment/AABB test) and
+`hasLineOfSight` (true if no wall rect blocks the straight line between two
+points), checked against the same `wallRects` the player/enemies already
+collide against. Works at any angle, not just axis-aligned cells.
+
+### Key decisions
+
+- `hasClearCorridor` (cell-grid based) stays as-is for the Drone's lunge
+  and Bulwark's charge - those are speed boosts tied to *movement along the
+  maze's cell-to-cell paths*, which are only ever axis-aligned anyway
+  (enemies move in straight lines between cell centers), so the cell-grid
+  check is the right tool there. It was only the wrong tool for "can this
+  enemy see the player to snipe," which is a real geometric line-of-sight
+  question independent of the cell grid.
+- Reused the existing `wallRects` (already built once per maze in
+  `MazeView`, already used for player/projectile collision) rather than
+  re-deriving geometry from the cell graph - one source of truth for "where
+  the walls physically are."
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (110/110, 6
+  new: `segmentIntersectsRect`/`hasLineOfSight` cases including a
+  diagonal-segment corner clip), `npm run build` all clean.
+
+### Not done yet
+
+- Still not confirmed in an actual browser (no browser tool in this
+  environment) - the user's original report was from real play, so this
+  fix is reasoned from the code, not re-verified against the same repro.
+  Worth a playtest to confirm the sniper shot now actually fires at a
+  believable rate (not too rarely, and not so often it feels spammy).
+
+---
+
+## 2026-08-05 — Enemy health bars, game-over-to-menu, random boss spawn
+
+### What was built
+
+- **Enemy health bars**: every enemy (including the Boss) now shows a
+  small bar under its sprite - a background rect plus a fill rect that
+  shrinks with `hitsRemaining/maxHits`, both drawn as separate
+  `Phaser.GameObjects.Rectangle`s at a forced-higher depth
+  (`ENEMY_HEALTH_BAR.depth`) rather than baked into the enemy's own circle.
+  Lives in the base `Enemy` class so every subclass gets it for free;
+  repositions every frame in `update()` to follow the sprite, and is
+  cleaned up in `destroy()`.
+- **Game over → main menu**: dying now sends the player to `MenuScene`
+  (previously `scene.restart()`'d straight into a fresh floor-1 run), and
+  any key (not just SPACE) continues past the GAME OVER screen -
+  `showEndScreen` takes a new `anyKey` param that swaps the `keydown-SPACE`
+  listener for a bare `keydown` one and updates the on-screen prompt to
+  match. Floor-cleared screens are unchanged (still SPACE-only, still
+  restarts into the next floor).
+- **Random boss spawn**: `spawnBoss()` now picks a random open cell via the
+  same `chooseSpawnCells` helper pickups already use, excluding only the
+  player's current cell, instead of always using the same fixed corner.
+
+### Key decisions
+
+- Made `Enemy.maxHits` `protected` (was going to stay `private`) once
+  `Boss.ts` needed it too for its phase-two threshold - Boss previously
+  kept its own duplicate `private maxHits` field, which would now collide
+  with the base class's identically-named private field (TypeScript
+  rejects two separate private declarations of the same name across a
+  base/derived pair). Protected + no duplicate declaration is simpler than
+  it was before, not just conflict-free.
+- Health bar fill uses `setDisplaySize()`, not a direct `.width` mutation -
+  with the fill rectangle's origin at (0, 0.5), scaling via display size
+  keeps the left edge anchored and shrinks toward it (bar drains right to
+  left), which a raw geometry resize isn't guaranteed to do consistently.
+- Boss spawn only excludes the player's exact current cell, not a wider
+  safety radius around it - matches the existing pickup-placement pattern
+  exactly (`chooseSpawnCells` was written for exact-cell exclusion, not
+  radius-based), and keeps the change scoped to "random" rather than also
+  redesigning spawn fairness that wasn't asked for.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (104/104),
+  `npm run build` all clean.
+
+### Not done yet
+
+- Never seen in an actual browser (no browser tool in this environment) -
+  health bar sizing/spacing under small-radius enemies (Seeker, radius 10)
+  and the boss's random spawn actually landing somewhere reasonable (not,
+  say, directly adjacent to a wall corner in a way that looks odd) both
+  need a real playtest.
+- No minimum-distance guarantee between the boss's random spawn and the
+  player beyond "not the exact same cell" - a spawn one cell away is
+  possible and would feel abrupt given the entrance camera-shake/flash
+  plays regardless of distance.
+
+---
+
+## 2026-08-05 — Enemy enhancement pass + player movement easing
+
+### What was built
+
+Player movement now ramps toward its target velocity (`PLAYER.
+accelerationPxPerSec2`, ~0.1s to reach full speed from a standstill) instead
+of snapping instantly, via new `MovementSystem.approachVelocity`/
+`scaledVelocity` pure helpers, in response to feedback that movement felt
+"too direct." `Player.teleportTo` (used on respawn-after-hit) also resets
+velocity to zero so a fresh spawn doesn't carry momentum from before the hit.
+
+All five non-boss enemy types got an actual distinguishing behavior instead
+of being pure stat variants, all enemies (Drone/Sentinel/Seeker/Skirmisher)
+now take 4 hits instead of 1 and Bulwark takes 5 (was 2) - "+3 all round" -
+and the Boss takes 20 (was 5) and gained a second phase. See the rewritten
+`docs/enemy_design.md` for full details; summary:
+
+- **Drone** - "lunge" (1.6x speed) on a clear straight corridor to the player.
+- **Sentinel** - re-arms (goes back dormant) if the player stays away long
+  enough, instead of staying woken forever after the first trigger.
+- **Seeker** - retargets on its own 100ms cadence instead of the shared
+  300ms tick, via a second repath timer in `GameScene`.
+- **Bulwark** - "charges" (1.8x speed) on a longer clear corridor than the
+  Drone's lunge needs.
+- **Skirmisher** - flee/chase now has hysteresis (fixes a known flicker
+  bug), and it fires a fast violet "sniper" shot while retreating with a
+  clear line of sight - the second enemy with a ranged attack besides the
+  Boss.
+- **Boss** - phase two past 50% HP: faster attacks (a cooldown multiplier
+  that composes with `FloorDifficulty`'s existing per-floor scaling) and a
+  3-shot spread instead of one aimed shot.
+
+New pure helpers backing all of this: `ai/Pathfinding.ts`'s
+`hasClearCorridor` (row/column-aligned, wall-free straight line between two
+cells - shared by the Drone lunge, Bulwark charge, and Skirmisher sniper
+line-of-sight checks) and `utilities/Vector2.ts`'s `rotate` (for the Boss's
+spread shot).
+
+### Key decisions
+
+- Gave `Enemy` (the base class) a generic `hitsRemaining`/`takeHit()`
+  instead of leaving it Bulwark/Boss-only - every type needing multiple
+  hits made the old `instanceof Boss || instanceof Bulwark` special-case in
+  `GameScene.resolveProjectileEnemyHits` pointless; it's now a single
+  unconditional `chaser.takeHit()`.
+- Drone and Seeker got their own dedicated classes (`Drone.ts`, `Seeker.ts`)
+  instead of staying plain `Enemy` instances - now that each has its own
+  behavior, `GameScene` needs `instanceof` to tell them apart, which a
+  shared class can't provide.
+- Boss's phase-two cooldown is a *multiplier* on its current cooldown, not
+  a flat replacement value - a flat value could accidentally end up
+  *slower* than phase one's already floor-scaled cooldown at very deep
+  floors, which a multiplier composes correctly with regardless of depth.
+- Skirmisher's sniper shot is rendered in a new `COLORS.skirmisherBeam`
+  (same violet hex as `bulwarkRing`) rather than reusing the Boss's red or
+  the player's gold - so players can tell all three projectile sources
+  apart at a glance. Violet is already an established palette color (see
+  `docs/art_direction.md`), so this isn't a new hue, just a new use of one.
+- Player acceleration is a fixed px/s² constant, not a time-constant that
+  scales with the current (possibly upgrade-boosted) max speed - simpler,
+  avoids a divide-by-zero when decelerating to a zero target, and the
+  "tiny" framing means it doesn't need to be perfectly consistent across
+  every speed-multiplier stack.
+- The HP increases (+3 across the board, Boss to 20) and which enemy got
+  the ranged sniper (Skirmisher, chosen over Drone/Sentinel/Seeker/Bulwark
+  since "keeps its distance and hits from range" already is its identity)
+  were both explicit user calls, not balance choices made unprompted here.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src tests`, `npm run test` (104/104,
+  15 new), `npm run build` all clean.
+
+### Not done yet
+
+- Never played in an actual browser (no browser tool in this environment) -
+  this is a real balance swing (every regular enemy now takes 4x the
+  shots to kill, the boss 4x), so the actual in-game feel - especially
+  floor 1, which used to be one-shot-kill Drones - needs a real playtest
+  before treating these numbers as final.
+- Sentinel's re-arm walks back to wherever it happened to be when it lost
+  the player, not back to its original post - a minor simplification, not
+  a "patrol back to spawn" behavior.
+- Bulwark's charge and Drone's lunge share the same `hasClearCorridor`
+  check but aren't visually distinguished from their normal state beyond
+  speed (no wind-up telegraph, no trail effect) - acceptable for a first
+  pass, a candidate for a follow-up polish round.
+
+---
+
+## 2026-08-04 — Escape-to-quit confirmation on the main menu
+
+### What was built
+
+Pressing `Escape` on the main menu (`MenuScene`) now opens a "QUIT GAME?"
+confirm dialog (Yes/No), navigable the same way as the rest of the menu
+(mouse hover/click, or Up/Down + Enter/Space) - `Escape` again cancels it,
+same toggle symmetry as the in-run pause menu. Choosing Yes sends the
+browser to `/`, the portal's cabinet screen; No closes the dialog and
+returns to the menu. HyperOut got the equivalent: a new `quitMenu` overlay
+panel (`hyperout/index.html`) wired into `hyperout/game.js`'s existing state
+machine as a `STATE.QUIT_CONFIRM` state, reachable the same way (`Escape`
+from `STATE.MENU`).
+
+### Key decisions
+
+- Both games navigate with an absolute `window.location.href = '/'`, not a
+  relative path - correct for how they're actually deployed (nginx serves
+  the portal at site root, HyperOut at `/hyperout/`, Godspeed at
+  `/godspeed/`; see root `DEPLOYMENT.md`). In each game's own standalone dev
+  server this doesn't reach a real portal (no portal is running there), a
+  known/accepted limitation rather than something worth adding dev-only
+  branching for.
+- Godspeed's dialog is Phaser-native (add.rectangle + add.text), same
+  pattern as `GameScene`'s existing pause overlay, not a DOM overlay -
+  consistent with every other screen in that codebase.
+- HyperOut's dialog reuses existing `.overlay.panel` / `.pause-title` /
+  `.big-btn` / `.menu-btn` CSS classes from the pause menu - no new CSS.
+
+### Verified
+
+- Godspeed: `npx tsc --noEmit`, `npx eslint src`, `npm run test` (89/89) all
+  clean.
+- HyperOut: `node --check game.js` - no syntax errors.
+
+### Not done yet
+
+- Neither confirmed in an actual browser (no browser tool in this
+  environment) - dialog layout/readability and the actual navigate-to-`/`
+  behavior against the real deployed portal should get a real check.
+
+---
+
+## 2026-08-04 — Diablo-3-style bottom HUD bar
+
+### What was built
+
+Replaced the top-left plain-text HUD (`Floor: 16` / `Lives: 3  Shield: 1` /
+`Enemies: 0` / `Guardian: 0`) with a bottom-anchored bar, 5 fixed icon+value
+slots (Floor, Lives, Shield, Enemies, Guardian) on a dark panel with thin
+dividers between slots - closer to how Diablo 3 anchors its readouts along
+the bottom edge instead of a corner text dump. Icons (heart, shield, skull,
+crown, a descend-arrow for floor) are hand-drawn `Phaser.GameObjects.Graphics`
+vector shapes, not image assets. Shield and Guardian slots hide entirely when
+not applicable (no shield charges / no boss up) rather than reflowing the bar.
+
+### Key decisions
+
+- Icon+count, not one-heart-per-life: lives/shield charges can grow past a
+  handful (extra-life pickups, no hard cap - see `HealthSystem.grantExtraLife`
+  and `UpgradeSystem`'s uncapped `shieldCharges`), so repeating an icon per
+  unit like classic Zelda hearts would overflow the bar at depth. A single
+  icon plus a number scales to any value and is still far more scannable than
+  the old `Lives: 3  Shield: 1` text run.
+- Icons are drawn once in the constructor and never redrawn; only their
+  `Text` values and the two conditional slots' `.setVisible()` change per
+  frame in `update()` - same cheap pattern the old HUD already used for its
+  text, just extended to the new Graphics icons instead of clearing and
+  redrawing vector shapes 60 times a second.
+- The skull icon's "eyes" are drawn as small circles filled with the panel's
+  own background color/alpha (a fake cutout, not real transparency) - picked
+  a near-solid panel alpha (0.92) specifically so that fake cutout reads
+  cleanly instead of visibly mismatching whatever's rendered behind the bar.
+- `HudState` (the public interface `GameScene` calls `hud.update()` with) is
+  unchanged, so this was a pure `ui/HUD.ts` rewrite - no `GameScene.ts` edits.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint src`, `npm run test` (89/89) all clean.
+
+### Not done yet
+
+- Never seen in an actual browser (no browser tool in this environment) -
+  slot spacing, icon legibility at a small canvas size, and whether the
+  bottom bar overlaps the player/maze awkwardly at the bottom row of cells
+  should get a real playtest.
+- Icons are simple flat vector shapes, not art in the Warden's style: fine
+  for a first pass, but a candidate for a later real-icon-sprite pass (same
+  idea as HUD design option 3 that was proposed but not chosen here).
+
+---
+
+## 2026-08-04 — Pause menu + background music
+
+### What was built
+
+- **Escape-to-pause** during gameplay, matching HyperOut's pause behavior:
+  `Escape` freezes the run (a new `'paused'` `RunState`, so the existing
+  `update()` early-return already halts everything) and shows an overlay -
+  Continue / Restart / Main Menu, navigable by mouse or Up/Down + Enter/Space,
+  `Escape` again resumes. "Main Menu" stops the run's music and returns to
+  `MenuScene`; "Restart" restarts the run from floor 1.
+- **Music**: menu music (`godspeed_intro.mp3`) starts on the splash screen and
+  keeps playing uninterrupted through the menu; stage music
+  (`godspeed_maze1.mp3`) starts when a run begins, keeps playing across floor
+  transitions (`scene.restart()` with new floor data), and only stops on
+  death (game over). Pausing pauses the current track rather than stopping it.
+- New `src/systems/MazeMusic.ts` (pure, tested) picks a track per floor by
+  cycling through a configured file list - `docs`/user note: further stage
+  tracks will land in `godspeed/music/maze/`; adding a new floor's music is
+  just appending its filename to `MAZE_MUSIC_FILES`, no code changes needed
+  beyond that.
+- New `src/audio/MusicController.ts` (Phaser-touching, unlike `systems/`)
+  wraps Phaser's sound manager: play-if-not-already-playing, pause, resume,
+  stop - since Phaser's sound manager is game-global (not per-scene), these
+  are what make "don't restart the track across scene transitions" work.
+
+### Key decisions
+
+- Music files live in `godspeed/music/` (sibling to `godspeed/game/`, e.g.
+  `godspeed/music/menu/godspeed_intro.mp3`), not inside `src/assets/` -
+  they're large (3-6MB each) content-only assets a designer should be able to
+  drop in without touching source. Wired up via Vite's `publicDir` (set to
+  `../music` in `vite.config.ts`) rather than an ES import, so they're copied
+  as static files at build time; referenced at runtime via
+  `import.meta.env.BASE_URL` since publicDir assets aren't hashed/rewritten
+  by Vite. `Dockerfile`'s build stage now also `COPY godspeed/music/ /music/`
+  (mirroring the repo's sibling-directory layout inside the container) so the
+  same relative `publicDir: '../music'` path resolves in both places.
+- Used `this.sound.add(key, {loop:true})` + `.play()`/`.pause()`/`.resume()`,
+  not the `this.sound.play(key)` shorthand - that shorthand spawns a
+  throwaway Sound instance that self-destroys on completion, which breaks
+  `this.sound.get(key)` lookups from a different scene later (needed for
+  "don't restart if already playing" across Splash → Menu → Game).
+- Pause overlay built Phaser-native (add.rectangle + add.text, same pattern
+  as the existing `showEndScreen`), not a DOM overlay like HyperOut's -
+  Godspeed's `index.html` is a bare canvas host with no overlay markup, and
+  every other menu/screen in this codebase is already drawn this way.
+
+### Verified
+
+- `npm run test` - 89/89 passing (4 new tests for `mazeTrackForFloor`/
+  `mazeTrackKey` track-cycling logic).
+- `npx tsc --noEmit` - clean.
+- `npx eslint src` - clean.
+- `npm run build` - confirmed `dist/menu/godspeed_intro.mp3` and
+  `dist/maze/godspeed_maze1.mp3` are present in the build output (i.e.
+  `publicDir` actually copies them, not just a config that looks right).
+
+### Not done yet
+
+- Never verified in an actual browser (no browser tool in this environment) -
+  the pause overlay's layout/readability and the music actually
+  playing/looping/ducking correctly on scene transitions should get a real
+  playtest.
+- No volume control / mute key (HyperOut has an `M` mute shortcut and volume
+  sliders; Godspeed has neither yet).
+- Only one stage track exists today (`godspeed_maze1.mp3`) so the
+  per-floor cycling logic is unexercised beyond floor 1 in practice - once a
+  second file lands in `godspeed/music/maze/` and gets added to
+  `MAZE_MUSIC_FILES`, worth confirming the floor-boundary track switch
+  sounds right (currently: hard stop-and-restart on the new track, no
+  crossfade).
+
+---
+
 ## 2026-08-04 — Deployment wiring: Docker/nginx (roadmap items 9-10, prep only)
 
 ### What was built

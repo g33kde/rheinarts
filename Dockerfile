@@ -8,6 +8,10 @@ WORKDIR /app
 COPY godspeed/game/package.json godspeed/game/package-lock.json ./
 RUN npm ci
 COPY godspeed/game/ ./
+# godspeed/music/ is a sibling of godspeed/game/ in the repo; mirror that
+# relative layout here so vite.config.ts's publicDir ('../music') resolves
+# the same way in Docker as it does locally.
+COPY godspeed/music/ /music/
 RUN npm run build
 
 FROM nginx:1.27-alpine

@@ -3,8 +3,10 @@ import {
   circleIntersectsAnyRect,
   circleIntersectsRect,
   circlesIntersect,
+  hasLineOfSight,
   resolveCircleRectCollision,
   resolveCircleRectCollisions,
+  segmentIntersectsRect,
 } from '../src/systems/CollisionSystem';
 
 const rect = { x: 100, y: 100, width: 40, height: 40 };
@@ -65,5 +67,35 @@ describe('circlesIntersect', () => {
 
   it('is false when circles exactly touch (strict overlap only)', () => {
     expect(circlesIntersect({ x: 0, y: 0 }, 10, { x: 20, y: 0 }, 10)).toBe(false);
+  });
+});
+
+describe('segmentIntersectsRect', () => {
+  it('is true when the segment passes through the rect', () => {
+    expect(segmentIntersectsRect({ x: 0, y: 120 }, { x: 300, y: 120 }, rect)).toBe(true);
+  });
+
+  it('is false when the segment passes well clear of the rect', () => {
+    expect(segmentIntersectsRect({ x: 0, y: 0 }, { x: 300, y: 0 }, rect)).toBe(false);
+  });
+
+  it('is false when the segment stops short of the rect', () => {
+    expect(segmentIntersectsRect({ x: 0, y: 120 }, { x: 50, y: 120 }, rect)).toBe(false);
+  });
+
+  it('is true for a diagonal segment clipping a corner', () => {
+    expect(segmentIntersectsRect({ x: 90, y: 90 }, { x: 110, y: 110 }, rect)).toBe(true);
+  });
+});
+
+describe('hasLineOfSight', () => {
+  const rects = [rect, { x: 200, y: 100, width: 40, height: 40 }];
+
+  it('is false when any rect blocks the line', () => {
+    expect(hasLineOfSight({ x: 0, y: 120 }, { x: 300, y: 120 }, rects)).toBe(false);
+  });
+
+  it('is true when nothing blocks the line', () => {
+    expect(hasLineOfSight({ x: 0, y: 0 }, { x: 300, y: 0 }, rects)).toBe(true);
   });
 });

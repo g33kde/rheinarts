@@ -1,18 +1,20 @@
 import Phaser from 'phaser';
 import type { Cell } from '../ai/Pathfinding';
-import { COLORS, ENEMY, SEEKER } from '../config/GameConfig';
 import type { EnemyTypeName } from '../systems/FloorRoster';
 import type { Vector2 } from '../utilities/Vector2';
 import { Bulwark } from './Bulwark';
+import { Drone } from './Drone';
 import { Enemy } from './Enemy';
+import { Seeker } from './Seeker';
 import { Sentinel } from './Sentinel';
 import { Skirmisher } from './Skirmisher';
 
 /**
- * Builds the right Enemy subclass (or a plain stat-variant Enemy) for a
- * roster entry from FloorRoster.ts. Drone and Seeker have no behavior of
- * their own - same chase logic as any Enemy, just different radius/speed -
- * so they're plain Enemy instances rather than needing dedicated classes.
+ * Builds the right Enemy subclass for a roster entry from FloorRoster.ts.
+ * Every type now has its own class (even Drone/Seeker, previously plain
+ * Enemy instances) since GameScene needs to tell them apart via
+ * `instanceof` to drive their individual behaviors (lunge, faster repath,
+ * charge, flee/sniper, ambush).
  */
 export function createEnemy(
   scene: Phaser.Scene,
@@ -23,23 +25,9 @@ export function createEnemy(
 ): Enemy {
   switch (type) {
     case 'drone':
-      return new Enemy(
-        scene,
-        spawnCell,
-        spawnPixel,
-        ENEMY.radius,
-        COLORS.danger,
-        ENEMY.speed * speedMultiplier,
-      );
+      return new Drone(scene, spawnCell, spawnPixel, speedMultiplier);
     case 'seeker':
-      return new Enemy(
-        scene,
-        spawnCell,
-        spawnPixel,
-        SEEKER.radius,
-        COLORS.danger,
-        SEEKER.speed * speedMultiplier,
-      );
+      return new Seeker(scene, spawnCell, spawnPixel, speedMultiplier);
     case 'sentinel':
       return new Sentinel(scene, spawnCell, spawnPixel, speedMultiplier);
     case 'bulwark':

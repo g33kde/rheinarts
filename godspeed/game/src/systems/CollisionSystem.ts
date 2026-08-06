@@ -86,3 +86,41 @@ export function resolveCircleRectCollisions(
     position,
   );
 }
+
+/**
+ * Slab-method line-segment/AABB intersection test. Used for real pixel-
+ * space line-of-sight (see hasLineOfSight below) rather than the maze's
+ * cell grid - a raycast against actual wall rects works at any angle,
+ * not just when two cells happen to share a row/column.
+ */
+export function segmentIntersectsRect(start: Vector2, end: Vector2, rect: Rect): boolean {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  let tMin = 0;
+  let tMax = 1;
+
+  const axes: Array<[origin: number, delta: number, min: number, max: number]> = [
+    [start.x, dx, rect.x, rect.x + rect.width],
+    [start.y, dy, rect.y, rect.y + rect.height],
+  ];
+
+  for (const [origin, delta, min, max] of axes) {
+    if (delta === 0) {
+      if (origin < min || origin > max) return false;
+      continue;
+    }
+    let t0 = (min - origin) / delta;
+    let t1 = (max - origin) / delta;
+    if (t0 > t1) [t0, t1] = [t1, t0];
+    tMin = Math.max(tMin, t0);
+    tMax = Math.min(tMax, t1);
+    if (tMin > tMax) return false;
+  }
+
+  return true;
+}
+
+/** True if a straight line between two points isn't blocked by any rect. */
+export function hasLineOfSight(start: Vector2, end: Vector2, rects: readonly Rect[]): boolean {
+  return !rects.some((rect) => segmentIntersectsRect(start, end, rect));
+}

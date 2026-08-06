@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
+import { playLoopingMusic } from '../audio/MusicController';
 import { ARENA_HEIGHT, ARENA_WIDTH } from '../config/GameConfig';
+import { MENU_MUSIC_KEY } from '../systems/MazeMusic';
 import { containScale } from '../utilities/ImageFit';
 
 /**
@@ -15,6 +17,8 @@ export class SplashScene extends Phaser.Scene {
   }
 
   create(): void {
+    playLoopingMusic(this, MENU_MUSIC_KEY);
+
     const background = this.add.image(ARENA_WIDTH / 2, ARENA_HEIGHT / 2, 'splashBackground');
     const scale = containScale(background.width, background.height, ARENA_WIDTH, ARENA_HEIGHT);
     background.setScale(scale);
