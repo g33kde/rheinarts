@@ -31,7 +31,7 @@ spec:
     spec:
       containers:
         - name: web
-          image: ghcr.io/g33kde/rheinarts:v4
+          image: ghcr.io/g33kde/rheinarts:v5
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
