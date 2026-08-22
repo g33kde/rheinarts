@@ -14,6 +14,16 @@ COPY godspeed/game/ ./
 COPY godspeed/music/ /music/
 RUN npm run build
 
+# Debris (debris/game) is also a Vite/TypeScript build, same reason and
+# same sibling-publicDir layout as Godspeed above.
+FROM node:22-alpine AS debris-build
+WORKDIR /app
+COPY debris/game/package.json debris/game/package-lock.json ./
+RUN npm ci
+COPY debris/game/ ./
+COPY debris/music/ /music/
+RUN npm run build
+
 FROM nginx:1.27-alpine
 
 # custom server config (healthz + gzip + caching)
@@ -23,6 +33,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY web/      /usr/share/nginx/html/
 COPY hyperout/ /usr/share/nginx/html/hyperout/
 COPY --from=godspeed-build /app/dist/ /usr/share/nginx/html/godspeed/
+COPY --from=debris-build   /app/dist/ /usr/share/nginx/html/debris/
 
 EXPOSE 80
 

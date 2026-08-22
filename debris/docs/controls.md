@@ -62,7 +62,24 @@ implementation starts, not just a docs decision.
 
 ## Menu / system
 
-Exact keys are a v1 implementation detail (should follow HyperOut's
-existing convention: `Esc` pause, a numbered or lettered key to pick a
-mode), not fixed here since there's no menu screen built yet to test
-against.
+`Esc` navigation replicates HyperOut's convention exactly (see
+`hyperout/game.js`'s Escape handler and `hyperout/index.html`'s
+`pauseMenu`/`quitMenu` panels) rather than inventing a new one:
+
+| Screen | `Esc` does |
+| --- | --- |
+| Start menu (`MenuScene`) | Opens "QUIT GAME?" (YES navigates to `/`, the shared portal root; NO or `Esc` again closes it) |
+| Playing (`GameScene`) | Pauses - shows "PAUSED" with Continue / Restart / Main Menu |
+| Paused | `Esc` again resumes (same toggle as opening it) |
+| Stage cleared / Game over | No special handling - these screens already advance on *any* key/button/click, `Esc` included |
+
+Continue/Restart/Main Menu are click-only (touch/mouse), matching
+HyperOut, which has no keyboard shortcuts for them either - only Escape
+itself is keyboard-bound on these screens. Splash screen `Esc` behavior
+needs no special case: it already advances on *any* key, same as
+HyperOut's splash dismissal.
+
+Mode selection itself (Cooperative/Competitive) has no dedicated key -
+it's mouse/touch-only on the mode toggle, unlike HyperOut's numbered/
+lettered mode key idea floated here previously; revisit if that's missed
+once this is actually played.

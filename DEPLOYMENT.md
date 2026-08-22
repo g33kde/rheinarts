@@ -5,14 +5,15 @@ Static site (retro portal + games) on **k3s + MetalLB**, LAN-only, HTTP.
 - **Image:** `ghcr.io/g33kde/rheinarts:<tag>` (public GHCR package → no pull secret) -
   the tag actually running is whatever `k8s/rheinarts.yaml` declares; that file
   is the source of truth, see "Updating" below.
-- **Serves:** portal at `/`, HyperOut at `/hyperout/`, Godspeed at `/godspeed/`
+- **Serves:** portal at `/`, HyperOut at `/hyperout/`, Godspeed at `/godspeed/`,
+  Debris at `/debris/`
 - **Access:** the LAN IP MetalLB assigns to the `LoadBalancer` Service
 
-Godspeed (`godspeed/game`) is a Vite/TypeScript build, not static files like
-HyperOut - the image build now has a `node:22-alpine` stage that runs
-`npm ci && npm run build` before the final `nginx:1.27-alpine` stage copies
-its `dist/` output in. Nothing extra to do here - `docker build` handles
-both stages in one command, same as before.
+Godspeed (`godspeed/game`) and Debris (`debris/game`) are both Vite/TypeScript
+builds, not static files like HyperOut - the image build has a `node:22-alpine`
+stage per game that runs `npm ci && npm run build` before the final
+`nginx:1.27-alpine` stage copies each one's `dist/` output in. Nothing extra to
+do here - `docker build` handles all the stages in one command, same as before.
 
 Prereqs on your machine: `docker`, `kubectl` (pointed at the cluster).
 

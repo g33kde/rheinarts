@@ -17,8 +17,12 @@ doc tries to only say things that are actually specific to Debris.)
   inside Phaser at no extra dependency cost.
 - Vite
 - Docker + Kubernetes, same shared-image deployment pattern as
-  HyperOut/Godspeed (see root `DEPLOYMENT.md`) — not yet wired up for
-  Debris specifically, but no reason to expect it'd differ.
+  HyperOut/Godspeed (see root `DEPLOYMENT.md`) — wired up now: the root
+  `Dockerfile` has a `debris-build` stage mirroring Godspeed's exactly
+  (`node:22-alpine`, `npm ci && npm run build`, `debris/music/` copied in
+  as a sibling dir so `vite.config.ts`'s `publicDir` resolves the same as
+  local dev), served at `/debris/`. `k8s/rheinarts.yaml` needed no
+  changes — one shared image, one more served path.
 - Vitest for testing (see Testing below)
 
 ## Physics
@@ -72,7 +76,7 @@ in:
 | Max on-screen shots (per player) | 4 |
 | Asteroid speed, small vs. large | ~1.8–2x |
 | Score — large / medium / small asteroid | 20 / 50 / 100 |
-| Score — UFO | 200+ (exact figure still open) |
+| Score — UFO | 200 (confirmed, not raised) |
 | Shield spawn cadence | ~20–30s |
 | Lives per player | 3 |
 
@@ -81,7 +85,3 @@ in:
 - Max on-screen shots *per asteroid* size isn't a thing — cap is
   per-player, global across all asteroid sizes, per the table above.
   Worth confirming this reads right once playable.
-- UFO score's exact value above the 200 floor.
-- Deployment specifics for Debris in the shared `Dockerfile`/`nginx.conf`
-  — expected to mirror Godspeed's build-stage pattern closely, not yet
-  written down.

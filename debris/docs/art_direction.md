@@ -77,17 +77,29 @@ the rear notch (`[-0.30, 0.00]`), pulsing in length with thrust, same
 warm orange glow regardless of hull color so "this ship is thrusting"
 reads the same for every player.
 
-## Background: "Twin Planets + Nebula Haze," decided
+## Background: "Twin Planets," decided
+
+**Lives on the play field (`GameScene`), not the menu.** Originally
+specced for the start screen (see that section below, which still
+describes the menu's *layout* accurately but no longer its background) -
+redirected here per explicit instruction once implementation reached
+this point. The menu keeps a flat background color; this composition is
+what's actually behind the ship and asteroids during a round.
 
 Chosen from three live-rendered concepts (Clean Starfield, Twin Planets +
 Nebula, Ringed Planet + Grid Horizon). Two star layers for cheap depth (a
-dim, near-static far layer; a brighter, slowly-drifting near layer), two
-planets at different sizes/depths, and a very low-opacity violet/cyan
-nebula wash behind everything, using the game's own accent hues so the
-atmosphere ties back into the palette above rather than introducing new
-colors. Confirmed with player-colored dots standing in for ship positions,
-to check the background stays quiet enough to fight in front of before
-deciding — that was the real risk, not whether it looked nice alone.
+dim, near-static far layer; a brighter, slowly-drifting near layer) and
+two planets at different sizes/depths. Confirmed with player-colored dots
+standing in for ship positions, to check the background stays quiet
+enough to fight in front of before deciding — that was the real risk, not
+whether it looked nice alone.
+
+**No nebula wash, on request.** The original concept layered a very
+low-opacity violet/cyan haze behind everything (drawn from the game's own
+accent hues); removed entirely once implementation reached the play
+field and it read as more than "quiet enough to fight in front of" - the
+"Twin Planets" half of this section's name is now the accurate
+description, not "Twin Planets + Nebula Haze."
 
 **Primary planet: a real photo, `earth.jpg`, decided for v1.** User-provided
 (`debris/artwork/earth.jpg`, 1280×1280 JPG, no alpha channel — full-disk
@@ -112,17 +124,17 @@ to the photo.
   desaturation or a subtle tint pass so it reads as "a real planet in
   this game's world" rather than a stock photo pasted over vector art.
   Exact treatment is a v1 visual-polish pass, not decided here.
-- **The smaller moon stays procedural** (the small rocky-moon gradient
-  circle from the original demo, lower-left) — keeps the approved
-  Twin-Planets composition intact rather than changing both bodies at
-  once off a single photo. Revisit if a second photo (e.g. `venus.jpg`,
-  also already provided) turns out to read better than a mixed
-  photo/procedural pairing.
-- `jupiter.jpg`, `saturn.jpg`, and `venus.jpg` are also sitting in
-  `debris/artwork/` (640×640, 932×600 8bpp-indexed, and 1280×1280
-  respectively) but aren't wired to anything for v1 — natural candidates
-  for later floors/waves/modes wanting a different backdrop, or for
-  swapping the moon slot above, not decided now.
+- **Second body: `jupiter.jpg`, decided**, not the procedural moon
+  originally planned. `debris/artwork/jupiter.jpg` (640×640 JPG) takes
+  the smaller/secondary slot (lower-left), same circular-clip treatment
+  as Earth, at a smaller radius (~80px vs. Earth's ~116px, static, no
+  tint applied - unlike Earth its natural color already reads fine
+  against the palette). On request, replacing the "smaller moon stays
+  procedural" plan from the original concept.
+- `saturn.jpg` and `venus.jpg` are still sitting in `debris/artwork/`
+  (932×600 8bpp-indexed and 1280×1280 respectively) but aren't wired to
+  anything — natural candidates for later floors/waves/modes wanting a
+  different backdrop, not decided now.
 
 Why real photos are convenient here specifically: NASA/ESA imagery is
 public domain (US government works aren't copyrighted) — no licensing
@@ -189,8 +201,13 @@ Structured like HyperOut's own start/menu screen — big glowing title,
 a control legend, a mode toggle, one Start button, the same CRT scanline
 treatment (`repeating-linear-gradient` scanlines + an inset vignette,
 `mix-blend-mode: multiply`) — adapted for 4 players and gamepad detection
-instead of a fixed 2-keyboard layout. Background is the decided Twin
-Planets + Nebula composition, `earth.jpg` included.
+instead of a fixed 2-keyboard layout. **Background: flat color, not the
+Twin Planets composition** — that composition was redirected to the play
+field instead (see the Background section above), per explicit
+instruction once implementation reached that point. The CRT scanline
+treatment mentioned above isn't built yet either (`docs/roadmap.md` item
+12); this section describes the decided layout, not current visual
+fidelity.
 
 - **4 player-status cards**, one per slot, each showing a small
   Interceptor-hull icon (see ship section above) in that player's color.
@@ -211,10 +228,10 @@ Planets + Nebula composition, `earth.jpg` included.
   but that's a mode-logic question for `docs/gameplay.md` to pick up
   later, not a reason to gate the menu's Start button itself.)
 - **Music/SFX volume sliders are included in the v1 menu layout**, same
-  placement and style as HyperOut's, even though — per `docs/roadmap.md`
-  — sound and music are still explicitly deferred past v1. They're
-  scaffolded now so the menu reads as complete and doesn't need a layout
-  change later, but they're **inert**: nothing is wired to them yet, and
-  they shouldn't be until an actual audio system exists. Worth a comment
-  in the implementation making that explicit, so a future pass doesn't
-  mistake "the sliders exist" for "audio is implemented."
+  placement and style as HyperOut's - and, since sound and music both
+  landed well before this note was updated, **fully functional**, not
+  scaffolded/inert as originally planned here: draggable, live-update
+  whatever's currently playing, apply to every sound played anywhere else
+  in the game, and persist across reloads via `localStorage`
+  (`systems/AudioSettings.ts`), same pattern as HyperOut's own
+  `saveSettings`/`loadSettings`.

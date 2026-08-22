@@ -5,26 +5,110 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
 
 ## v1 scope
 
-1. [ ] Ship: turn, thrust (momentum-based), shoot
-2. [ ] Screen-wrap arena
-3. [ ] Asteroids: spawn wave, drift, split large → medium → small on hit,
+1. [x] Ship: turn, thrust (momentum-based), shoot — first playable slice,
+   see CHANGELOG. Matter-driven thrust/drift, kinematic turn, cooldown-
+   limited fire; wired to both P1 and P2 ships in `GameScene` now (see
+   CHANGELOG - each with an independent fire cooldown/on-screen-shot cap)
+2. [x] Screen-wrap arena — ship, asteroids, and projectiles all wrap
+3. [x] Asteroids: spawn wave, drift, split large → medium → small on hit,
    smaller-is-faster, randomized split spread, procedural shape generation
-   (decided — see `docs/art_direction.md`, no art assets needed)
-4. [ ] UFO: periodic spawn, drifts across arena, fires at nearest player
-5. [ ] Lives, respawn-with-invulnerability, scoring
-6. [ ] Shield power-up: pickup, single non-stacking charge, absorbs one hit
+   (decided — see `docs/art_direction.md`, no art assets needed) — all
+   landed and playtested (several rounds of real bug fixes since, see
+   CHANGELOG), plus a "stage cleared, press any key for next level" pause
+   between waves that wasn't originally scoped here but fits naturally
+4. [x] UFO: periodic spawn, drifts across arena, fires at nearest player
+   — landed (see CHANGELOG): "Classic Saucer" visual per
+   `docs/art_direction.md`, enters from a random edge on a roughly-
+   cross-arena heading, wraps like everything else, fires a lead-the-
+   target shot (single-pass prediction + moderate random spread,
+   `systems/UfoTargeting.ts`, tested) at the nearest live ship on its own
+   cooldown. Several behaviors resolved via `AskUserQuestion` rather than
+   guessed: no cap on concurrent UFOs (the spawn timer doesn't check
+   whether one's still alive), ramming a UFO with a ship destroys both
+   (not just the ship - the ship's shield can still save the ship half),
+   destroying it with a shot is worth `UFO.score` (200, kept at the
+   original placeholder), aim spread is `±18°` uniform random on top of
+   the predicted lead angle. UFO SFX (spawn, its own shot, a dedicated
+   destruction sound) are still the one remaining sound gap - destroying
+   one currently reuses the ship-destruction explosion
+5. [ ] Lives, respawn-with-invulnerability, scoring — scoring landed
+   (destroying an asteroid awards points, tier-inverse per
+   `docs/technical_design.md`). **Not** the lives/respawn/invulnerability
+   system this item describes - what landed instead is simpler: an
+   unshielded asteroid hit destroys the ship outright and ends the round
+   ("GAME OVER, press any key to restart" - `this.scene.restart()`), no
+   lives counter, no respawn-with-invulnerability window. `LIVES_PER_PLAYER`
+   in `GameConfig.ts` still isn't read by anything. Revisit when this item
+   is actually picked up.
+6. [x] Shield power-up: pickup, single non-stacking charge, absorbs one hit
+   — Diamond Core visual (`docs/art_direction.md`), drifts and wraps like
+   everything else, spawns on `SHIELD.spawnIntervalMs`, absorbs exactly
+   one asteroid hit (ship survives, charge consumed, asteroid untouched -
+   same semantics as Godspeed's Shield, confirmed by reading its
+   `consumeShieldCharge` call site), `shield-up.wav` on pickup, a thin
+   sapphire ring on the ship while charged
 7. [ ] Cooperative mode (shared arena, no friendly fire, individual lives)
 8. [ ] Competitive mode (shared arena, friendly fire on, last ship standing)
 9. [ ] Start screen / menu (decided — see `docs/art_direction.md`): title,
    mode-select toggle, 4 live player-status cards, Start (no gating,
-   solo P1 allowed), inert volume sliders scaffolded for future sound
-10. [ ] Keyboard input: Player 1 (WASD+Space), Player 2 (Arrows+RCtrl) —
-    default for both, switchable to gamepad per `docs/controls.md`
+   solo P1 allowed), functional volume sliders — `SplashScene`
+   (user-provided `artwork/splash.png`, blinking "PRESS ANY KEY", any
+   key/gamepad button/click advances) and `MenuScene` (title,
+   Cooperative/Competitive toggle, 4 player cards with real Gamepad-API
+   connection detection in `docs/controls.md`'s priority order, P1/P2
+   keyboard⇄gamepad toggle, ungated Start) both landed this slice,
+   `menu.mp3` now plays across both — see CHANGELOG. Music/SFX volume
+   sliders are no longer inert either: draggable, live, backed by
+   `systems/AudioSettings.ts`, applied everywhere a sound plays (not just
+   this screen), and persisted across reloads via `localStorage` (same
+   pattern as HyperOut's own settings persistence). `Esc` navigation also
+   landed, replicating HyperOut's
+   exactly (see `docs/controls.md`'s "Menu / system" table and CHANGELOG):
+   quit-confirm from the menu, pause (Continue/Restart/Main Menu) from
+   play. Not yet checked off because one real piece is still missing:
+   actual consumption of the mode/input selections — `GameScene` ignores
+   them and always starts the same single-P1-keyboard slice regardless of
+   what's picked. The Twin-Planets background is no longer this item's
+   blocker: per explicit instruction it was built for the *play field*
+   instead of the menu (see item 12 and CHANGELOG) - the menu's background
+   stays a flat color deliberately, not as a gap
+10. [x] Keyboard input: Player 1 (WASD+Space), Player 2 (Arrows+RCtrl) —
+    both wired into `GameScene` now (see CHANGELOG): two `Ship`s, two
+    independent `KeyboardInput` instances, per-player fire cooldown and
+    on-screen-shot cap (`Projectile` gained `ownerIndex` so P1's shots
+    don't eat into P2's budget or vice versa), one shared engine-sound
+    loop across however many ships are actually thrusting. **Not** the
+    "switchable to gamepad" half of this item, nor `MenuScene`'s P1/P2
+    keyboard⇄gamepad toggle being consumed - both ships are keyboard-only
+    regardless of what's selected on the menu; that's items 9's remaining
+    gap and item 11 together, not this one
 11. [ ] Gamepad input: any of the 4 slots (Gamepad API, stick/D-pad +
     trigger + face button), connection-order assignment across up to
     4 simultaneous controllers, not just 2
-12. [ ] Synthwave/CRT visual pass (see `docs/art_direction.md`)
-13. [ ] Deploy alongside HyperOut/Godspeed, cabinet listing on the portal
+12. [ ] Synthwave/CRT visual pass (see `docs/art_direction.md`) — the
+    "Twin Planets" background (name no longer includes "+ Nebula Haze" -
+    that wash was removed on request) landed on the play field (star
+    layers, `earth.jpg` and `jupiter.jpg` both circular-clipped - see
+    CHANGELOG), redirected there from the menu per an earlier explicit
+    instruction (doc updated), then trimmed further per a later one: no
+    nebula wash, the procedural moon replaced by `jupiter.jpg` instead of
+    kept. Simplified from the full spec: both planets are static, only
+    the near star layer actually drifts. Still missing: the CRT scanline/
+    glow overlay itself, screen shake and particle bursts on destruction,
+    and any polish pass on the ship/asteroid/UFO shapes
+13. [x] Deploy alongside HyperOut/Godspeed, cabinet listing on the portal
+    — see CHANGELOG. Root `Dockerfile` has a `debris-build` stage
+    (mirrors Godspeed's exactly), served at `/debris/`; `nginx.conf` gets
+    a `/debris` → `/debris/` redirect; `web/index.html` has a real
+    Debris cabinet (labeled `PLAYABLE`, not `BETA` - matches HyperOut,
+    not Godspeed) replacing the last "coming soon" slot, thumbnail is
+    `splash.png` reused as `web/img/debris.png`. Local build + curl
+    verified end-to-end (portal, `/debris` redirect, index, JS bundle,
+    both music tracks, a bundled SFX asset, `/healthz`, HyperOut/Godspeed
+    unaffected). **Not yet pushed to GHCR or applied to the cluster** -
+    that's the user's call to make (credentials + a shared/live
+    cluster), not something to do unprompted, same standing pattern as
+    Godspeed's own deploy
 
 ## Future ideas
 
@@ -197,7 +281,11 @@ extraction zone, under real pressure the whole way there.
   and a small "accurate" one — v1 ships with one).
 - **Best-of-N round structure** for Competitive (play one round at a time
   until this is proven fun, then consider a match format like HyperOut's).
-- **Sound and music.**
+- **UFO sound effects** (spawn, its own shot, a dedicated destruction
+  sound distinct from the ship's) - the only SFX gap left now that the
+  UFO itself is built (item 4). Its destruction currently reuses the
+  ship-destruction explosion rather than staying silent or getting its
+  own placeholder.
 - **High-score persistence** (localStorage, same shape as Godspeed's
   `ProgressionStorage.ts`).
 - **Difficulty options / tunable wave scaling** beyond the built-in ramp.

@@ -24,6 +24,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "godspeed/game"],
       "port": 5174
+    },
+    {
+      "name": "debris",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "debris/game"],
+      "port": 5175
     }
   ]
 }
