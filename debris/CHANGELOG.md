@@ -9,6 +9,83 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-08-26 — Fixed the /api/debris/ nginx proxy for real (three more bugs, found live)
+
+### What was built
+
+The previous entry's `nginx.conf` proxy looked right, passed a local
+Docker test, and still didn't work once actually deployed - reported by
+the user as "no scores yet" on the real site (`https://rheinarts.de`),
+diagnosed down through: browser DevTools Network tab (502) → `kubectl -n
+rheinarts get pods` (`debris-highscore-api` was `ImagePullBackOff` - the
+API image had never actually been built/pushed, since that was always
+the user's step to run, not mine) → after the user built and pushed it,
+a *different* symptom (404, then 500) that turned out to be nginx
+config bugs in the fix from the previous entry, invisible until there
+was a real backend on the other end of the proxy to observe them
+against.
+
+Root cause: the previous entry's local verification only ever tested
+"does nginx start, and does it fail gracefully with *no* backend
+running" - it never had a live API to actually proxy to, so three more
+bugs in the same `location /api/debris/` block went uncaught:
+
+1. **The prefix wasn't actually being stripped.** nginx's usual
+   "trailing slash on `proxy_pass` strips the matched location prefix"
+   trick only applies when the target is a *literal* string - with a
+   variable target (required for the previous entry's startup-crash
+   fix), nginx forwards the original, unstripped request URI instead.
+   The upstream was receiving `/api/debris/highscores` verbatim and
+   404ing (it only has a `/highscores` route). Fixed with an explicit
+   `rewrite ^/api/debris/(.*)$ /$1 break;`.
+2. **A variable-target `proxy_pass` with no explicit path** -
+   `proxy_pass http://$var;` - doesn't fall back to nginx's usual
+   implicit "no URI = pass the original request through" behavor either;
+   every request 500'd with `invalid URL prefix in "http://"`. Fixed by
+   spelling out `$uri` explicitly: `proxy_pass http://$var$uri;`.
+3. **`set` has to come *before* `rewrite ... break`, not after.**
+   `break` halts every remaining directive from
+   `ngx_http_rewrite_module` in the current block - `set` is
+   implemented by that same module, so a `set` placed after `break`
+   silently never runs at all. Every request 500'd again, this time with
+   `using uninitialized "highscore_upstream" variable` / `no host in
+   upstream` in the error log. Fixed by reordering: `set` first, then
+   `rewrite ... break`.
+
+**Actually verified this time** by reproducing the real two-service
+topology locally, not a single standalone container: a Docker network
+with the API container aliased to the exact k8s DNS name
+(`debris-highscore-api.rheinarts.svc.cluster.local`) the production
+`nginx.conf` hardcodes, and the portal image on the same network - the
+first local test that could have caught any of these three bugs, and
+did (each fix was verified against a live `GET`/`POST` round trip and an
+`nginx` error-log check showing zero warnings/errors, not just an HTTP
+status code) before handing anything back.
+
+### Verified
+
+- Full round trip against the real two-container topology: `GET
+  /api/debris/highscores` → `200 []`, `POST` a valid entry → `200
+  {"accepted":true,...}`, `GET` again → the entry persisted, `nginx`
+  error log clean (no warnings, no errors) throughout.
+- Portal/HyperOut/Godspeed/Debris all still `200` on the same running
+  container - confirms this location block's fixes didn't disturb
+  anything else.
+- No code changes on the `debris/game` or `debris/highscore-api` side
+  this entry - `nginx.conf` and the root `Dockerfile` (the
+  `docker/resolve-coredns.sh` wiring) only.
+
+### Not done yet
+
+Not yet redeployed - this fix lives in the *portal* image (`nginx.conf`
+is baked into the root `Dockerfile`, not `debris-highscore-api`'s own),
+so it needs a new `rheinarts:<tag>` build/push/deploy (the
+`debris-highscore-api` image itself doesn't need rebuilding - it was
+never the problem). Same standing rule as everything else: written and
+locally verified, not pushed or applied by me.
+
+---
+
 ## 2026-08-26 — Global top-10 high score leaderboard (Rhein Arts' first backend service)
 
 ### What was built

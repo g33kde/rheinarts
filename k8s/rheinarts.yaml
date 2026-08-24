@@ -1,9 +1,14 @@
 # Rhein Arts — Kubernetes manifests (k3s + MetalLB)
-# Image:   ghcr.io/g33kde/rheinarts:v4  (public GHCR package -> no pull secret)
-# This file is the source of truth for the deployed tag - if you bump the
-# version with `kubectl set image` instead of editing this file, the next
-# `kubectl apply -f k8s/rheinarts.yaml` will silently roll it back to
-# whatever's written here. Always update this line, then apply.
+# Two images are tracked in this one file, each with its own `image:`
+# line below (search for `ghcr.io/g33kde/`) - the portal
+# (ghcr.io/g33kde/rheinarts, public GHCR package -> no pull secret) and
+# Debris's high-score API (ghcr.io/g33kde/debris-highscore-api, same
+# public-package deal). This file is the source of truth for both
+# deployed tags - if you bump either with `kubectl set image` instead of
+# editing this file, the next `kubectl apply -f k8s/rheinarts.yaml` will
+# silently roll it back to whatever's written here. Always update the
+# relevant `image:` line first, then apply - see DEPLOYMENT.md for the
+# full build/push/deploy steps for each.
 # Service: type LoadBalancer -> MetalLB auto-assigns an IP from its pool.
 # Apply:   kubectl apply -f k8s/rheinarts.yaml
 ---
@@ -31,7 +36,7 @@ spec:
     spec:
       containers:
         - name: web
-          image: ghcr.io/g33kde/rheinarts:v7
+          image: ghcr.io/g33kde/rheinarts:v8
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
