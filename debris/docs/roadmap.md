@@ -31,15 +31,24 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
    the predicted lead angle. UFO SFX (spawn, its own shot, a dedicated
    destruction sound) are still the one remaining sound gap - destroying
    one currently reuses the ship-destruction explosion
-5. [ ] Lives, respawn-with-invulnerability, scoring — scoring landed
-   (destroying an asteroid awards points, tier-inverse per
-   `docs/technical_design.md`). **Not** the lives/respawn/invulnerability
-   system this item describes - what landed instead is simpler: an
-   unshielded asteroid hit destroys the ship outright and ends the round
-   ("GAME OVER, press any key to restart" - `this.scene.restart()`), no
-   lives counter, no respawn-with-invulnerability window. `LIVES_PER_PLAYER`
-   in `GameConfig.ts` still isn't read by anything. Revisit when this item
-   is actually picked up.
+5. [x] Lives, respawn-with-invulnerability, scoring — landed (see
+   CHANGELOG). Each `PlayerSlot` now tracks its own `lives` (starts at
+   `LIVES_PER_PLAYER`, 3), independent of score - true even in
+   Cooperative, where score is still pooled but lives never were. An
+   unshielded hit destroys the ship, spends one life, and (if any remain)
+   queues a respawn: explode → `SHIP.respawnDelayMs` (1000ms, a starting
+   guess) dead beat → reappear at the player's own original spawn point,
+   already invulnerable for `SHIP.respawnInvulnerabilityMs` (2000ms,
+   pre-existing config value). Decided via `AskUserQuestion`: invulnerable
+   ships can move/turn freely but can't fire; the flicker (blink every
+   100ms while invulnerable, `Ship.draw()`) is the only visual tell.
+   Round-outcome logic (`aliveFlagsBySlot`) now keys off "has lives left"
+   rather than "has a ship on screen this exact frame" - a player
+   mid-respawn-delay hasn't lost, in either mode; a life-0 hit is what's
+   actually permanent for the round now, not the first hit. New HUD line
+   (`P1 ●●●   P2 ●○○` etc., filled = held / hollow = spent) shows every
+   active player's remaining lives at a glance, separate from the score
+   line since Cooperative pools one but not the other.
 6. [x] Shield power-up: pickup, single non-stacking charge, absorbs one hit
    — Diamond Core visual (`docs/art_direction.md`), drifts and wraps like
    everything else, spawns on `SHIELD.spawnIntervalMs`, absorbs exactly
@@ -47,9 +56,28 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
    same semantics as Godspeed's Shield, confirmed by reading its
    `consumeShieldCharge` call site), `shield-up.wav` on pickup, a thin
    sapphire ring on the ship while charged
-7. [ ] Cooperative mode (shared arena, no friendly fire, individual lives)
-8. [ ] Competitive mode (shared arena, friendly fire on, last ship standing)
-9. [ ] Start screen / menu (decided — see `docs/art_direction.md`): title,
+7. [x] Cooperative mode (shared arena, no friendly fire, individual lives)
+   — landed as the default mode (see CHANGELOG): no friendly fire is
+   enforced structurally, not just by convention - `Ship`'s own Matter
+   collision mask excludes other ships entirely in this mode (they pass
+   through each other, not just "no damage"), and `Projectile`'s mask
+   never carries `CATEGORY.SHIP`. **"Individual lives" is still the
+   item 5 simplification**: each ship is destroyed independently (one
+   player dying doesn't end the round for the other), but there's no
+   3-lives counter or respawn - a destroyed ship is gone for the round,
+   same gap item 5 already documents
+8. [x] Competitive mode (shared arena, friendly fire on, last ship standing)
+   — landed (see CHANGELOG): player shots and ship-to-ship ramming are
+   both mutually lethal (a shooter is immune to their own shot via
+   `ownerIndex`, since a shot spawns exactly at its firing ship's
+   position), each player's score is tracked and shown separately
+   instead of pooled, and the round ends the instant only one ship
+   remains - `systems/RoundOutcome.ts`'s `evaluateRoundOutcome`, tested,
+   also handles the draw case (last two ships destroyed in the same
+   instant). **Not done**: Best-of-N round structure (explicitly a v1
+   nice-to-have per docs/gameplay.md, not required for the mode to
+   work) and the same lives/respawn gap as item 7
+9. [x] Start screen / menu (decided — see `docs/art_direction.md`): title,
    mode-select toggle, 4 live player-status cards, Start (no gating,
    solo P1 allowed), functional volume sliders — `SplashScene`
    (user-provided `artwork/splash.png`, blinking "PRESS ANY KEY", any
@@ -65,13 +93,14 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
    landed, replicating HyperOut's
    exactly (see `docs/controls.md`'s "Menu / system" table and CHANGELOG):
    quit-confirm from the menu, pause (Continue/Restart/Main Menu) from
-   play. Not yet checked off because one real piece is still missing:
-   actual consumption of the mode/input selections — `GameScene` ignores
-   them and always starts the same single-P1-keyboard slice regardless of
-   what's picked. The Twin-Planets background is no longer this item's
-   blocker: per explicit instruction it was built for the *play field*
-   instead of the menu (see item 12 and CHANGELOG) - the menu's background
-   stays a flat color deliberately, not as a gap
+   play. The mode toggle is consumed now too (`scene.start('Game', {
+   mode })`, see items 7/8 and CHANGELOG) - the one piece still not
+   consumed is the P1/P2 keyboard⇄gamepad toggle, which is really item
+   11's gap (gamepad input doesn't exist to switch to yet), not this
+   item's. The Twin-Planets background is no longer this item's
+   blocker either: per explicit instruction it was built for the *play
+   field* instead of the menu (see item 12 and CHANGELOG) - the menu's
+   background stays a flat color deliberately, not as a gap
 10. [x] Keyboard input: Player 1 (WASD+Space), Player 2 (Arrows+RCtrl) —
     both wired into `GameScene` now (see CHANGELOG): two `Ship`s, two
     independent `KeyboardInput` instances, per-player fire cooldown and
@@ -80,12 +109,35 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     loop across however many ships are actually thrusting. **Not** the
     "switchable to gamepad" half of this item, nor `MenuScene`'s P1/P2
     keyboard⇄gamepad toggle being consumed - both ships are keyboard-only
-    regardless of what's selected on the menu; that's items 9's remaining
-    gap and item 11 together, not this one
-11. [ ] Gamepad input: any of the 4 slots (Gamepad API, stick/D-pad +
+    regardless of what's selected on the menu; that's item 11's gap
+    (gamepad input doesn't exist to switch to yet), not this one
+11. [x] Gamepad input: any of the 4 slots (Gamepad API, stick/D-pad +
     trigger + face button), connection-order assignment across up to
-    4 simultaneous controllers, not just 2
-12. [ ] Synthwave/CRT visual pass (see `docs/art_direction.md`) — the
+    4 simultaneous controllers, not just 2 — landed (see CHANGELOG):
+    `input/GamepadInput.ts` implements the same `PlayerInput` interface
+    `KeyboardInput` does, reading the Standard Gamepad API mapping from
+    `docs/controls.md` (left stick X or D-pad left/right to turn — D-pad
+    wins on disagreement — right trigger to thrust, bottom face button to
+    fire; `systems/GamepadInputMapping.ts`'s `computeGamepadTurnDirection`,
+    tested). `MenuScene` now actually passes its per-slot `sources`
+    selection into `GameScene` via `scene.start('Game', { mode, sources
+    })` (previously collected but unused past item 9's display cards).
+    `GameScene.buildPlayers()` builds up to 4 ships from `sources` +
+    however many gamepads are connected *right now* at round start, via
+    `systems/GamepadAssignment.ts`'s `computeSlotAssignments` — the same
+    connection-order-priority function the menu's own READY/WAITING cards
+    already used, so a slot the menu shows as WAITING never silently gets
+    a ship. This made the player roster genuinely variable-size (1-4, not
+    always exactly 2) for the first time, which exposed a real bug caught
+    before it shipped: `winnerIndex`, fire-budget filtering, self-hit
+    immunity, and the score HUD were all keying off array position instead
+    of actual player number, which breaks the moment any slot is inactive
+    (e.g. only P1 and P3 active). Fixed by introducing `PlayerSlot.slotIndex`
+    as the one stable "which player" identity and auditing every consumer.
+    **Known simplification, matches `docs/controls.md`'s own accepted
+    gap**: a `GamepadInput` binds to one specific `Gamepad` object at round
+    start and doesn't try to recover from a mid-round disconnect/reconnect.
+12. [x] Synthwave/CRT visual pass (see `docs/art_direction.md`) — the
     "Twin Planets" background (name no longer includes "+ Nebula Haze" -
     that wash was removed on request) landed on the play field (star
     layers, `earth.jpg` and `jupiter.jpg` both circular-clipped - see
@@ -93,9 +145,41 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     instruction (doc updated), then trimmed further per a later one: no
     nebula wash, the procedural moon replaced by `jupiter.jpg` instead of
     kept. Simplified from the full spec: both planets are static, only
-    the near star layer actually drifts. Still missing: the CRT scanline/
-    glow overlay itself, screen shake and particle bursts on destruction,
-    and any polish pass on the ship/asteroid/UFO shapes
+    the near star layer actually drifts.
+
+    The remaining four pieces (see CHANGELOG), scoped via `AskUserQuestion`:
+    - **CRT scanline/vignette overlay** — landed, a direct port of
+      HyperOut's own `.crt` div (`hyperout/style.css`) into `index.html`,
+      fixed over the whole viewport rather than scoped to the canvas so
+      it still covers FIT-mode letterbox bars.
+    - **Screen shake + particle bursts on destruction** — landed for
+      ship, asteroid, and UFO destruction. Decided: bigger deaths shake
+      harder (ship/UFO get `EFFECTS.majorShake`, an asteroid gets the
+      lighter `EFFECTS.minorShake`, not one flat intensity), and burst
+      particles are colored to match what died (a player's own color for
+      their ship, the neutral asteroid grey, the UFO's red) rather than a
+      uniform spark color. `entities/DestructionBurst.ts` is a hand-managed
+      `Graphics` object (same pattern as every other entity here), not
+      Phaser's `ParticleEmitter`. Camera shake respects
+      `prefers-reduced-motion`, same courtesy HyperOut's own shake extends;
+      particle bursts aren't gated by it.
+    - **Rhein Arts logo on `SplashScene`** — landed, matching HyperOut's
+      own splash screen exactly (`hyperout/index.html`'s
+      `.splash-credit`/`.splash-logo`): bottom-right, `right: 12%; bottom:
+      2.5%; width: 15%` of the splash art's own box (the full arena canvas,
+      since `splash.png` is cover-scaled to fill it), ~0.95 opacity, not
+      interactive. `debris/game/src/assets/rhein-arts.png` is now its own
+      copy (previously only `web/img/` had one).
+    - **Polish pass on the ship/asteroid/UFO shapes** — explicitly
+      **skipped this pass**, per the answer to `AskUserQuestion`: too
+      open-ended to scope without a clearer brief (the roadmap's own text
+      never specified more than "any polish pass"). Still open - see
+      "Explicitly deferred past v1" below.
+
+    All tuning values (shake intensity/duration, particle count/speed/
+    lifespan) are starting guesses in `GameConfig.ts`'s new `EFFECTS`
+    block, not playtested - no way to feel out "punchy vs. excessive" in
+    this environment.
 13. [x] Deploy alongside HyperOut/Godspeed, cabinet listing on the portal
     — see CHANGELOG. Root `Dockerfile` has a `debris-build` stage
     (mirrors Godspeed's exactly), served at `/debris/`; `nginx.conf` gets
@@ -109,6 +193,63 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     that's the user's call to make (credentials + a shared/live
     cluster), not something to do unprompted, same standing pattern as
     Godspeed's own deploy
+14. [x] Single Player mode — not originally scoped (added after the
+    initial v1 list, on request), landed as a third mode-toggle option
+    alongside Cooperative/Competitive (see CHANGELOG). Scoped via
+    `AskUserQuestion` rather than guessed: a third segmented button on the
+    existing toggle (not a separate entry point), **locked to exactly one
+    ship** (`GameScene.buildPlayers()` slices `sources` to length 1
+    regardless of what P2-P4's cards show; `MenuScene` reflects the same
+    lock, showing LOCKED on those cards and dimming P2's now-inert
+    keyboard⇄gamepad toggle). **Uses the standard 3-lives/respawn system,
+    the same one Competitive uses** - not Cooperative's own ruleset,
+    which later diverged into its own Emergency Ejection & Rescue
+    mechanic (item 15) with nobody around to rescue a solo player anyway.
+    `evaluateRoundOutcome` didn't need a new branch either way: it just
+    reads `!eliminated` uniformly, and Single Player sets that the same
+    way Competitive does (lives hitting 0). The actual distinguishing
+    feature at the time: a personal high score, persisted via
+    `localStorage` - **since superseded by item 16's global leaderboard**,
+    see that entry (this one's own `systems/HighScore.ts` no longer
+    exists). Solo play also spawns dead-center rather than at P1's usual
+    diamond corner - the corner positions exist to keep simultaneous
+    players apart, which doesn't apply with one ship.
+15. [x] Emergency Ejection & Rescue (Cooperative-only) — not originally
+    scoped; implements and resolves the "Co-op rescue mechanics" Future
+    Idea below (see that entry for how the open questions there were
+    actually decided, several differently than speculated). Landed on
+    request, full detail in `docs/gameplay.md`'s section of the same
+    name and `docs/art_direction.md`'s "Commander"/"Space Station"
+    entries - see CHANGELOG. Summary: an unshielded Cooperative hit
+    ejects the pilot as a drifting `Commander` instead of costing a life
+    (lives stop mattering in this mode entirely); pickup is automatic on
+    touch and alone saves the life; the rescuer tows them to a
+    fixed-center `SpaceStation` to respawn them there; not rescued within
+    `COMMANDER.rescueWindowMs` (10s), or caught by an asteroid/UFO while
+    adrift, permanently eliminates that player. New pure logic in
+    `systems/CommanderRescue.ts` (window-expiry check, tow-position
+    geometry, drop-off distance check), tested.
+16. [x] Global top-10 high score leaderboard (Single Player) — not
+    originally scoped; requested as "make the Single Player best score
+    permanent even if the server reboots," which turned out (via
+    `AskUserQuestion`) to mean a real shared leaderboard with
+    classic-arcade 3-letter initials entry, not just a storage-location
+    swap for the personal best item 14 had. **Rhein Arts' first backend
+    service** - `debris/highscore-api`, a small standalone `node:http`
+    server (no framework), its own `Deployment`/`Service`/
+    `PersistentVolumeClaim` in `k8s/rheinarts.yaml` (deliberately
+    `replicas: 1`, separate from the `rheinarts` Deployment's `replicas: 2`
+    - see that manifest's comment for why two pods can't safely share
+    one `ReadWriteOnce` volume), reached through nginx's new
+    `/api/debris/` proxy rather than a local process. See CHANGELOG for
+    the full build, including two real bugs caught by actually running
+    the built Docker image rather than trusting the config on paper: a
+    literal upstream hostname in `nginx.conf` made nginx refuse to start
+    *at all* if the API wasn't resolvable yet (would have taken down the
+    entire portal, not just the leaderboard), and Vite's dev proxy
+    doesn't strip a path prefix by default the way nginx's `proxy_pass`
+    does. `systems/HighScore.ts` (item 14's `localStorage` version) is
+    gone, fully replaced.
 
 ## Future ideas
 
@@ -184,44 +325,93 @@ above, not deciding it now):
   above), this whole roster likely wants similar chaos-gated introduction
   rather than all six being possible from the start of every round.
 
-### Co-op rescue mechanics
+### Co-op rescue mechanics — landed, see item 15
 
-**Cooperative-only** (Competitive's whole identity is "last ship
-standing" — a safety net there would undercut the mode, not enhance it).
+Built as "Emergency Ejection & Rescue" (`docs/gameplay.md`), on request.
+Its own open questions, resolved - several differently than the original
+speculation below assumed, worth noting for anyone comparing the two:
 
-A destroyed player isn't necessarily eliminated outright. Their pilot
-ejects into a small, slow-drifting escape pod (wraps at arena edges like
-everything else) instead of an instant respawn. Another player can fly
-over and **rescue** them — but doing so leaves the rescuer exposed, which
-is the whole point: it's a deliberate risk a teammate chooses to take,
-not a free save. That's what produces the moment-to-moment drama —
-*"GET HIM! GET HIM! GET HIM!"* — while the rest of the team is still
-fighting off whatever killed the downed player in the first place.
+- **Replaces v1's respawn model outright, in Cooperative only** - not a
+  layer on top of it. Lives stop mattering there entirely; Competitive
+  and Single Player keep the original lives/respawn/invulnerability
+  system exactly as it was, untouched by any of this.
+- **Pickup is instant-on-touch, not a hold/channel** - simpler than the
+  "sustained vulnerability" framing speculated below, and it's *pickup*
+  that saves the life immediately, not reaching some destination. The
+  drama is entirely in the 10-second race to reach them, not a channel
+  that can be interrupted.
+- **Yes, the drifting pilot (a "Commander," not a "pod") can be
+  destroyed** by an asteroid or UFO while adrift, exactly as guessed.
+- **Yes, there's a timeout** - 10 seconds, `COMMANDER.rescueWindowMs`,
+  a fixed number rather than left open.
+- **Not speculated at the time, but decided during implementation**: a
+  rescuer must physically deliver the Commander to a fixed space station
+  (docs/art_direction.md's "Space Station") to actually respawn them -
+  simple pickup alone saves the life but doesn't return their ship on
+  its own. And a rescuer who dies mid-delivery drops the Commander back
+  into open space rather than losing them - already-rescued, so no new
+  countdown, but vulnerable to hazards again while waiting for a second
+  pickup.
 
-**Open questions for whoever picks this up:**
+### Bosses
 
-- **Does this replace or sit alongside v1's respawn model?**
-  `docs/gameplay.md` currently has destruction cost a life and auto-respawn
-  after a brief invulnerability window, no rescue involved. The dramatic
-  version of this idea implies rescue is what avoids losing a life at all
-  — an un-rescued pod (destroyed, or timed out) is when the life actually
-  gets spent, not the moment of the original explosion. That's a bigger
-  stakes change than a cosmetic reskin of respawning, and needs an
-  explicit decision, not a silent merge.
-- **How is a rescue actually performed?** "While doing so, they're
-  vulnerable" reads like a hold/channel over a short duration (fly close
-  and stay there), not a drive-by touch-and-go — a touch-and-go wouldn't
-  create sustained vulnerability. Leaning toward channel-based, but not
-  decided.
-- **Can the pod itself be destroyed** by an asteroid, the UFO, or (per the
-  enemy roster above) something like a Saboteur's mine while waiting to
-  be rescued? Almost certainly yes, for the same reason a timeout should
-  probably exist — an un-rescued teammate needs to be genuinely at risk,
-  not just parked safely until someone's free.
-- **Is there a rescue timeout** independent of the pod being destroyed
-  (pilot is lost if not rescued within N seconds), to stop a round
-  stalling while everyone else just avoids danger to leave a rescue for
-  later?
+Requested as its own development direction, not fully specified yet. The
+only boss concept already on this roadmap is **The Harvester** (see
+"Enemy roster" above) - a huge, arena-consuming boss gated behind Chaos
+Level 6. Whether "work on bosses" means building The Harvester first,
+designing additional bosses beyond it, or a boss-fight structure
+independent of the Chaos Meter entirely (a dedicated encounter, a
+"boss wave," a Salvage-tree unlock target - see below) isn't decided -
+flagged here as a real want, not expanded into a spec that wasn't given.
+
+### Salvage (progression system / cooperative mode)
+
+Destroying the **smallest** asteroid tier (the one that doesn't split
+further) leaves behind salvage to pick up - a third pickup type alongside
+the Shield, presumably collected the same way (fly over it). Salvage is
+spent on upgrades across two trees:
+
+- **Engines** — faster acceleration, faster turning, better boost,
+  stronger braking.
+- **Weapons** — rapid fire, heavy cannon, ricochet bullets, mines, plasma
+  balls.
+
+**Open questions for whoever picks this up** (not resolved now — this is
+a future idea, not v1 scope):
+
+- **Real tension with `docs/vision.md`'s pillars, not just an
+  implementation detail.** Vision explicitly says Debris is "not
+  procedural/roguelite (that's Godspeed's territory)" and is a
+  "pick-up-and-play arcade cabinet game" with "fast rounds" - a
+  persistent upgrade tree is exactly the kind of run-to-run progression
+  Godspeed does. Worth an explicit decision on whether Salvage upgrades
+  reset every round (session-scoped power spike, closer to the existing
+  pillars) or persist across sessions (meta-progression, a real pillar
+  shift), not a silent assumption either way.
+- **"Stronger braking" doesn't fit the current physics model at all.**
+  `docs/technical_design.md` decided `frictionAir: 0` deliberately - "no
+  air in space... the ship never decelerates on its own, only thrust
+  changes velocity." There's no braking mechanic to make "stronger" today;
+  this upgrade implies adding reverse-thrust or active deceleration as a
+  new capability, not tuning an existing one.
+- **"Better boost" is also a new mechanic, not a v1 one.** Nothing in
+  `docs/gameplay.md` gives the ship a boost/dash - that's a HyperOut
+  mechanic (3 charges/round, 2x speed, phases through trails). Does
+  Debris's boost mean the same thing, something else, or does this
+  upgrade line assume boost already exists and just wasn't written down?
+- **Is this its own third mode (like Debris Delivery above) or a system
+  layered onto existing Cooperative?** The prompt called it a
+  "cooperative game mode," which reads as its own selectable thing, not
+  a modifier - but that's inferred, not stated outright.
+- **Weapons — swap or stack?** Rapid fire, heavy cannon, ricochet
+  bullets, mines, and plasma balls read like distinct weapon *types*,
+  not stacking modifiers on the one shot type v1 has. Is Weapons an
+  equip-one-loadout choice, or do unlocks stack (e.g. ricochet + rapid
+  fire together)? Very different scope either way.
+- **Salvage drop rate and spend UI** aren't specified - how much per
+  kill, and where/when players actually spend it (mid-round on the fly,
+  or between rounds/stages at the "STAGE CLEARED" pause that already
+  exists) is open.
 
 ### Debris Delivery (a third mode)
 
@@ -274,6 +464,13 @@ extraction zone, under real pressure the whole way there.
 
 ## Explicitly deferred past v1
 
+- **Polish pass on the ship/asteroid/UFO shapes** (item 12's last
+  remaining piece) — explicitly skipped when the rest of item 12 landed,
+  since `docs/art_direction.md` never specified more than "any polish
+  pass." Needs a real brief before picking up: a rendering-only pass (a
+  soft outer glow/bloom on the existing outlined shapes) and an actual
+  geometry pass (more detail on the ship hull, more varied asteroid
+  silhouettes) are very different scopes, not decided which.
 - **Power-ups beyond Shield** (rapid-fire, multi-shot, stacking shield
   charges, etc.) — Shield alone is v1 scope (see above); everything else
   in this space waits until v1 is proven fun without it.
@@ -286,8 +483,6 @@ extraction zone, under real pressure the whole way there.
   UFO itself is built (item 4). Its destruction currently reuses the
   ship-destruction explosion rather than staying silent or getting its
   own placeholder.
-- **High-score persistence** (localStorage, same shape as Godspeed's
-  `ProgressionStorage.ts`).
 - **Difficulty options / tunable wave scaling** beyond the built-in ramp.
 - **Touch/mobile controls.**
 - **Online multiplayer.** Local input only for the foreseeable future —

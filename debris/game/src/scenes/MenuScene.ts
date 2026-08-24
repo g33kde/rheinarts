@@ -3,10 +3,13 @@ import { playLoopingSound, setVolume } from '../audio/LoopingSound';
 import { ARENA_HEIGHT, ARENA_WIDTH, COLORS, SHIP_HULL } from '../config/GameConfig';
 import { computeGamepadReadiness, type InputSource } from '../systems/GamepadAssignment';
 import { getMusicVolume, getSfxVolume, setMusicVolume, setSfxVolume } from '../systems/AudioSettings';
+import { filterStandardGamepads } from '../systems/GamepadDetection';
+import { fetchLeaderboard, type LeaderboardEntry } from '../systems/HighScoreApi';
 import { MENU_MUSIC_KEY } from '../systems/Music';
+import { GAME_MODE_LABELS, type GameMode } from '../systems/RoundOutcome';
 import { toCssHex } from '../utilities/Color';
 
-type GameMode = 'cooperative' | 'competitive';
+const MODE_ORDER: readonly GameMode[] = ['cooperative', 'competitive', 'singlePlayer'];
 
 // Sized for the current 1920x1200 arena (2x the original 960x600 design
 // this screen was first built against) - proportional/fixed pixel values
@@ -32,12 +35,25 @@ interface ModeButton {
  *
  * The Twin-Planets/nebula background from that doc isn't built here (it
  * landed on the play field instead, per explicit instruction - see
- * `entities/Background.ts`) - this uses a flat background color. Mode/
- * input selections made here are for display only so far: GameScene
- * doesn't consume them yet (still single P1-keyboard, see roadmap items
- * 7/8/10/11) - Start always launches that same slice regardless of what's
- * picked. Music/SFX volume sliders ARE fully functional (`AudioSettings`),
- * unlike this screen's original inert placeholders.
+ * `entities/Background.ts`) - this uses a flat background color. The mode
+ * toggle and the P1/P2 keyboard⇄gamepad `sources` are consumed now
+ * (`scene.start('Game', { mode, sources })` - see `GameScene`'s
+ * Competitive-mode and gamepad-input wiring). Music/SFX volume sliders
+ * ARE fully functional (`AudioSettings`), unlike this screen's original
+ * inert placeholders.
+ *
+ * **Single Player** (added after the original Cooperative/Competitive
+ * toggle) is a third mode option, not a new UI concept - same
+ * `MODE_LABELS`-driven segmented buttons, just three instead of two. It's
+ * locked to exactly P1 (`docs/gameplay.md`): P2-P4's cards read LOCKED
+ * regardless of their own source/readiness while it's selected, and P2's
+ * own keyboard⇄gamepad toggle goes inert (P1's stays live - P1 always
+ * plays). `GameScene.buildPlayers()` enforces the actual lock; this is
+ * just the menu reflecting it. The global top-10 leaderboard
+ * (`systems/HighScoreApi.ts` - `debris-highscore-api`, a real backend
+ * now, not `localStorage`) is fetched and shown only in this mode - it's
+ * meaningless for the other two (Cooperative pools score, Competitive
+ * decides the round by elimination, not score).
  *
  * Every clickable "button" here is an explicit `Rectangle` + `Text` pair,
  * not `Text`'s own `backgroundColor` - Phaser's canvas-backed Text
@@ -52,7 +68,14 @@ export class MenuScene extends Phaser.Scene {
   private sources: InputSource[] = ['keyboard', 'keyboard', 'gamepad', 'gamepad'];
   private cardStatusTexts: Phaser.GameObjects.Text[] = [];
   private cardBorders: Phaser.GameObjects.Rectangle[] = [];
+  /** [change] toggle text, indices 0-1 only (P1/P2 - P3/P4 never had one). */
+  private cardToggleTexts: Phaser.GameObjects.Text[] = [];
   private modeButtons: Record<GameMode, ModeButton> = {} as Record<GameMode, ModeButton>;
+  private leaderboardTitleText!: Phaser.GameObjects.Text;
+  private leaderboardLeftText!: Phaser.GameObjects.Text;
+  private leaderboardRightText!: Phaser.GameObjects.Text;
+  /** Last-fetched leaderboard snapshot - rendered immediately (possibly stale/empty) on every Single Player (re)selection, then refreshed once the async fetch resolves. */
+  private leaderboardCache: LeaderboardEntry[] = [];
   // Escape here mirrors HyperOut's MENU <-> QUIT_CONFIRM toggle exactly
   // (docs/art_direction.md's menu is explicitly modeled on HyperOut's).
   private confirmingQuit = false;
@@ -80,6 +103,7 @@ export class MenuScene extends Phaser.Scene {
     // until this scene had an actual way back into it.
     this.cardStatusTexts = [];
     this.cardBorders = [];
+    this.cardToggleTexts = [];
 
     this.createTitle();
     this.createControlLegend();
@@ -132,16 +156,19 @@ export class MenuScene extends Phaser.Scene {
 
   private createModeToggle(): void {
     const y = 330;
-    const spacing = 260;
-    const width = 320;
+    const width = 300;
     const height = 70;
-    (['cooperative', 'competitive'] as const).forEach((mode, i) => {
-      const x = ARENA_WIDTH / 2 + (i === 0 ? -spacing : spacing);
+    const gap = 30;
+    const totalWidth = MODE_ORDER.length * width + (MODE_ORDER.length - 1) * gap;
+    const left = ARENA_WIDTH / 2 - totalWidth / 2;
+
+    MODE_ORDER.forEach((mode, i) => {
+      const x = left + width / 2 + i * (width + gap);
       const bg = this.add.rectangle(x, y, width, height, 0x14141c, 1).setStrokeStyle(2, 0x3a3a4a, 1);
       const text = this.add
-        .text(x, y, mode.toUpperCase(), {
+        .text(x, y, GAME_MODE_LABELS[mode], {
           fontFamily: 'monospace',
-          fontSize: '28px',
+          fontSize: '24px',
           fontStyle: 'bold',
           color: '#ffffff',
         })
@@ -153,6 +180,41 @@ export class MenuScene extends Phaser.Scene {
       });
       this.modeButtons[mode] = { bg, text };
     });
+
+    // Single Player's whole distinguishing feature (docs/gameplay.md) -
+    // shown only while that mode's selected, since it's meaningless for
+    // Cooperative ("not competing for a personal high score") or
+    // Competitive (score doesn't decide the round there either). A
+    // two-column layout (ranks 1-5 left, 6-10 right), not one tall list -
+    // the vertical gap between the mode toggle's bottom edge and
+    // CARDS_TOP (~135px) doesn't fit a single 10-row list at a readable
+    // size.
+    const leaderboardTop = y + height / 2 + 20;
+    this.leaderboardTitleText = this.add
+      .text(ARENA_WIDTH / 2, leaderboardTop, 'TOP 10', {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        color: '#9a9ab0',
+      })
+      .setOrigin(0.5, 0);
+    const columnY = leaderboardTop + 22;
+    this.leaderboardLeftText = this.add
+      .text(ARENA_WIDTH / 2 - 160, columnY, '', {
+        fontFamily: 'monospace',
+        fontSize: '15px',
+        color: '#c9c9d6',
+        lineSpacing: 4,
+      })
+      .setOrigin(0, 0);
+    this.leaderboardRightText = this.add
+      .text(ARENA_WIDTH / 2 + 20, columnY, '', {
+        fontFamily: 'monospace',
+        fontSize: '15px',
+        color: '#c9c9d6',
+        lineSpacing: 4,
+      })
+      .setOrigin(0, 0);
+
     this.refreshModeButtons();
   }
 
@@ -166,6 +228,42 @@ export class MenuScene extends Phaser.Scene {
       text.setColor(selected ? accentCss : '#ffffff');
       text.setAlpha(selected ? 1 : 0.7);
     });
+
+    const showLeaderboard = this.mode === 'singlePlayer';
+    this.leaderboardTitleText.setVisible(showLeaderboard);
+    this.leaderboardLeftText.setVisible(showLeaderboard);
+    this.leaderboardRightText.setVisible(showLeaderboard);
+    if (showLeaderboard) {
+      this.refreshLeaderboardDisplay(); // last-known snapshot immediately, even if stale
+      void this.loadLeaderboard(); // then fetch fresh and redisplay once it resolves
+    }
+    // Card lock state (see refreshCardStatus) is driven by this.mode too,
+    // but doesn't need refreshing here - update() already calls
+    // refreshCardStatus() every frame, and cards don't exist yet the
+    // first time this runs (createModeToggle() happens before
+    // createPlayerCards() in create()).
+  }
+
+  private async loadLeaderboard(): Promise<void> {
+    this.leaderboardCache = await fetchLeaderboard();
+    // The player may have switched away from Single Player while this
+    // was in flight - don't bother updating now-hidden text.
+    if (this.mode === 'singlePlayer') this.refreshLeaderboardDisplay();
+  }
+
+  /** Renders `leaderboardCache` as two 5-row columns (ranks 1-5, 6-10) - an empty cache (genuinely no scores yet, *or* the fetch failed and degraded to empty per `HighScoreApi.ts`'s contract) reads the same either way: a calm "no scores yet," not an alarming error. */
+  private refreshLeaderboardDisplay(): void {
+    if (this.leaderboardCache.length === 0) {
+      this.leaderboardLeftText.setText('NO SCORES YET');
+      this.leaderboardRightText.setText('');
+      return;
+    }
+
+    const formatColumn = (entries: LeaderboardEntry[], startRank: number): string =>
+      entries.map((entry, i) => `${startRank + i}. ${entry.initials} ${entry.score}`).join('\n');
+
+    this.leaderboardLeftText.setText(formatColumn(this.leaderboardCache.slice(0, 5), 1));
+    this.leaderboardRightText.setText(formatColumn(this.leaderboardCache.slice(5, 10), 6));
   }
 
   private createPlayerCards(): void {
@@ -205,7 +303,7 @@ export class MenuScene extends Phaser.Scene {
       this.cardStatusTexts.push(statusText);
 
       if (slot < 2) {
-        this.add
+        const toggle = this.add
           .text(centerX, CARDS_TOP + 250, '[change]', {
             fontFamily: 'monospace',
             fontSize: '22px',
@@ -214,9 +312,13 @@ export class MenuScene extends Phaser.Scene {
           .setOrigin(0.5)
           .setInteractive({ useHandCursor: true })
           .on('pointerdown', () => {
-            if (this.confirmingQuit) return;
+            // Single Player locks every slot but P1 (decided) - P2's
+            // source choice is moot there, so its toggle is inert rather
+            // than silently mutating a setting that won't be used.
+            if (this.confirmingQuit || (this.mode === 'singlePlayer' && slot > 0)) return;
             this.sources[slot] = this.sources[slot] === 'keyboard' ? 'gamepad' : 'keyboard';
           });
+        this.cardToggleTexts.push(toggle);
       }
     }
 
@@ -241,14 +343,25 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private refreshCardStatus(): void {
-    const connected = this.input.gamepad?.getAll().length ?? 0;
+    const connected = filterStandardGamepads(this.input.gamepad?.getAll() ?? []).length;
     const ready = computeGamepadReadiness(this.sources, connected);
+    const singlePlayerLocked = this.mode === 'singlePlayer';
 
     for (let slot = 0; slot < CARD_COUNT; slot += 1) {
       const source = this.sources[slot]!;
       const isReady = ready[slot]!;
       const text = this.cardStatusTexts[slot]!;
       const border = this.cardBorders[slot]!;
+
+      // Single Player is locked to P1 only (decided) - every other card
+      // reads as locked out regardless of its own source/readiness, since
+      // GameScene.buildPlayers() won't spawn a ship for it in this mode.
+      if (singlePlayerLocked && slot > 0) {
+        text.setText('LOCKED\nSINGLE PLAYER');
+        text.setColor('#5a5a6e');
+        border.setAlpha(0.25);
+        continue;
+      }
 
       if (source === 'keyboard') {
         text.setText('KEYBOARD\nREADY');
@@ -263,6 +376,13 @@ export class MenuScene extends Phaser.Scene {
 
       border.setAlpha(isReady ? 1 : 0.4);
     }
+
+    // P2's [change] toggle (index 1) is inert while Single Player is
+    // selected (see the guard in createPlayerCards()) - dim it to match,
+    // same treatment as the locked cards above. P1's (index 0) is always
+    // live, since P1 always plays.
+    const p2Toggle = this.cardToggleTexts[1];
+    p2Toggle?.setAlpha(singlePlayerLocked ? 0.35 : 1);
   }
 
   private createVolumeSliders(): void {
@@ -348,7 +468,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private startGame(): void {
-    this.scene.start('Game');
+    this.scene.start('Game', { mode: this.mode, sources: this.sources });
   }
 
   /**

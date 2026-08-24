@@ -26,8 +26,17 @@ RUN npm run build
 
 FROM nginx:1.27-alpine
 
-# custom server config (healthz + gzip + caching)
+# custom server config (healthz + gzip + caching + the /api/debris/ proxy)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Substitutes nginx.conf's __COREDNS_IP__ placeholder (the /api/debris/
+# proxy's resolver) at container startup, before nginx runs - see the
+# script itself and nginx.conf's `resolver` comment for why this can't
+# just be a hardcoded value. nginx:alpine's own entrypoint runs every
+# script in /docker-entrypoint.d/ automatically; ownership/mode need to
+# survive Windows' own COPY (which doesn't preserve the executable bit).
+COPY docker/resolve-coredns.sh /docker-entrypoint.d/40-resolve-coredns.sh
+RUN chmod +x /docker-entrypoint.d/40-resolve-coredns.sh
 
 # portal at web root, each game as a subpath
 COPY web/      /usr/share/nginx/html/

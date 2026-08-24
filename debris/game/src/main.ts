@@ -4,6 +4,12 @@ import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { MenuScene } from './scenes/MenuScene';
 import { SplashScene } from './scenes/SplashScene';
+import { patchPhaserGamepadHoleBug } from './systems/PhaserGamepadPatch';
+
+// Must run before the Game instance (and therefore any Scene's own
+// GamepadPlugin) is created - see PhaserGamepadPatch.ts for the crash this
+// works around.
+patchPhaserGamepadHoleBug();
 
 new Phaser.Game({
   type: Phaser.AUTO,

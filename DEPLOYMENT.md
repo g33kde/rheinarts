@@ -1,12 +1,18 @@
 # Deploying Rhein Arts
 
-Static site (retro portal + games) on **k3s + MetalLB**, LAN-only, HTTP.
+Static site (retro portal + games) on **k3s + MetalLB**, LAN-only, HTTP -
+plus one small backend service for Debris's high-score leaderboard (see
+"Deploying the high-score API" below), the only dynamic part of the
+whole portal.
 
 - **Image:** `ghcr.io/g33kde/rheinarts:<tag>` (public GHCR package → no pull secret) -
   the tag actually running is whatever `k8s/rheinarts.yaml` declares; that file
-  is the source of truth, see "Updating" below.
+  is the source of truth, see "Updating" below. **Two images are tracked in that
+  one file now** - this one (the static portal) and
+  `ghcr.io/g33kde/debris-highscore-api:<tag>` (see below) - each with its own
+  `image:` line, versioned and deployed independently.
 - **Serves:** portal at `/`, HyperOut at `/hyperout/`, Godspeed at `/godspeed/`,
-  Debris at `/debris/`
+  Debris at `/debris/`, Debris's leaderboard API proxied at `/api/debris/`
 - **Access:** the LAN IP MetalLB assigns to the `LoadBalancer` Service
 
 Godspeed (`godspeed/game`) and Debris (`debris/game`) are both Vite/TypeScript
@@ -84,6 +90,64 @@ else) will revert the cluster back to the stale tag still written in the
 file. This exact thing happened once already; don't repeat it. If you really
 need a fast one-off rollout, `kubectl set image` still works, but immediately
 also update `k8s/rheinarts.yaml` to match so the file stays true.
+
+---
+
+## Deploying the high-score API
+
+Debris's global top-10 leaderboard - `debris/highscore-api`, a small
+standalone Node service, the first backend in Rhein Arts. Its own image,
+its own tag, built/pushed/deployed the same way as the portal image
+above but from a different directory - **not** part of the root
+`Dockerfile`.
+
+- **Image:** `ghcr.io/g33kde/debris-highscore-api:<tag>` (also needs to be
+  made public on GHCR the first time a given tag is pushed, same as the
+  portal image - see step 2 above).
+- **Runs as:** its own `Deployment` (`debris-highscore-api`, `replicas: 1` -
+  deliberately not 2, see the comment above it in `k8s/rheinarts.yaml` for
+  why), a `ClusterIP` `Service` (internal only - nginx is the only thing
+  that calls it, via the `/api/debris/` proxy in `nginx.conf`), and a
+  `PersistentVolumeClaim` (`debris-highscores-pvc`) so the leaderboard
+  file survives pod restarts/reschedules.
+
+### 1. Build the API image
+
+```bash
+cd debris/highscore-api
+docker build --platform linux/amd64 -t ghcr.io/g33kde/debris-highscore-api:<tag> .
+cd ../..
+```
+
+### 2. Push the API image
+
+Same GHCR login as the portal image (step 2 above) covers this too -
+no separate credentials needed, just push the new image:
+
+```bash
+docker push ghcr.io/g33kde/debris-highscore-api:<tag>
+```
+
+### 3. Deploy the API
+
+**Edit `k8s/rheinarts.yaml`'s `debris-highscore-api` Deployment's `image:`
+line** to the tag just pushed - same "this file is the source of truth,
+don't `kubectl set image` around it" rule as the portal image. Both
+images can be bumped in the same edit/apply if you're deploying both at
+once, or independently if only one changed.
+
+```bash
+kubectl apply -f k8s/rheinarts.yaml
+```
+
+No separate "find the IP" step - it's `ClusterIP`, reached only through
+the portal's own LoadBalancer IP at `/api/debris/`.
+
+**Honest limitation, not a deployment gap**: this API does basic input
+validation (initials must be 3 letters, score must be a plausible
+number) but no gameplay verification - there's no way to confirm a
+submitted score was actually earned. Fine for a LAN-only hobby leaderboard,
+worth knowing before treating it as tamper-proof.
 
 ---
 

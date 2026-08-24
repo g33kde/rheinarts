@@ -16,4 +16,5 @@ export const CATEGORY = {
   UFO: 0x0008,
   PICKUP: 0x0010,
   UFO_SHOT: 0x0020,
+  COMMANDER: 0x0040,
 } as const;

@@ -117,8 +117,8 @@ variant later):
 
 ## Modes
 
-Both are selectable from a mode-select screen before a round starts —
-neither is the "real" mode with the other bolted on.
+All three are selectable from a mode-select screen before a round starts
+— none is the "real" mode with the others bolted on.
 
 ### Cooperative
 
@@ -126,12 +126,44 @@ neither is the "real" mode with the other bolted on.
   asteroids and UFOs together.
 - **No friendly fire** — player shots and player ships pass through each
   other harmlessly.
-- Each player has their **own** life count (not a shared pool) — one
-  player running out doesn't end the round for the others; the round ends
-  when every player is out of lives, or the current wave is cleared and
+- **Lives don't apply here** — replaced by Emergency Ejection & Rescue
+  (below), added after v1 on request. The round ends once every active
+  player is permanently eliminated, or the current wave is cleared and
   players choose to stop.
 - Score is shared/team-based: the point of co-op is clearing waves
   together, not competing for a personal high score.
+
+#### Emergency Ejection & Rescue
+
+An unshielded hit doesn't cost a life or respawn the ship on its own —
+the pilot **ejects as a Commander** (docs/art_direction.md's
+"Astronaut") instead, and needs a teammate to actually save them.
+
+- **The Commander drifts slowly in a random direction**, wrapping at
+  arena edges like everything else, with a **10-second countdown**
+  rendered directly below them.
+- **A real hazard, not just a countdown** — an asteroid, a UFO, or a UFO
+  shot can destroy an adrift Commander before anyone reaches them, ending
+  that life early regardless of how much time was left.
+- **Pickup is automatic on touch** — any other player's ship flying into
+  the Commander picks them up. That alone saves the life: the 10-second
+  clock stops the instant they're picked up, it doesn't keep running
+  through the delivery below.
+- **Delivery**: the rescuer tows the Commander to the Space Station
+  (docs/art_direction.md's "Cross Dock," fixed at arena center) and
+  drops them off simply by flying close enough to it — no separate
+  button or precise docking required. The rescued player gets a brand
+  new ship there, with the same brief invulnerability window every other
+  respawn already grants.
+- **If the rescuer is destroyed while towing**, the Commander drops back
+  into open space rather than being lost with them, adrift again and
+  needing a fresh pickup from anyone. Already rescued (the life was
+  saved at the original pickup), so no new countdown starts — but it is
+  vulnerable to hazards again while it waits, same as any other adrift
+  Commander.
+- **Not rescued within 10 seconds, or destroyed by a hazard first** — the
+  player is permanently eliminated for the round, the same finality as
+  running out of lives in the other modes.
 
 ### Competitive
 
@@ -147,12 +179,40 @@ neither is the "real" mode with the other bolted on.
   natural fit here but is a v1 nice-to-have, not required for the mode to
   work — see `docs/roadmap.md`.
 
+### Single Player
+
+- **Locked to exactly one ship.** Unlike Cooperative (1-4 active players
+  allowed) or Competitive, no other player slot can join a Single Player
+  round regardless of what the menu's other cards show - this is a
+  personal run, not an undersized co-op one.
+- **Uses the standard 3-lives/respawn system** (below), the same one
+  Competitive uses - not Cooperative's Emergency Ejection & Rescue, since
+  there's no teammate around to rescue a solo player. No friendly fire is
+  moot with one ship anyway.
+- **The one real difference from Competitive: a global top-10 high score
+  leaderboard**, shared by every player on the site, not a personal
+  per-browser best - the thing Cooperative's "not competing for a
+  personal high score" line above explicitly isn't about. Server-side
+  (`debris-highscore-api`, Rhein Arts' first backend service), so it
+  survives a browser change or a server restart, unlike the
+  `localStorage`-based personal best this replaced. Shown as a two-column
+  top-10 list on the mode-select screen, refreshed each time Single
+  Player is (re)selected. A run that beats the current 10th-place score
+  gets a classic-arcade **3-letter initials entry** screen before the
+  usual GAME OVER overlay - cycle each letter A-Z (turn), confirm and
+  advance (fire), same controls the round itself used.
+
 ## Lives & game over
 
+**Competitive and Single Player only** — Cooperative replaced this
+entirely with Emergency Ejection & Rescue (above); a player there is
+eliminated by a failed rescue, never by running out of lives.
+
 - Each player starts a round with **3 lives** — standard arcade
-  convention, chosen over a harsher 2 or a more forgiving 5.
-- **Cooperative**: round ends when all active players are out of lives
-  (loss) or a wave is cleared and the group chooses not to continue
-  (win/stop).
-- **Competitive**: round ends when only one ship remains (or, in a 1-life
-  edge case with more eliminations than expected, whoever's left).
+  convention, chosen over a harsher 2 or a more forgiving 5. A hit
+  destroys the ship outright and respawns it at the player's own spawn
+  point after a brief delay, invulnerable (but unable to fire) for a few
+  seconds - only a life-0 hit is a permanent elimination.
+- **Competitive**: round ends when only one ship remains (or, in a
+  simultaneous-elimination edge case, a draw).
+- **Single Player**: round ends the moment the one ship's lives reach 0.

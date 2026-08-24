@@ -27,7 +27,8 @@ export class UfoShot {
       shape: { type: 'circle', radius: UFO.shotRadius },
       isSensor: true,
       frictionAir: 0,
-      collisionFilter: { category: CATEGORY.UFO_SHOT, mask: CATEGORY.SHIP },
+      // COMMANDER: an adrift Commander is a valid UFO-fire target too - see Ufo.ts's own mask note.
+      collisionFilter: { category: CATEGORY.UFO_SHOT, mask: CATEGORY.SHIP | CATEGORY.COMMANDER },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Arc>;
     this.visual.setData('entity', this);

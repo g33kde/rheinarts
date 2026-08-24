@@ -18,6 +18,7 @@ export class Projectile {
   private readonly spawnedAtMs: number;
   private alive = true;
 
+  /** `hitsShips` is Competitive's friendly fire - Cooperative shots never target CATEGORY.SHIP at all, per docs/gameplay.md. */
   constructor(
     scene: Phaser.Scene,
     position: Vector2,
@@ -25,6 +26,7 @@ export class Projectile {
     nowMs: number,
     color: number,
     ownerIndex: number,
+    hitsShips: boolean,
   ) {
     this.spawnedAtMs = nowMs;
     this.ownerIndex = ownerIndex;
@@ -34,7 +36,10 @@ export class Projectile {
       shape: { type: 'circle', radius: PROJECTILE.radius },
       isSensor: true,
       frictionAir: 0,
-      collisionFilter: { category: CATEGORY.PROJECTILE, mask: CATEGORY.ASTEROID | CATEGORY.UFO },
+      collisionFilter: {
+        category: CATEGORY.PROJECTILE,
+        mask: CATEGORY.ASTEROID | CATEGORY.UFO | (hitsShips ? CATEGORY.SHIP : 0),
+      },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Arc>;
     this.visual.setData('entity', this);

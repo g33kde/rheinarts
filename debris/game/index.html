@@ -20,10 +20,32 @@
         width: 100vw;
         height: 100vh;
       }
+      /* Same idea as HyperOut's .crt overlay (docs/art_direction.md) -
+         scanlines + a corner vignette, sitting above the canvas for every
+         scene at once since Debris has one shared Phaser canvas rather
+         than per-scene DOM. Fixed to the viewport rather than #app so it
+         still covers any FIT-mode letterbox bars (same near-black as the
+         canvas background, so the seam is invisible either way). */
+      .crt {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 10;
+        background:
+          repeating-linear-gradient(
+            to bottom,
+            rgba(0, 0, 0, 0) 0px,
+            rgba(0, 0, 0, 0) 2px,
+            rgba(0, 0, 0, 0.18) 3px,
+            rgba(0, 0, 0, 0) 4px
+          ),
+          radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.55) 100%);
+      }
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <div class="crt"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -195,6 +195,84 @@ read as alive — the under-light pulse carries that job), but the whole
 silhouette can gently bob/tilt during flight, same spirit as the ship's
 thrust flame being the "this thing is active" tell.
 
+## Commander: "Astronaut," decided
+
+Cooperative-only (docs/gameplay.md's "Emergency Ejection & Rescue") — the
+ejected pilot from an unshielded hit, drifting until rescued. Chosen from
+three live-rendered concepts (Escape Capsule, Astronaut, Signal Beacon),
+then refined on request (arms and legs added to the base Astronaut
+concept, each limb swaying on its own independent phase rather than a
+synchronized wave, to read as loose/weightless tumbling rather than a
+mechanical animation). The most narratively literal option of the three —
+deliberately breaks from the rest of the roster's abstract-vector shape
+language, since this is the one entity that's actually a person, not a
+shape.
+
+Body (tapered trapezoid), normalized:
+
+```text
+[-0.40,  0.20 ]   shoulder, left
+[ 0.40,  0.20 ]   shoulder, right
+[ 0.26,  0.95 ]   hip, right
+[-0.26,  0.95 ]   hip, left
+```
+
+Helmet: a circle at `(0, -0.28)`, radius `0.42`. Visor glint: a smaller
+circle at `(-0.08, -0.34)`, radius `0.14`, filled at half opacity in the
+owner's own color rather than stroked.
+
+Four limbs (2 arms from the shoulders, 2 legs from the hips), each a
+2-segment line (shoulder/hip → elbow/knee → tip), independently swaying:
+
+| Limb | Anchor | Base angle | Length | Sway period | Sway phase |
+| --- | --- | --- | --- | --- | --- |
+| Left arm | `(-0.40, 0.22)` | `0.85π` | `0.85` | ~900ms | 0 |
+| Right arm | `(0.40, 0.22)` | `0.15π` | `0.85` | ~760ms | +1.4 |
+| Left leg | `(-0.24, 0.95)` | `0.60π` | `0.90` | ~1100ms | +2.6 |
+| Right leg | `(0.24, 0.95)` | `0.40π` | `0.90` | ~980ms | +0.7 |
+
+The elbow/knee sits 55% of the way along the limb at `base angle + sway`;
+the tip sits the remaining 45% along `that angle + sway × 0.6` (the
+forearm/shin bends a little further than the sway alone) — no shared
+timing divisor between limbs is the whole point, so nothing moves in
+lockstep. A slow whole-body vertical bob (`sin(t / 500ms)`) is layered on
+top of all of it.
+
+Dark fill under a stroke in whichever player was ejected (`COLORS.players`
+— the one place a "pickup"-family entity is owner-colored rather than a
+fixed hue, since it represents a specific person, not a shared item). A
+countdown to `COMMANDER.rescueWindowMs` (10s) renders directly beneath it
+in the same color while adrift, and disappears the moment another player
+picks it up — pickup alone saves the life (decided); the trip to the
+Space Station afterward is no longer racing any clock.
+
+## Space Station: "Cross Dock," decided
+
+Cooperative-only, fixed at arena center for the whole round — where a
+rescued Commander gets their ship back. Chosen from three live-rendered
+concepts (Ring Station, Cross Dock, Hex Platform) — matches the game's
+hard-angle vector language (the same family as the Ship's wedge and
+Shield's diamond) most closely, unlike the Ring Station's circular
+language, which would've sat apart from that family the way the UFO
+deliberately does.
+
+Four rectangular docking arms, each `armLength × 0.32` wide, from
+`armLength × 0.32` out to `armLength` from center, rotated 0°/90°/180°/270°
+— `armLength` itself is `SHIP_HULL_SCALE × 3` ("3× ship size," the
+request's own sizing), so the arms alone already read as roughly a ship's
+length. A square hub at the center, `armLength × 0.32` half-width. A
+pulsing center light in the same sapphire as the Shield pickup
+(`#5dade2`) — "this is a safe, active destination," reusing Shield's own
+pulse-as-signal language rather than inventing a new one.
+
+**Trigger zone only, decided — no physical collision.** Not Matter-backed
+at all: ships and asteroids pass through it exactly like they already
+pass through each other in Cooperative. `GameScene` checks a carrying
+ship's plain distance to the station's center against
+`SPACE_STATION.dropOffRadius` (`armLength × 1.15` — slightly bigger than
+the visual silhouette, a forgiving trigger rather than a pixel-precise
+dock) once per frame; there's no sensor body or collision event involved.
+
 ## Start screen / menu, decided
 
 Structured like HyperOut's own start/menu screen — big glowing title,
@@ -205,9 +283,9 @@ instead of a fixed 2-keyboard layout. **Background: flat color, not the
 Twin Planets composition** — that composition was redirected to the play
 field instead (see the Background section above), per explicit
 instruction once implementation reached that point. The CRT scanline
-treatment mentioned above isn't built yet either (`docs/roadmap.md` item
-12); this section describes the decided layout, not current visual
-fidelity.
+treatment mentioned above is now built (`docs/roadmap.md` item 12) — a
+viewport-level overlay (`debris/game/index.html`'s `.crt` div), so it
+applies here on the menu too, not just the play field.
 
 - **4 player-status cards**, one per slot, each showing a small
   Interceptor-hull icon (see ship section above) in that player's color.
@@ -219,8 +297,12 @@ fidelity.
   once an actual controller claims it, in connection-order priority
   P1 → P2 → P3 → P4 — see `docs/controls.md` for why assignment works
   this way instead of manually picking a specific controller.
-- **Mode toggle**: Cooperative / Competitive, same segmented-button
-  language as HyperOut's own mode picker.
+- **Mode toggle**: Cooperative / Competitive / Single Player, same
+  segmented-button language as HyperOut's own mode picker, now a 3-way
+  rather than 2-way toggle. Selecting Single Player locks the P2-P4
+  player cards (they read LOCKED regardless of their own source/
+  readiness, per `docs/gameplay.md`'s "Single Player" section) and shows
+  the persisted personal best score beneath the toggle.
 - **Start has no player-count gating.** A solo P1 can press Start
   immediately, regardless of mode — decided over requiring 2+ active
   players before Competitive would do anything. (Competitive with only
@@ -235,3 +317,35 @@ fidelity.
   in the game, and persist across reloads via `localStorage`
   (`systems/AudioSettings.ts`), same pattern as HyperOut's own
   `saveSettings`/`loadSettings`.
+
+## In-round HUD, decided
+
+**Each active player gets their own corner**, in their own color
+(`COLORS.players`) - not a single shared readout. P1 top-left, P2
+top-right, P3 bottom-left, P4 bottom-right - the same quadrant layout as
+the ship spawn diamond (`GameScene.PLAYER_SPAWN_OFFSETS`), so "which
+corner is mine" matches "which corner did I spawn near." Only active
+slots get a corner - a 2-player Cooperative round shows two corners, not
+four with two blank.
+
+Each corner is a small stack of lines, currently:
+
+```text
+P1
+SCORE 120
+●●●
+```
+
+`●` = a life still held, `○` = spent (`LIVES_PER_PLAYER`, currently 3).
+Score follows `docs/gameplay.md`'s per-mode framing: Cooperative and
+Single Player show the same pooled/personal total in every corner (score
+is shared, or there's only one corner to begin with); Competitive shows
+each player's own tracked score, since eliminations decide that mode's
+round, not score. **Built to grow**: more per-player stats (on request)
+just become more lines in the same stack, not a layout rework - top
+corners anchor from the top and grow downward, bottom corners anchor
+from the bottom and grow upward, so adding lines never pushes text off
+the natural corner or across the arena's midline.
+
+The mode indicator (`COOPERATIVE`/`COMPETITIVE`/`SINGLE PLAYER`) lives
+top-center, out of every corner's way.

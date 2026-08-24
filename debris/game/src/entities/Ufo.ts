@@ -45,7 +45,10 @@ export class Ufo {
       restitution: 0.2,
       collisionFilter: {
         category: CATEGORY.UFO,
-        mask: CATEGORY.SHIP | CATEGORY.ASTEROID | CATEGORY.PROJECTILE,
+        // COMMANDER: a drifting rescue target is a real hazard target too
+        // (docs/gameplay.md's "Emergency Ejection & Rescue"), not just
+        // dodgeable countdown fodder.
+        mask: CATEGORY.SHIP | CATEGORY.ASTEROID | CATEGORY.PROJECTILE | CATEGORY.COMMANDER,
       },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Graphics>;

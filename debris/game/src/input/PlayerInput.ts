@@ -8,4 +8,6 @@ export interface PlayerInput {
   readonly turnDirection: -1 | 0 | 1;
   readonly isThrusting: boolean;
   readonly isFiring: boolean;
+  /** Optional - only adapters holding external resources (e.g. `KeyboardInput`'s window listeners) need one. `GamepadInput` just reads an already-owned `Gamepad` reference, nothing to release. */
+  destroy?(): void;
 }

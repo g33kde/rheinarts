@@ -9,6 +9,961 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-08-26 — Global top-10 high score leaderboard (Rhein Arts' first backend service)
+
+### What was built
+
+Requested as "make the Single Player best score permanent even if the
+server reboots" - clarified through several rounds of `AskUserQuestion`
+into something bigger than a storage-location swap: a **global,
+server-side, top-10 leaderboard** shared by every player on the site,
+with classic-arcade **3-letter initials entry** on a qualifying run.
+Went through `EnterPlanMode` first given the scope (the whole portal was
+static files behind nginx before this - no backend, no database,
+anywhere in Rhein Arts).
+
+**New `debris/highscore-api`** - a standalone TypeScript/Node package,
+sibling to `debris/game`, matching its tooling conventions
+(`tsconfig.json` strictness, `eslint.config.js`, `vitest`) for a Node
+runtime instead of a Vite build. Deliberately no framework - three
+routes doesn't justify one, and the runtime has *zero* third-party
+dependencies (only `node:http`/`node:fs/promises`/`node:path`), so the
+shipped Docker image doesn't even need `node_modules`, just the
+compiled `dist/`. `src/leaderboard.ts` is pure logic (`qualifies`,
+`insertEntry`, `isValidInitials`, `isValidScore`, `normalizeInitials`),
+tested, same "pure rule logic gets extracted and unit-tested" convention
+as `systems/CombatSystem.ts`'s `canFire` or Debris's own
+`systems/CommanderRescue.ts`. `src/storage.ts` persists to one JSON file
+via write-to-temp-then-`rename` (atomic on POSIX, so a crash mid-write
+can't corrupt it). `src/server.ts` is three routes (`/healthz`,
+`GET`/`POST /highscores`) on a plain `node:http` server - honest doc
+comment on what this *doesn't* do: no gameplay verification, a `POST` is
+trusted input like most simple arcade leaderboards without full
+server-authoritative gameplay, validation here is spam/garbage
+prevention, not anti-cheat.
+
+**Deployment**: its own single-replica `Deployment` + `ClusterIP`
+`Service` + `PersistentVolumeClaim` in `k8s/rheinarts.yaml`, deliberately
+*not* a sidecar in the `rheinarts` pod - that Deployment runs
+`replicas: 2`, and the cluster's default StorageClass is
+`ReadWriteOnce` (one node, one writer); two pods sharing write access to
+one file would be a real problem. Only this one pod ever mounts the
+volume - both `rheinarts` web replicas reach it over the cluster network
+via a new nginx `/api/debris/` proxy instead. Own `Dockerfile`, own
+image (`ghcr.io/g33kde/debris-highscore-api:<tag>`), own
+build/push/deploy steps documented in `DEPLOYMENT.md` as a parallel
+section to the portal image's - built and run locally (`docker build` +
+`docker run` + `curl`, including a kill-and-restart to confirm the PVC
+mount pattern actually persists data), never pushed or applied to the
+cluster, same standing rule as every other deploy this session.
+
+**Two real bugs, both caught by actually running the built artifacts,
+not by reading the config**:
+
+- `nginx.conf`'s first version proxied to a literal hostname
+  (`debris-highscore-api.rheinarts.svc.cluster.local`). A local
+  `docker run` of the built portal image immediately showed nginx
+  refusing to start at all - `host not found in resolver` - because a
+  literal `proxy_pass` hostname is resolved once at *config-load* time,
+  and if it's not resolvable yet (pod startup ordering, or the API
+  Deployment briefly down), nginx won't start. That would have taken
+  down the *entire portal* - HyperOut and Godspeed included - over one
+  game's leaderboard. Fixed with the standard pattern: a `resolver`
+  directive + a `proxy_pass` target given as a variable, which defers
+  DNS resolution to *request* time - nginx starts regardless, and only
+  an actual `/api/debris/` request fails (502) if the upstream truly
+  isn't reachable. The `resolver` directive itself needs a real IP, not
+  a hostname (same chicken-and-egg problem one level up), so a new
+  `docker/resolve-coredns.sh` runs via nginx:alpine's own
+  `/docker-entrypoint.d/` hook, substituting the nameserver IP
+  Kubernetes already writes into every pod's `/etc/resolv.conf` before
+  nginx ever starts. Re-verified after the fix: same `docker run`, nginx
+  starts clean, portal/HyperOut/Godspeed/Debris all still `200`, and
+  `/api/debris/highscores` degrades to a graceful `502` (no real
+  upstream in a standalone container test) instead of taking anything
+  else down.
+- `vite.config.ts`'s dev proxy (`server.proxy`) forwards the *full*
+  original path by default - unlike nginx's `proxy_pass`, which strips
+  the matched location prefix automatically when its target URL ends in
+  `/`. A local end-to-end test (the game's dev server + the API's dev
+  server, both running, `curl` through the proxy) immediately showed
+  `{"error":"not found"}` - the request was landing at the API as
+  `/api/debris/highscores`, not `/highscores`. Fixed with an explicit
+  `rewrite` function stripping the prefix, giving local dev the same
+  behavior as production instead of a silent mismatch nobody would have
+  noticed without actually running both servers together.
+
+**Frontend**: new `systems/HighScoreApi.ts` (`fetchLeaderboard`,
+`submitHighScore`, both degrading gracefully to an empty/failed result
+on any network error - same spirit as `AudioSettings.ts`'s `localStorage`
+try/catch - plus `qualifiesForLeaderboard`, a small deliberate
+duplication of the server's own `qualifies()` check, tested, since
+there's no shared package between the two and the server remains the
+sole authority on what actually gets persisted either way).
+`systems/HighScore.ts` (the old `localStorage` personal best) and its
+test are gone, fully superseded.
+
+`MenuScene.ts`'s single "BEST SCORE: ####" line replaced with a
+two-column top-10 list (ranks 1-5 left, 6-10 right - a single vertical
+list doesn't fit the ~135px gap between the mode toggle and the player
+cards at a readable size), fetched on every Single Player (re)selection.
+`GameScene.ts`'s `checkRoundOutcome()` Single Player branch is now async -
+fetches the leaderboard, checks qualification, and either starts a new
+3-letter initials-entry flow (`enterInitialsEntry`/`updateInitialsEntry`/
+`confirmInitialsEntry`, a new `'enteringInitials'` `SessionState`) or
+goes straight to the normal GAME OVER overlay. Initials entry reuses
+whatever input the player was already flying with
+(`this.players[0].input`, still live post-death) - `turnDirection`
+(edge-triggered) cycles the active letter A-Z, `isFiring`
+(edge-triggered) confirms and advances - rather than inventing new
+control-scheme-aware UI code.
+
+### Verified
+
+- `debris/highscore-api`: `npx tsc --noEmit`, `npx eslint .` both clean;
+  `npx vitest run` 12/12 (leaderboard.ts's full pure-function surface);
+  `npm run build` clean; ran the built server directly and exercised
+  every route with `curl` (empty-state `GET`, a qualifying `POST`,
+  malformed-input `400`s, a `404`, and a kill+restart to confirm
+  persistence).
+- `debris/game`: `npx tsc --noEmit`, `npx eslint .` both clean;
+  `npx vitest run` 68/68 (down net from 74 after removing
+  `highScore.test.ts`'s 6, up from adding `highScoreApi.test.ts`'s
+  fetch/fallback coverage); `npm run build` clean.
+- End-to-end locally: the game's dev server + the API's dev server
+  running together, exercised the full proxy chain with `curl`
+  (`GET`/`POST` through `/api/debris/highscores`, confirmed the prefix-
+  stripping fix).
+- Docker: built and ran both images - the API standalone (with a real
+  mounted volume, confirmed restart-persistence) and the full portal
+  image (confirmed the nginx startup-crash fix and that every other
+  route stays unaffected).
+
+### Not done yet
+
+Not seen running in an actual browser - the initials-entry UI's letter-
+cycling feel (does edge-triggered turnDirection feel responsive or
+laggy), the two-column leaderboard's fit/readability on the actual menu
+screen, and the "does this hold up over gamepad input specifically" case
+are all reasoned from code, not observed. Not deployed - the API image
+has never been pushed to GHCR or applied to the cluster; that's the
+user's call, same as every other deploy this session.
+
+---
+
+## 2026-08-25 — Cooperative repositioned as the main mode (docs + portal copy)
+
+### What was built
+
+Docs-only. Requested: "Cooperative should be the main game driver" -
+scoped via `AskUserQuestion` to two specific places (the portal cabinet
+card and `docs/vision.md`'s pitch/pillars), explicitly leaving
+`docs/gameplay.md`'s "none is the 'real' mode" mode-intro line alone -
+that's a rules-equality statement, not a promotion/framing one, and the
+user didn't ask for it.
+
+`web/index.html`'s Debris card description changed from the mode-agnostic
+"Drift through a field of shattering rock. Grab the shield. Watch the
+skies." to "Eject. Get rescued. Keep flying." - matches the portal's
+established three-beat card-copy rhythm (HyperOut's "Two light cycles.
+One grid. Don't get boxed in.", Godspeed's "Descend a procedural
+labyrinth. Guardians hunt. Every floor gets worse."), and makes the
+Emergency Ejection & Rescue mechanic (previous entry) the entire hook
+rather than restating "it's an Asteroids clone" (already covered by the
+card's own `1–4 PLAYERS • ASTEROIDS CLONE` meta line).
+
+`docs/vision.md`'s elevator pitch rewritten to lead with rescue/crew
+survival rather than "alone or with friends" neutrality. Its "Two ways
+to play" pillar - already stale (there are three modes now, not two;
+Single Player landed after that line was last touched) - replaced with
+"Cooperative is the main driver," explicitly naming Competitive and
+Single Player as fully-built and not afterthoughts, but no longer
+co-equal with Cooperative the way the original pillar framed them.
+
+### Verified
+
+Docs only - no code changed, nothing to run.
+
+---
+
+## 2026-08-25 — Emergency Ejection & Rescue (Cooperative-only)
+
+### What was built
+
+Not previously scoped - requested directly, and it implements/resolves
+the "Co-op rescue mechanics" Future Idea already on the roadmap (several
+of its open questions decided differently than originally speculated -
+see that entry's updated note). Scoped via `AskUserQuestion` on four
+core-mechanic questions before writing any code (relationship to the
+existing lives system, whether the rescue timer covers delivery or just
+pickup, whether the drifting pilot can be killed by hazards, whether the
+station is a physical obstacle), then visuals via a live-rendered
+concept-comparison artifact (three Commander concepts, three Space
+Station concepts, canvas-rendered at the game's actual palette/stroke
+style) - the same "decided from live-rendered concepts" process every
+other entity in this game went through. Commander picked concept B
+("Astronaut"), refined on request to add arms and legs, each limb
+swaying on its own independent phase; Space Station picked concept B
+("Cross Dock").
+
+**Replaces the lives/respawn system entirely, in Cooperative only.**
+Competitive and Single Player are untouched - they keep the exact
+lives/respawn/invulnerability system from earlier entries. In
+Cooperative, an unshielded hit no longer costs a life or auto-respawns:
+`GameScene.ejectCommander()` spawns a new `Commander` (the ejected pilot)
+at the ship's position instead. `PlayerSlot` gained `eliminated` (the
+new uniform "is this player out for the round" flag - `aliveFlagsBySlot()`
+now reads `!eliminated` across every mode, only *how* it gets set
+differs) and `towedCommander` (which Commander, if any, this player is
+currently flying to the station).
+
+**`entities/Commander.ts`** - a Matter sensor body (like `Shield`), two
+states:
+
+- **adrift**: drifts on its own velocity, wraps at arena edges, shows a
+  countdown to `COMMANDER.rescueWindowMs` (10s) directly beneath it, and
+  is vulnerable to hazards (decided: a real risk, not just a countdown) -
+  an asteroid, UFO ram, or UFO shot destroys it via new
+  `pendingCommanderHazardHits` handling, permanently eliminating that
+  player (`processPendingCommanderHazardHits`,
+  `processCommanderExpiry` for the timeout case).
+- **carried**: towed behind a rescuing ship
+  (`systems/CommanderRescue.ts`'s `computeTowPosition` - trails behind
+  the carrier's heading, not glued on top of it), countdown hidden
+  (decided: pickup alone saves the life, so there's nothing left to race
+  after that).
+
+Pickup is automatic on touch (`handleCollision`'s new Commander branches
+→ `pendingCommanderPickups` → `processPendingCommanderPickups`), gated so
+a ship already towing one can't pick up a second. **`entities/
+SpaceStation.ts`** - fixed at arena center for the whole round, not
+Matter-backed at all (decided: trigger zone only) - `GameScene.
+processStationDropOffs` checks a carrying ship's plain distance against
+it each frame (`isWithinDropOffRange`) and, once close enough, respawns
+the *rescued* player (not the rescuer) there via `respawnRescuedPlayer`,
+with the same brief invulnerability window every other respawn already
+grants.
+
+**Edge case, not explicitly specified - resolved as a judgment call**:
+if a rescuer is destroyed while towing, the Commander drops back into
+open space (`Commander.drop()`) rather than being lost with them -
+already-rescued (`hasBeenRescuedOnce` stays true), so no new countdown
+starts and it can't be eliminated by expiry again, but it is vulnerable
+to hazards again while waiting for a second pickup. Documented in
+`docs/gameplay.md` and the roadmap's updated Future Idea note.
+
+New pure logic in `systems/CommanderRescue.ts` - `hasRescueWindowExpired`
+(same shape as `CombatSystem.ts`'s `canFire`), `computeTowPosition`, and
+`isWithinDropOffRange` - tested without touching Matter or a live
+Commander.
+
+**Corner HUD extended** (the "more player info might be added in the
+future" the last HUD entry called out already materializing): a new
+Cooperative-only third line per corner (`cooperativeStatusLine`) - blank
+while flying normally, `EJECTED`/`INBOUND` while a Commander's in play,
+`ELIMINATED` once that fails. Competitive/Single Player keep the lives
+dots exactly as before.
+
+Collision categories gained `COMMANDER` (`CollisionCategories.ts`);
+`Ufo`'s and `UfoShot`'s masks explicitly widened to include it (their
+masks are hand-listed, not the broad `0xffff`-style masks Ship/Asteroid
+already use, so this needed an explicit change on both).
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 66/66 passing (up from 58) - new
+  `tests/commanderRescue.test.ts` covers all three pure functions
+  (window-expiry boundary, tow-position geometry at two headings,
+  drop-off range at/inside/outside the radius).
+- `npm run build` clean (51 modules).
+- Dev-server smoke check: `npx vite --port 5177` (a fresh port, not the
+  user's own long-running dev server), curled `/` (200) and
+  `/src/main.ts` (200).
+
+### Not done yet
+
+Not seen running in an actual browser - the countdown's legibility next
+to the small Commander sprite, the tow offset actually reading as
+"behind" the carrier rather than overlapping it, the Space Station's
+drop-off radius feeling forgiving rather than fussy, and the corner
+HUD's new third line fitting cleanly are all reasoned from code and the
+concept-review artifact, not observed. The dropped-mid-transit edge case
+in particular has no test coverage of its own (Matter/Phaser-integration
+shaped, not pure logic) and wasn't explicitly requested - flagged in
+docs as a judgment call for the same reason.
+
+---
+
+## 2026-08-24 — Per-player corner HUD
+
+### What was built
+
+Requested: move each player's stats into their own screen corner, in
+their own color, built to accommodate more per-player info later. This
+replaces the old single shared readout (`scoreText`/`livesText`, top-left,
+white text, all players pooled into one or two lines) with one `Text`
+object per active `PlayerSlot` (new `hudText` field), positioned per
+`PLAYER_HUD_CORNERS`: P1 top-left, P2 top-right, P3 bottom-left, P4
+bottom-right - the same quadrant layout as the existing ship spawn
+diamond (`PLAYER_SPAWN_OFFSETS`), so a player's corner and their spawn
+point land in the same part of the screen. Only active slots get a
+corner - inactive ones (e.g. P3/P4 in a 2-player Cooperative round, or
+P2-P4 in Single Player) show nothing, not an empty placeholder.
+
+Each corner is colored via `toCssHex(COLORS.players[slotIndex])` and
+shows a small stack of lines (`P1` / `SCORE 120` / `●●●`), built via a
+new `refreshAllPlayerHud()` that replaces the old `refreshScoreText()`/
+`refreshLivesText()` pair. **Built to grow**, per the request: adding a
+new per-player stat later is a one-line addition to the `lines` array in
+`refreshAllPlayerHud()`, not a layout rework - each corner's `Text`
+origin anchors from its own true corner (top corners grow downward,
+bottom corners grow upward), so more lines never drift text off-screen
+or across the arena's midline. Score keeps the exact per-mode framing
+`docs/gameplay.md` already decided: Cooperative/Single Player show the
+same pooled total in every corner, Competitive shows each player's own
+tracked score.
+
+The old top-right mode indicator (`COOPERATIVE`/`COMPETITIVE`/`SINGLE
+PLAYER`) moved to top-center, since P2's new corner now occupies its old
+spot.
+
+Documented as a new "In-round HUD, decided" section in
+`docs/art_direction.md` - this layout wasn't written down anywhere
+before, it had just evolved directly in code.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 58/58 passing, unchanged - this is Phaser Text/layout
+  work, not pure rule logic to extract.
+- `npm run build` clean (47 modules).
+- Dev-server smoke check: `npx vite --port 5176` (a different port than
+  the user's own long-running dev server, to avoid disturbing it), curled
+  `/` (200) and `/src/main.ts` (200).
+
+### Not done yet
+
+Not seen running in an actual browser - the corner margins, font size,
+and multi-line stacking (does a 3-line block actually clear the arena
+edges at `HUD_MARGIN`'s 12px) are reasoned from the same values the old
+single readout already used, not observed. Bottom-corner readability
+against the play field's background art (`PlayfieldBackground`) hasn't
+been checked either - the old HUD only ever lived in the two top
+corners.
+
+---
+
+## 2026-08-24 — Fixed gamepad assignment picking up a phantom "gamepad"
+
+### What was built
+
+Root-caused via a live debug session with the reporting user (temporary
+logging added to `buildPlayers()`, removed once the cause was confirmed -
+no gamepad hardware exists in this environment, so this couldn't be
+reproduced any other way): "gamepad only works for P3," "P1 gets no
+control in Single Player," and the earlier "gamepad recognized for P1 and
+P3 at once" reports were all the same bug. `navigator.getGamepads()` was
+reporting **two** entries for what the user believed was one controller.
+Decoding the actual IDs the user pasted:
+
+- `"Unknown Gamepad (Vendor: 1532 Product: 02b0)"`, `mapping: ""` -
+  vendor `1532` is Razer. Almost certainly a Razer mouse or other
+  peripheral that Chrome's Gamepad API mis-enumerates as a "gamepad" - a
+  known, documented quirk with programmable-button peripherals, not
+  anything specific to this user's setup.
+- `"HID-konformer Gamecontroller (STANDARD GAMEPAD Vendor: 045e Product:
+  0b13)"`, `mapping: "standard"` - vendor `045e` is Microsoft; this is
+  the real Xbox controller.
+
+`systems/GamepadAssignment.ts`'s connection-order logic has no way to
+tell these apart by count alone - it just saw "2 gamepads" and handed
+index 0 (the phantom, browser-enumeration order, not plug-in order) to
+whichever slot claimed a gamepad first, leaving that slot permanently
+dead while whichever slot got index 1 (the real pad) worked fine. This
+explains every prior report: which slot ended up "cursed" with the
+phantom depended only on toggle order and slot layout, not anything
+actually wrong with those slots.
+
+New `systems/GamepadDetection.ts`, `filterStandardGamepads()` - keeps
+only entries where the browser's own `mapping === 'standard'`, the
+Gamepad API's own signal that it recognized the device's button/axis
+layout as an actual game controller (non-controller HID peripherals
+essentially never report this, even when picked up at all). Not a
+Debris-specific heuristic - the standard way web games are expected to
+filter Gamepad API noise. Had to reach through Phaser's own `Gamepad`
+wrapper to its `.pad` reference (the raw native browser object) to read
+`mapping` at all - Phaser's wrapper class doesn't expose that field
+itself, and its own `.d.ts` doesn't declare it either (typed `pad: any`).
+Applied at both call sites that count/index into connected gamepads:
+`GameScene.buildPlayers()` (the actual per-round assignment) and
+`MenuScene.refreshCardStatus()` (the READY/WAITING cards, so the menu's
+promise matches what the round actually delivers).
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 58/58 passing (up from 55) - new
+  `tests/gamepadDetection.test.ts` covers keeping a standard-mapped pad,
+  dropping an empty-mapping one (the exact Razer-as-gamepad shape from
+  this report), and preserving order in a mixed list. Testable as pure
+  logic despite operating on a Phaser type, since `GamepadDetection.ts`
+  only imports `Phaser` as a type (erased at compile time) - the test
+  never actually loads the real `phaser` package, which crashes outright
+  in this project's `node`-environment test runner (see the previous
+  entry's note on `PhaserGamepadPatch.ts`).
+- `npm run build` clean (47 modules).
+
+### Not done yet
+
+Not verified against the actual hardware that surfaced this - confirmed
+by decoding the vendor/product IDs the user pasted from
+`navigator.getGamepads()` and confirming Phaser's `Gamepad.pad.mapping`
+is the real underlying field, not by watching the fix work live. Needs
+the user to hard-refresh (this only takes effect on a fresh load, same
+caveat as the previous entry) and confirm the real Xbox controller now
+consistently lands on P1 after toggling it, in both Cooperative and
+Single Player.
+
+---
+
+## 2026-08-24 — Fixed a real Phaser bug crashing every Menu → Game transition with a gamepad connected
+
+### What was built
+
+A user-reported crash, real hardware in hand (a genuine Xbox controller,
+not a generic pad this time): toggling P1 to gamepad in Single Player and
+pressing Start froze the game outright. Console showed `Uncaught
+TypeError: Cannot read properties of undefined (reading
+'removeAllListeners')` thrown from inside `phaser.js` itself - not our
+code, confirmed by reading Phaser 3.90's own source
+(`node_modules/phaser/src/input/gamepad/GamepadPlugin.js`).
+
+Root cause: `GamepadPlugin.stopListeners()` (called from
+`GamepadPlugin.shutdown()`, which fires on every outgoing scene during a
+`scene.start()` transition - exactly "press Start" on the menu) loops
+`this.gamepads` up to `.length` and calls `.removeAllListeners()` on each
+entry with **no hole-check** - unlike every other method in the same
+file (`getAll()`, `refreshPads()`'s own loop), which do guard with
+`if (pads[i])` first. `this.gamepads` is indexed by the browser's own
+raw `Gamepad.index` (`refreshPads()`'s `currentPads[index] = newPad`),
+which is **not** guaranteed to start at 0 - whatever index this
+particular controller/USB port/driver combination happened to report it
+at, that's the index Phaser stores it under, leaving lower indices
+`undefined`. `disconnectAll()` has the identical unguarded pattern.
+This also retroactively explains the earlier "gamepad recognized for P1
+and P3 at once" report from a different controller - consistent with
+that device enumerating at a non-zero or even duplicate index.
+
+New `systems/PhaserGamepadPatch.ts`, `patchPhaserGamepadHoleBug()` -
+called once in `main.ts` before the `Phaser.Game` instance is created (so
+every Scene's own `GamepadPlugin` instance inherits the fix from the
+shared prototype). Patches by compacting `this.gamepads` (dropping holes
+via `.filter(Boolean)`) immediately before calling through to the real
+`stopListeners`/`disconnectAll`, rather than reimplementing either
+method's body - stays resilient to Phaser's internal wiring changing
+under an unrelated future upgrade instead of silently drifting out of
+sync with it. `stopListeners` needed a small TS escape hatch
+(`GamepadPluginInternals`) since it's real at runtime but marked
+`@private` and omitted from Phaser's generated `.d.ts` entirely -
+`disconnectAll` is a documented public method and didn't need one.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 55/55 passing, unchanged - this patches a real
+  `Phaser` class's prototype at runtime, and `Phaser` cannot even be
+  imported in this project's `node`-environment test runner (confirmed:
+  attempting to `require('phaser')` outside a browser throws `window is
+  not defined` in `node_modules/phaser/src/device/OS.js`) - there is no
+  way to unit-test this in the current Vitest config, consistent with the
+  project's "pragmatic mix" convention of not force-testing
+  Phaser-integration code.
+- `npm run build` clean (46 modules).
+
+### Not done yet
+
+**Not verified against the actual failing hardware** - this environment
+has no gamepad access, so the fix is verified by reading Phaser's source
+against the user's exact stack trace and confirming the patched methods
+now skip holes instead of indexing into them blindly, not by reproducing
+the crash and watching it stop. Needs the user to hard-refresh (this
+patch runs at module load, before `Phaser.Game` is constructed - a
+long-running dev-server tab won't pick it up without a real reload, not
+just Vite's HMR) and retry the exact repro (Xbox controller connected,
+P1 toggled to gamepad in Single Player, press Start).
+
+---
+
+## 2026-08-24 — Single Player mode
+
+### What was built
+
+A new third mode, not previously scoped in `docs/roadmap.md` - added on
+request. Scoped via `AskUserQuestion` rather than guessed, on three
+questions: where it lives in the menu (a third option on the existing
+mode toggle, not a separate entry point), what actually distinguishes it
+from just playing Cooperative alone (personal high-score tracking +
+locked to exactly one ship), and how a round ends (same as today - game
+over at 0 lives, nothing exotic).
+
+`systems/RoundOutcome.ts`'s `GameMode` gained `'singlePlayer'` as a third
+literal. No new branch was needed in `evaluateRoundOutcome` itself -
+Single Player reuses Cooperative's exact "loss at zero, otherwise
+continue" rule, since with one locked ship "everyone's out of lives" and
+"the one player is out of lives" are the same check. A new shared
+`GAME_MODE_LABELS` map (also in `RoundOutcome.ts`) gives both `MenuScene`
+and `GameScene`'s HUD the same display strings, fixing a latent bug the
+naive `mode.toUpperCase()` approach would've had for this mode
+specifically (`'singlePlayer'.toUpperCase()` reads `SINGLEPLAYER`, no
+space).
+
+**Locked to exactly one ship.** `GameScene.buildPlayers()` slices
+`sources` to length 1 before computing slot assignments when
+`mode === 'singlePlayer'`, so P2-P4's menu state is ignored outright, not
+just hidden. `MenuScene` mirrors the lock visually: P2-P4's cards read
+`LOCKED\nSINGLE PLAYER` regardless of their own source/readiness, and
+P2's keyboard⇄gamepad toggle goes inert (P1's stays live - P1 always
+plays in every mode). Solo play also spawns dead-center rather than at
+P1's usual diamond corner (`GameScene.spawnOffsetFor`, shared by
+`buildPlayers()` and the lives/respawn system's `processPendingRespawns`) -
+the corner positions exist only to keep simultaneous players apart.
+
+**Personal high score**, the mode's actual point. New
+`systems/HighScore.ts` - same shape as Godspeed's `ProgressionStorage.ts`
+(an injectable `StorageReader`/`StorageWriter` pair, pure `recordScore`
+transform), not `AudioSettings.ts`'s module-singleton pattern, since
+nothing needs this on every frame - `GameScene` just loads/records/saves
+once, at round end. Persisted under a new namespaced key
+(`rheinarts.debris.singlePlayerHighScore.v1`, separate from
+`AudioSettings`' own key so the two don't collide). Shown on the
+mode-select screen (`MenuScene`'s new `bestScoreText`, visible only while
+Single Player is selected - meaningless for the other two modes) and
+again on the GAME OVER screen at round end, with a "NEW HIGH SCORE!"
+call-out replacing the usual `BEST ####` line when the run just beat it.
+
+Also fixed in passing: `GameScene`'s class doc comment still said "Still
+no lives/respawn system" - stale since the lives/respawn feature actually
+landed two entries back and this comment was never updated then.
+`docs/art_direction.md`'s note that the CRT overlay "isn't built yet" was
+similarly stale after the previous entry actually built it - both
+corrected here.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 55/55 passing (up from 49) - new `tests/highScore.test.ts`
+  covers `loadHighScore` (empty/corrupt-JSON/round-trip) and `recordScore`
+  (lower score keeps the record, a tie keeps it, a higher score raises it
+  without mutating the input), same shape as Godspeed's own
+  `progressionStorage.test.ts`.
+- `npm run build` clean (45 modules).
+- Dev-server smoke check: `npx vite --port 5175`, curled `/` (200),
+  `/src/main.ts` (200), and `/src/systems/HighScore.ts` (200).
+
+### Not done yet
+
+Not seen running in an actual browser - the 3-way mode toggle's layout
+fit (three labels including the longer "SINGLE PLAYER" in the space two
+used to occupy), the LOCKED card styling, and the GAME OVER screen's
+extra score/best-score lines are all reasoned from code, not observed.
+
+---
+
+## 2026-08-24 — CRT overlay, destruction shake/particles, splash logo
+
+### What was built
+
+Roadmap item 12, three of its four remaining pieces (scope decided via
+`AskUserQuestion` - see "Not done yet"):
+
+**CRT scanline/vignette overlay.** A direct port of HyperOut's own `.crt`
+div (`hyperout/style.css`) into Debris's `index.html`: the same
+`repeating-linear-gradient` scanlines + radial-gradient vignette,
+`pointer-events: none`. Fixed to the viewport rather than scoped to the
+canvas element - Debris uses `Phaser.Scale.FIT`, which can letterbox, and
+a viewport-fixed overlay covers those bars too (same near-black as the
+canvas background either way, so the seam is invisible). Applies to every
+scene at once (Splash, Menu, Game) since it's one shared canvas, not
+per-scene DOM like HyperOut has.
+
+**Screen shake + particle bursts on destruction.** New
+`entities/DestructionBurst.ts` - a one-shot burst of small fading dots,
+implemented as a single hand-managed `Graphics` object redrawn each frame
+(same pattern every other entity in this game already uses), not Phaser's
+`ParticleEmitter` subsystem. Decided: particles are colored to match what
+died (a player's own color for their ship, `COLORS.asteroid`'s neutral
+grey-white, `COLORS.ufo`'s red) rather than a uniform spark color, and
+screen shake scales by what died - ship and UFO destruction get
+`EFFECTS.majorShake`, an asteroid popping gets the lighter
+`EFFECTS.minorShake` - rather than one flat intensity for everything.
+Wired into all three destruction sites: `destroyAsteroid`,
+`processPendingShipHits` (a real, life-costing ship death, not a
+shield-absorbed hit), and `processPendingUfoHits`. Camera shake checks
+`prefers-reduced-motion` and no-ops if set, the same courtesy HyperOut's
+own screen shake already extends (`game.js`'s `reduceMotion` check) -
+particle bursts aren't gated by it, matching HyperOut's own scope there
+(it only skips shake + decorative CSS animation, not its particle burst).
+All tuning (counts, speed ranges, lifespans, shake intensity/duration) is
+a new `EFFECTS` block in `GameConfig.ts` - starting guesses, not
+playtested.
+
+**Rhein Arts logo on `SplashScene`.** Matches HyperOut's own splash
+screen exactly (`hyperout/index.html`'s `.splash-credit`/`.splash-logo`):
+bottom-right, `right: 12%; bottom: 2.5%; width: 15%` of the splash art's
+own box - in Debris that box is the full `ARENA_WIDTH`x`ARENA_HEIGHT`
+canvas, since `splash.png` is cover-scaled to fill it edge to edge - at
+~0.95 opacity, not interactive (Phaser images are non-interactive unless
+`setInteractive()` is called, so no extra work needed for HyperOut's
+`pointer-events: none` equivalent). `debris/game/src/assets/rhein-arts.png`
+is a new copy of the existing `web/img/rhein-arts.png` - Debris didn't
+have its own before this.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 49/49 passing, unchanged - every piece landed here is
+  Matter/Phaser-rendering-shaped (particles, camera shake, DOM overlay,
+  image placement), not pure rule logic to extract, per this project's
+  "pragmatic mix" testing convention.
+- `npm run build` clean (44 modules, `rhein-arts.png` bundled at
+  1.64MB - matches the source file, no compression regression).
+- Dev-server smoke check: `npx vite --port 5175`, curled `/` (200),
+  `/src/main.ts` (200), and `/src/assets/rhein-arts.png` (200).
+
+### Not done yet
+
+**Polish pass on the ship/asteroid/UFO shapes** - the fourth piece of
+item 12 - was explicitly skipped this pass per the `AskUserQuestion`
+answer: `docs/art_direction.md` never specified more than "any polish
+pass," and a rendering-only glow/bloom pass vs. an actual geometry
+refinement are different-enough scopes that picking one without a
+clearer brief would've been guessing. Still open on the roadmap.
+
+Not seen running in an actual browser - the shake intensity/duration,
+particle counts/speeds/lifespans, the CRT overlay's exact look against a
+real (possibly letterboxed) viewport, and the logo's placement/scale
+against the actual `splash.png` art are all reasoned from code and
+HyperOut's own values, not observed.
+
+---
+
+## 2026-08-24 — Lives, respawn, and invulnerability
+
+### What was built
+
+Roadmap item 5. Previously a single unshielded hit destroyed a ship
+outright and ended the round on the spot - now each `PlayerSlot` carries
+its own `lives` (starts at `GameConfig.ts`'s existing `LIVES_PER_PLAYER`,
+3), spent independently per player even in Cooperative, where score is
+still pooled but lives never were.
+
+Sequencing (resolved via `AskUserQuestion`, since `docs/gameplay.md`'s
+"respawns... after a brief invulnerability window" was genuinely
+ambiguous on ordering): a hit destroys the ship immediately, and if the
+player has lives left, queues a respawn - a `SHIP.respawnDelayMs` (1000ms,
+new config value, a starting guess not playtested) dead beat, then a
+brand-new `Ship` appears at the player's own original spawn point
+(`PLAYER_SPAWN_OFFSETS`, the same diamond used at round start - not exact
+arena-center, so 3-4 respawning players never stack on each other),
+already invulnerable for the pre-existing `SHIP.respawnInvulnerabilityMs`
+(2000ms). Also decided: an invulnerable ship can move/turn freely but
+can't fire (`GameScene.update()` gates the fire check on
+`!ship.isInvulnerable(nowMs)`, thrust/turn untouched) - the only visual
+tell is `Ship.draw()` blinking the hull off every other 100ms while
+invulnerable, same read as classic Asteroids' post-respawn flash.
+
+`Ship` gained `isInvulnerable(nowMs)`/`grantInvulnerability(nowMs,
+durationMs)`. `handleCollision`'s every damage path (asteroid ram, UFO
+ram, UFO shot, Competitive friendly-fire shot, Competitive ship-ram) now
+skips queuing a hit against an invulnerable ship - shield pickups and a
+ship's own ability to deal damage are unaffected, only *receiving* damage
+is gated. A destroyed-but-not-eliminated respawn is queued in a new
+`pendingRespawns` array (same queued-mutation pattern as the existing
+`pendingX` hit arrays) and drained each frame by a new
+`processPendingRespawns`, not a Phaser `delayedCall`.
+
+Round-outcome logic changed meaning, not shape: `aliveFlagsBySlot()` used
+to mean "has a `Ship` object alive on screen this exact frame" - with
+respawn delay, that would have falsely ended the round (or, in
+Competitive, falsely declared a winner) the instant a still-alive player
+got hit but before their respawn timer fired. It now means "has lives
+remaining," so a player mid-respawn-delay correctly still counts as in
+the fight. `pendingRespawns` is explicitly cleared the moment a round
+actually ends, so an in-flight respawn timer from the finishing blow
+can't pop a ghost ship in after the GAME OVER overlay is already up.
+
+New HUD line under the score (`P1 ●●●   P2 ●○○`, filled = life held,
+hollow = spent) shows every active player's remaining lives - lives are
+otherwise invisible state, and unlike score they're never pooled even in
+Cooperative.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 49/49 passing, unchanged - this feature is Matter/
+  Phaser-integration-shaped (timers, ship lifecycle, collision gating),
+  not pure rule logic to extract, per this project's "pragmatic mix"
+  testing convention.
+- `npm run build` clean (42 modules).
+- Dev-server smoke check: `npx vite --port 5175`, curled `/` (200) and
+  `/src/main.ts` (200).
+
+### Not done yet
+
+Not seen running in an actual browser - the respawn-delay pacing (does
+1000ms read as "a beat" or "a stall"), the flicker rate, and the
+lives-HUD glyphs (`●`/`○` rendering as intended in the monospace font)
+are all reasoned from code, not observed. `docs/gameplay.md`'s original
+spec doesn't say what happens to a Competitive ship-to-ship ram against
+an invulnerable target's Matter body - it still physically bounces (no
+change to collision response, only damage is skipped), which wasn't an
+explicit ask but follows from "only receiving damage is gated."
+
+---
+
+## 2026-08-23 — Gamepad support (up to 4 players)
+
+### What was built
+
+Roadmap item 11. `input/GamepadInput.ts` is a new `PlayerInput`
+implementation alongside `KeyboardInput`, reading the Standard Gamepad
+API mapping from `docs/controls.md`: left stick X or D-pad left/right to
+turn (D-pad wins if both disagree), right trigger (`buttons[7]`) to
+thrust, bottom face button (`buttons[0]`) to fire. The turn-direction
+logic is a pure function, `systems/GamepadInputMapping.ts`'s
+`computeGamepadTurnDirection` (deadzone handling, D-pad-overrides-stick,
+both-D-pad-directions-cancels-to-neutral - all tested).
+
+`MenuScene`'s per-slot `sources` selection (already collected for the
+menu's READY/WAITING cards, previously unused past that) now actually
+reaches `GameScene` via `scene.start('Game', { mode, sources })`.
+`GameScene.buildPlayers()` (new, replacing a chunk of `create()`) builds
+however many ships are actually active - up to 4, not always exactly 2 -
+from `sources` plus whatever gamepads are connected right now, via
+`systems/GamepadAssignment.ts`'s `computeSlotAssignments` (a
+generalization of the existing `computeGamepadReadiness` the menu cards
+already used, so a slot reading WAITING on the menu can never silently
+get a ship in-round). Spawn positions widened from the old fixed
+two-point layout to a 4-point diamond (`PLAYER_SPAWN_OFFSETS`).
+
+Making the roster genuinely variable-size surfaced a real correctness
+bug before it shipped, not after: `winnerIndex`, the fire-budget filter,
+self-hit immunity, and the score HUD were all trusting array
+position as if it equaled player number, which breaks the moment any
+slot is inactive (e.g. only P1 and P3 playing - P3 would score as if
+they were "player 2"). Fixed by adding `PlayerSlot.slotIndex` as the one
+stable per-round player identity and auditing every place that had
+assumed array-index-equals-player-number.
+
+`PlayerInput` gained an optional `destroy?()` so `GameScene`'s shutdown
+handler can call it uniformly - `KeyboardInput` has real window listeners
+to release, `GamepadInput` doesn't need to do anything.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` both clean.
+- `npx vitest run`: 49/49 passing (up from 40) - new coverage for
+  `computeSlotAssignments` (keyboard slots always ready with no gamepad
+  index; sequential index assignment that skips keyboard slots; an
+  unready slot gets `gamepadIndex: null`, not just `ready: false`) and
+  `computeGamepadTurnDirection` (all six cases above).
+- `npm run build` clean (42 modules).
+- Dev-server smoke check: `npx vite --port 5175`, curled `/` (200) and
+  `/src/main.ts` (200).
+
+### Not done yet
+
+Not seen running with an actual physical controller in a browser - no
+way to plug in and press buttons in this environment, so the button/axis
+indices are verified against Phaser's own `phaser.d.ts` types and
+`docs/controls.md`'s spec, not observed input. Per `docs/controls.md`'s
+own accepted simplification, a `GamepadInput` binds to one specific
+`Gamepad` object at round start and doesn't attempt to recover from a
+mid-round disconnect/reconnect - the same gap the menu's connection
+detection already had.
+
+---
+
+## 2026-08-23 — Ships start facing north, not right
+
+### What was built
+
+Both ships spawned facing right - the hull's nose points along local +x
+per `docs/art_direction.md`, and nothing had ever set an initial angle,
+so the default Matter body angle (0) rendered as "facing right." Fixed
+in `Ship.ts`'s constructor: `this.visual.setRotation(-Math.PI / 2)`
+right after `setFixedRotation()` - every ship now starts facing north
+(screen coordinates: angle 0 = right, +90° = down, so -90° = up),
+matching thrust direction too since `Ship.update()`'s applied force
+already uses the same `cos(angle)`/`sin(angle)` convention. A neutral
+default that doesn't favor either player's starting side, particularly
+relevant now that Competitive mode (previous entry) makes the two ships'
+relative facing actually matter.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (40/40, unchanged
+  - this isn't pure rule logic, no new test), `npm run build` all clean.
+
+### Not done yet
+
+Not seen in an actual browser - the exact on-screen "up" read (does the
+Interceptor silhouette look right pointing north, same as it does
+pointing right) is reasoned from the angle convention, not observed.
+
+---
+
+## 2026-08-23 — Roadmap: Rhein Arts logo on the splash screen
+
+### What was built
+
+Docs-only. Added to `docs/roadmap.md` item 12 (the visual-polish item
+that already tracks the other still-missing pieces, like the CRT overlay
+and screen shake) rather than inventing a new checklist entry: a Rhein
+Arts logo watermark on `SplashScene`'s lower-right corner, matching
+HyperOut's own splash screen. Read HyperOut's actual implementation
+first rather than guessing at "like HyperOut" - `hyperout/index.html`'s
+`.splash-credit`/`.splash-logo` and the corresponding CSS in
+`hyperout/style.css`: `web/img/rhein-arts.png`, positioned `right: 12%;
+bottom: 2.5%; width: 15%` relative to the splash art's own box (not the
+full viewport), ~0.95 opacity, `pointer-events: none` (pure watermark,
+never intercepts clicks). Noted that Debris doesn't have its own copy of
+that logo asset yet - `web/img/` has one, `debris/game/src/assets/`
+doesn't - so copying it in is part of the actual work, not assumed
+already available.
+
+### Verified
+
+N/A - documentation only, no code touched.
+
+### Not done yet
+
+The logo placement itself - this is a roadmap entry, not an
+implementation. Whoever picks it up next should position it
+proportionally against `SplashScene`'s cover-fit `splash.png` render
+(see `SplashScene.ts`'s existing `cover` scale calculation), not the
+raw viewport, to match HyperOut's percentage-of-artwork approach rather
+than a fixed-pixel one that could sit wrong at different aspect ratios.
+
+---
+
+## 2026-08-23 — Mode selection consumed; Competitive mode
+
+### What was built
+
+`MenuScene`'s mode toggle stopped being decorative - `GameScene` now
+receives it (`scene.start('Game', { mode })`, read via Phaser's
+`init(data)` lifecycle hook) and Cooperative/Competitive actually behave
+differently, per `docs/gameplay.md`'s already-decided "Modes" section:
+
+- **`GameMode` moved to a new `systems/RoundOutcome.ts`**, not left
+  defined inside `MenuScene.ts` - a systems file needing to import a
+  type from a scene file would be the wrong dependency direction, and
+  both `MenuScene` and `GameScene` need it now.
+- **No friendly fire is structural in Cooperative, not just a rule
+  nobody trained**: `Ship` gained a `shipCollisionEnabled` constructor
+  param - Cooperative excludes `CATEGORY.SHIP` from a ship's own Matter
+  mask entirely (ships pass through each other, matching "harmlessly" in
+  the docs literally, not just "no damage"), Competitive leaves it in.
+  `Projectile` gained a matching `hitsShips` param controlling whether
+  `CATEGORY.SHIP` is in *its* mask.
+- **Friendly fire in Competitive, with a self-hit bug caught before it
+  shipped**: a shot spawns at exactly its own ship's position, so once
+  `Projectile.hitsShips` is true, the very first physics step would
+  otherwise register the shooter hitting themselves. Fixed by comparing
+  the hit ship against the projectile's own `ownerIndex` in
+  `handleCollision` and simply not queuing that pair - enemy shots still
+  register normally.
+- **Ship-to-ship ramming is mutually lethal in Competitive** - a new
+  collision branch checks for two `Ship` instances directly (the
+  existing single-`ship`-variable extraction pattern only ever resolves
+  *one* side of a pair, the same class of gap fixed for UFO-vs-ship
+  ramming a few entries back), queuing both into the existing
+  `pendingShipHits` path so shields still apply individually per ship.
+- **Round-over is mode-aware and pulled out into a pure, tested rule**:
+  `systems/RoundOutcome.ts`'s `evaluateRoundOutcome(aliveFlags, mode)` -
+  Cooperative ends on total loss (every ship gone, unchanged from
+  before), Competitive ends the instant only one ship remains
+  (`{ status: 'win', winnerIndex }`), and also handles the draw edge
+  case where the last two ships go down in the same frame. `GameScene`
+  builds the "PLAYER N WINS" / "DRAW" / "GAME OVER" overlay text from
+  whichever outcome comes back, instead of a single hardcoded message.
+- **Per-player score in Competitive, pooled in Cooperative** - the old
+  single `score: number` field became `scores: number[]`, attributed via
+  the scoring projectile's own `ownerIndex` (`awardScore(ownerIndex,
+  amount)`). The HUD (`refreshScoreText()`) shows `SCORE 460` in
+  Cooperative (summed) or `P1 120   P2 340` in Competitive (separate) -
+  matches docs/gameplay.md's "each player's own score is tracked and
+  shown" for Competitive exactly, not a guess. A small mode label
+  (`COOPERATIVE`/`COMPETITIVE`) was added top-right of the HUD too, cheap
+  and makes the feature visibly confirmable.
+- **`scene.restart()` now always carries `{ mode: this.mode }` explicitly**
+  (the pause menu's Restart button, and the game-over/win/draw overlay's
+  restart) - not relying on whatever implicit data-carrying behavior
+  Phaser's `restart()` may or may not have, since losing the chosen mode
+  on restart would be a real regression, not a cosmetic one.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (40/40 - 5 new
+  tests for `evaluateRoundOutcome`'s continue/win/draw/loss branches),
+  `npm run build` all clean.
+
+### Not done yet
+
+- **Not played in an actual browser.** Two-ship friendly fire, the
+  self-hit-immunity fix, and the win/draw overlays are all reasoned
+  through and covered by the pure-logic tests where testable, but the
+  actual Matter collision behavior (does a ship genuinely pass through
+  another in Cooperative, does the self-hit guard actually prevent the
+  first-frame self-kill in practice) hasn't been observed.
+- Still no lives/respawn system in either mode (roadmap item 5) - a hit
+  is still permanent, not a life lost from a pool of 3.
+- Competitive's Best-of-N round structure (explicitly a v1 nice-to-have
+  per docs/gameplay.md) isn't built.
+- Ship-vs-ship ramming and friendly-fire shots don't award score to the
+  attacker - only asteroid/UFO kills do, since docs/gameplay.md doesn't
+  specify eliminations should score (only says they decide the round
+  outcome), and inventing a number wasn't the ask.
+
+---
+
+## 2026-08-23 — Roadmap: Bosses and Salvage progression added
+
+### What was built
+
+Docs-only. Three requested additions to `docs/roadmap.md`, checked
+against what's already there before adding anything:
+
+- **Gamepad support** was already tracked (v1 scope item 11) - not
+  duplicated, just confirmed.
+- **New "Bosses" future-idea entry** - the request wasn't a full spec,
+  so it's recorded as a direction, cross-referencing the one boss
+  concept that already existed (The Harvester, in the Enemy roster
+  section), not expanded into invented mechanics.
+- **New "Salvage" future-idea section** - the requested progression
+  system (smallest-asteroid-kills drop salvage, spent on Engine and
+  Weapon upgrade trees) written up in full, plus five open questions
+  flagging real tensions rather than silently assuming answers: it
+  conflicts with `docs/vision.md`'s explicit "not procedural/roguelite"
+  pillar; "stronger braking" and "better boost" both imply new physics
+  capabilities that don't exist in the current zero-friction/no-boost
+  model (`docs/technical_design.md`'s `frictionAir: 0` decision); and
+  whether Weapons unlocks stack or replace each other isn't specified.
+
+### Verified
+
+N/A - documentation only, no code touched.
+
+### Not done yet
+
+Everything in both new sections - these are future ideas, not scoped
+work. Whoever picks either up needs to resolve the open questions listed
+before implementation, not just start building.
+
+---
+
 ## 2026-08-22 — Portal cabinet + k8s deployment wiring
 
 ### What was built

@@ -5,6 +5,7 @@ import explosion1Url from '../assets/explosion1.wav';
 import explosion2Url from '../assets/explosion2.wav';
 import jupiterUrl from '../assets/jupiter.jpg';
 import laser2Url from '../assets/laser2.wav';
+import rheinArtsLogoUrl from '../assets/rhein-arts.png';
 import shieldUpUrl from '../assets/shield-up.wav';
 import splashUrl from '../assets/splash.png';
 import { EARTH_TEXTURE_KEY, JUPITER_TEXTURE_KEY } from '../entities/Background';
@@ -16,7 +17,7 @@ import {
   SHOT_SFX_KEY,
   THRUST_SFX_KEY,
 } from '../systems/Sfx';
-import { SPLASH_TEXTURE_KEY } from './SplashScene';
+import { RHEIN_ARTS_LOGO_TEXTURE_KEY, SPLASH_TEXTURE_KEY } from './SplashScene';
 
 /**
  * Every in-game visual (ship, asteroids, projectiles) is still vector-
@@ -33,6 +34,7 @@ export class BootScene extends Phaser.Scene {
     this.load.image(SPLASH_TEXTURE_KEY, splashUrl);
     this.load.image(EARTH_TEXTURE_KEY, earthUrl);
     this.load.image(JUPITER_TEXTURE_KEY, jupiterUrl);
+    this.load.image(RHEIN_ARTS_LOGO_TEXTURE_KEY, rheinArtsLogoUrl);
     this.load.audio(SHOT_SFX_KEY, laser2Url);
     this.load.audio(ASTEROID_HIT_SFX_KEY, explosion1Url);
     this.load.audio(THRUST_SFX_KEY, driveUrl);

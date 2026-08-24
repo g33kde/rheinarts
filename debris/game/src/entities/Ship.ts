@@ -22,8 +22,18 @@ export class Ship {
   private thrusting = false;
   private alive = true;
   private shielded = false;
+  private invulnerableUntilMs = -Infinity;
+  private lastNowMs = 0;
 
-  constructor(scene: Phaser.Scene, x: number, y: number, color: number) {
+  /**
+   * `shipCollisionEnabled` decides whether this ship's Matter body can
+   * physically touch other ships at all - Cooperative excludes SHIP from
+   * its own mask entirely ("player ships... pass through each other
+   * harmlessly," docs/gameplay.md - not just non-lethal, no contact at
+   * all), Competitive leaves it in (ramming is a real, mutually-lethal
+   * threat in that mode - see GameScene's collision handling).
+   */
+  constructor(scene: Phaser.Scene, x: number, y: number, color: number, shipCollisionEnabled: boolean) {
     this.color = color;
 
     const visual = scene.add.graphics();
@@ -33,7 +43,10 @@ export class Ship {
       friction: 0,
       frictionStatic: 0,
       restitution: 0.2,
-      collisionFilter: { category: CATEGORY.SHIP },
+      collisionFilter: {
+        category: CATEGORY.SHIP,
+        mask: shipCollisionEnabled ? 0xffff : 0xffff & ~CATEGORY.SHIP,
+      },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Graphics>;
     this.visual.setPosition(x, y);
@@ -45,6 +58,12 @@ export class Ship {
     // back out) - setFixedRotation() sets body inertia to Infinity so
     // collisions can never rotate the ship at all, matching the design.
     this.visual.setFixedRotation();
+    // Hull's nose points along local +x (docs/art_direction.md), which
+    // reads as "facing right" at the default angle 0 - every ship starts
+    // facing north (-90°, screen coords: 0=right, +90°=down) instead, a
+    // neutral default that doesn't favor either player's starting side
+    // in Competitive.
+    this.visual.setRotation(-Math.PI / 2);
     this.draw();
   }
 
@@ -83,11 +102,21 @@ export class Ship {
     this.shielded = false;
   }
 
+  /** Damage-only immunity - movement/turning still work, only handleCollision's damage paths check this. Firing is gated separately by GameScene (decided: can move during respawn invuln, can't shoot). */
+  isInvulnerable(nowMs: number): boolean {
+    return nowMs < this.invulnerableUntilMs;
+  }
+
+  grantInvulnerability(nowMs: number, durationMs: number): void {
+    this.invulnerableUntilMs = nowMs + durationMs;
+  }
+
   setRotation(angleRadians: number): void {
     this.visual.setRotation(angleRadians);
   }
 
-  update(_deltaSeconds: number, arenaWidth: number, arenaHeight: number): void {
+  update(nowMs: number, _deltaSeconds: number, arenaWidth: number, arenaHeight: number): void {
+    this.lastNowMs = nowMs;
     if (this.thrusting) {
       const angle = this.heading;
       this.visual.applyForce(
@@ -109,6 +138,14 @@ export class Ship {
   private draw(): void {
     const g = this.visual;
     g.clear();
+
+    // Flicker while invulnerable (respawn grace period) - blink every
+    // 100ms, same read as classic Asteroids' post-respawn flash. Skipping
+    // the draw entirely (rather than dimming alpha) keeps it a clean
+    // on/off blink instead of a fade.
+    if (this.isInvulnerable(this.lastNowMs) && Math.floor(this.lastNowMs / 100) % 2 === 0) {
+      return;
+    }
 
     if (this.thrusting) {
       const [rearX, rearY] = SHIP_HULL[4]!; // rear notch

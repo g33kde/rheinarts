@@ -70,3 +70,96 @@ spec:
     - name: http
       port: 80
       targetPort: 80
+---
+# Debris's global high-score leaderboard API - the first backend service
+# in Rhein Arts. A separate single-replica Deployment (not a sidecar in
+# the `rheinarts` pod above, which runs replicas: 2) specifically because
+# the cluster's default StorageClass is ReadWriteOnce - two pods can't
+# safely share write access to one PersistentVolume. Only this one pod
+# ever mounts the volume; nginx (both `rheinarts` replicas) reaches it
+# over the cluster network instead (see nginx.conf's /api/debris/ proxy).
+# Image:  ghcr.io/g33kde/debris-highscore-api:v1
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: debris-highscores-pvc
+  namespace: rheinarts
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: debris-highscore-api
+  namespace: rheinarts
+  labels:
+    app: debris-highscore-api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # a rolling update would briefly run two pods against one RWO volume
+  selector:
+    matchLabels:
+      app: debris-highscore-api
+  template:
+    metadata:
+      labels:
+        app: debris-highscore-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/g33kde/debris-highscore-api:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: PORT
+              value: "8081"
+            - name: HIGHSCORE_FILE_PATH
+              value: /data/debris-highscores.json
+          volumeMounts:
+            - name: highscores
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: highscores
+          persistentVolumeClaim:
+            claimName: debris-highscores-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: debris-highscore-api
+  namespace: rheinarts
+  labels:
+    app: debris-highscore-api
+spec:
+  type: ClusterIP   # internal only - nginx is the only thing that talks to this
+  selector:
+    app: debris-highscore-api
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081

@@ -65,7 +65,12 @@ export const SHIP = {
   frictionAir: 0, // no air in space - the ship never decelerates on its own, only thrust changes velocity
   fireCooldownMs: 250, // "Classic Asteroids" pacing, decided in docs/gameplay.md
   maxOnScreenShots: 4,
-  respawnInvulnerabilityMs: 2000,
+  // Dead time between destruction and reappearing at the respawn point -
+  // "explode, then reappear invulnerable" (decided), not an instant swap.
+  // A starting guess, not playtested - no way to feel out "does this read
+  // as a beat or a stall" in this environment.
+  respawnDelayMs: 1000,
+  respawnInvulnerabilityMs: 2000, // can move/turn immediately on respawn, but not fire - GameScene gates isFiring on this
 } as const;
 
 /** Ship hull, nose along local +x, decided in docs/art_direction.md ("Interceptor"). */
@@ -127,3 +132,52 @@ export const SHIELD = {
 } as const;
 
 export const LIVES_PER_PLAYER = 3;
+
+/**
+ * Screen shake + particle burst tuning for destruction (docs/art_direction.md,
+ * roadmap item 12). Decided: bigger deaths shake harder - ship/UFO
+ * destruction gets `majorShake`, an asteroid popping gets the lighter
+ * `minorShake`, rather than one flat intensity for everything. Shake
+ * `intensity` is Phaser's own fraction-of-viewport unit (`Camera.shake`),
+ * not pixels. All starting points, not playtested - no way to feel out
+ * "does this read as punchy or excessive" in this environment.
+ */
+export const EFFECTS = {
+  shipBurst: { count: 20, speedRange: [40, 140] as const, lifespanMs: 500 },
+  asteroidBurst: { count: 10, speedRange: [20, 80] as const, lifespanMs: 400 },
+  ufoBurst: { count: 24, speedRange: [50, 160] as const, lifespanMs: 550 },
+  majorShake: { durationMs: 250, intensity: 0.012 }, // ship or UFO destroyed
+  minorShake: { durationMs: 120, intensity: 0.004 }, // an asteroid destroyed
+} as const;
+
+/**
+ * Cooperative-only "emergency exit" mechanic, decided on request: an
+ * unshielded hit in Cooperative no longer costs a life and auto-respawns
+ * - it ejects the pilot as a drifting Commander another player must
+ * rescue. Lives (`LIVES_PER_PLAYER` above) genuinely stop mattering in
+ * this mode - a player is only out for the round if their Commander goes
+ * unrescued past `rescueWindowMs` or is destroyed by a hazard first
+ * (decided: adrift is a real risk, not just a countdown). Competitive
+ * and Single Player are unaffected - they keep the lives/respawn system
+ * exactly as it was.
+ */
+export const COMMANDER = {
+  radius: 9, // Matter sensor hitbox - smaller than SHIELD's 14, a person is a smaller target than a pickup
+  visualScale: 13, // px - normalized astronaut path (docs/art_direction.md) * this = on-screen size
+  driftSpeed: 0.25, // px/step (Matter velocity units, not px/sec - see SHIP's doc comment above) - slower than SHIELD.speed (0.4), a tumbling person over a purposeful pickup
+  rescueWindowMs: 10000, // "10 second timer," decided
+  towOffsetPx: 22, // trails behind the towing ship's heading while carried, not glued exactly on top of it
+} as const;
+
+/**
+ * Cooperative-only drop-off point for a rescued Commander (see COMMANDER
+ * above) - "3 times size than space ships," positioned at arena center.
+ * Trigger zone only (decided): no Matter body at all, just a fixed
+ * position/radius GameScene checks a carrying ship's distance against
+ * every frame - ships and asteroids pass through it like everything
+ * already passes through everything else in Cooperative.
+ */
+export const SPACE_STATION = {
+  armLength: SHIP_HULL_SCALE * 3, // "Cross Dock," docs/art_direction.md - the visual scale reference for "3x ship size"
+  dropOffRadius: SHIP_HULL_SCALE * 3 * 1.15, // slightly bigger than the visual silhouette - a forgiving trigger, not a pixel-precise dock
+} as const;

@@ -2,10 +2,15 @@
 
 ## Elevator Pitch
 
-**Debris** is a browser-first Asteroids clone for 1–4 players: turn, thrust,
-and shoot your way through a drifting field of rock and wreckage, alone or
-with friends — cooperatively surviving the field together, or fighting each
-other for the last ship flying.
+**Debris** is a browser-first Asteroids clone for 1–4 players, built
+around surviving a drifting field of rock and wreckage together: turn,
+thrust, and shoot your way through it as a crew — get hit and you eject,
+not die outright, and a teammate has to actually come get you before
+your ship's gone for good. That rescue is the game's main hook.
+Competitive (last ship standing) and a solo Single Player mode are both
+fully built and first-class in their own right, for when a team isn't
+who's in the room — but Cooperative is the mode Debris is designed
+around.
 
 ## Pillars
 
@@ -21,9 +26,14 @@ other for the last ship flying.
 - **Fast rounds.** Sessions measured in minutes, not the 5–15 minute runs
   Godspeed targets — this is a pick-up-and-play arcade cabinet game, closer
   to HyperOut's pacing.
-- **Two ways to play.** Cooperative (survive the field together) and
-  Competitive (last ship standing) are both first-class, not one bolted
-  onto the other.
+- **Cooperative is the main driver.** Getting hit ejects you, not kills
+  you — a teammate has to reach you and fly you to the station before
+  your ship's gone for good ("Emergency Ejection & Rescue,"
+  `docs/gameplay.md`). That rescue tension is the thing Debris is
+  actually about, not a generic "shoot rocks together." Competitive
+  (last ship standing) and Single Player (solo, personal high score) are
+  both fully built and not afterthoughts, but neither carries a
+  mechanic as distinctive as Cooperative's own.
 - **Shared visual identity.** Rhein Arts' synthwave/CRT look, so Debris
   reads as the same arcade as HyperOut and Godspeed, not a separate site.
 - **Open source.**
