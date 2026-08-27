@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
+  filePathForMode,
   insertEntry,
   isValidInitials,
+  isValidMode,
   isValidScore,
   MAX_ENTRIES,
   normalizeInitials,
@@ -50,8 +52,13 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return raw.length > 0 ? JSON.parse(raw) : {};
 }
 
-async function handleGetHighScores(res: ServerResponse): Promise<void> {
-  const entries = await loadEntries(FILE_PATH);
+async function handleGetHighScores(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const mode = new URL(req.url ?? '', 'http://localhost').searchParams.get('mode');
+  if (!isValidMode(mode)) {
+    sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive' });
+    return;
+  }
+  const entries = await loadEntries(filePathForMode(FILE_PATH, mode));
   sendJson(res, 200, entries);
 }
 
@@ -66,7 +73,12 @@ async function handlePostHighScores(req: IncomingMessage, res: ServerResponse): 
 
   const initialsRaw = (body as { initials?: unknown } | null)?.initials;
   const score = (body as { score?: unknown } | null)?.score;
+  const mode = (body as { mode?: unknown } | null)?.mode;
 
+  if (!isValidMode(mode)) {
+    sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive' });
+    return;
+  }
   if (typeof initialsRaw !== 'string') {
     sendJson(res, 400, { error: 'initials must be a string' });
     return;
@@ -81,7 +93,8 @@ async function handlePostHighScores(req: IncomingMessage, res: ServerResponse): 
     return;
   }
 
-  const entries = await loadEntries(FILE_PATH);
+  const filePath = filePathForMode(FILE_PATH, mode);
+  const entries = await loadEntries(filePath);
   const entry: LeaderboardEntry = { initials, score };
 
   if (!qualifies(entries, score, MAX_ENTRIES)) {
@@ -90,18 +103,19 @@ async function handlePostHighScores(req: IncomingMessage, res: ServerResponse): 
   }
 
   const updated = insertEntry(entries, entry, MAX_ENTRIES);
-  await saveEntries(FILE_PATH, updated);
+  await saveEntries(filePath, updated);
   sendJson(res, 200, { accepted: true, highscores: updated });
 }
 
 const server = createServer((req, res) => {
   void (async () => {
     try {
-      if (req.method === 'GET' && req.url === '/healthz') {
+      const [pathname] = (req.url ?? '').split('?');
+      if (req.method === 'GET' && pathname === '/healthz') {
         res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok\n');
-      } else if (req.method === 'GET' && req.url === '/highscores') {
-        await handleGetHighScores(res);
-      } else if (req.method === 'POST' && req.url === '/highscores') {
+      } else if (req.method === 'GET' && pathname === '/highscores') {
+        await handleGetHighScores(req, res);
+      } else if (req.method === 'POST' && pathname === '/highscores') {
         await handlePostHighScores(req, res);
       } else {
         sendJson(res, 404, { error: 'not found' });

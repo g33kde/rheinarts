@@ -26,6 +26,13 @@ interface ModeButton {
   text: Phaser.GameObjects.Text;
 }
 
+interface LeaderboardPanel {
+  border: Phaser.GameObjects.Rectangle;
+  title: Phaser.GameObjects.Text;
+  text: Phaser.GameObjects.Text;
+  hint: Phaser.GameObjects.Text;
+}
+
 /**
  * The start screen decided in docs/art_direction.md: title, mode toggle,
  * 4 player-status cards (P1/P2 keyboard<->gamepad toggle, real Gamepad
@@ -49,11 +56,15 @@ interface ModeButton {
  * regardless of their own source/readiness while it's selected, and P2's
  * own keyboard⇄gamepad toggle goes inert (P1's stays live - P1 always
  * plays). `GameScene.buildPlayers()` enforces the actual lock; this is
- * just the menu reflecting it. The global top-10 leaderboard
- * (`systems/HighScoreApi.ts` - `debris-highscore-api`, a real backend
- * now, not `localStorage`) is fetched and shown only in this mode - it's
- * meaningless for the other two (Cooperative pools score, Competitive
- * decides the round by elimination, not score).
+ * just the menu reflecting it.
+ *
+ * **Every mode now has its own top-3 leaderboard panel** ("behave like
+ * the one for single player, but are separately tracked," decided) -
+ * `systems/HighScoreApi.ts`/`debris-highscore-api` tracks three boards,
+ * one per `GameMode`, not one shared board. Only the panel matching
+ * `this.mode` is ever visible, each aligned to its own mode button's
+ * width/center-x (same "belongs to that button" reasoning Single
+ * Player's own panel was fixed to use).
  *
  * Every clickable "button" here is an explicit `Rectangle` + `Text` pair,
  * not `Text`'s own `backgroundColor` - Phaser's canvas-backed Text
@@ -71,11 +82,13 @@ export class MenuScene extends Phaser.Scene {
   /** [change] toggle text, indices 0-1 only (P1/P2 - P3/P4 never had one). */
   private cardToggleTexts: Phaser.GameObjects.Text[] = [];
   private modeButtons: Record<GameMode, ModeButton> = {} as Record<GameMode, ModeButton>;
-  private leaderboardTitleText!: Phaser.GameObjects.Text;
-  private leaderboardLeftText!: Phaser.GameObjects.Text;
-  private leaderboardRightText!: Phaser.GameObjects.Text;
-  /** Last-fetched leaderboard snapshot - rendered immediately (possibly stale/empty) on every Single Player (re)selection, then refreshed once the async fetch resolves. */
-  private leaderboardCache: LeaderboardEntry[] = [];
+  private leaderboardPanels: Record<GameMode, LeaderboardPanel> = {} as Record<GameMode, LeaderboardPanel>;
+  /** Last-fetched snapshot per mode - rendered immediately (possibly stale/empty) on every mode (re)selection, then refreshed once that mode's async fetch resolves. Kept at full length (not sliced to 3) so it can be handed straight to HighScoreScene on click without a second fetch. */
+  private leaderboardCaches: Record<GameMode, LeaderboardEntry[]> = {
+    cooperative: [],
+    competitive: [],
+    singlePlayer: [],
+  };
   // Escape here mirrors HyperOut's MENU <-> QUIT_CONFIRM toggle exactly
   // (docs/art_direction.md's menu is explicitly modeled on HyperOut's).
   private confirmingQuit = false;
@@ -162,8 +175,10 @@ export class MenuScene extends Phaser.Scene {
     const totalWidth = MODE_ORDER.length * width + (MODE_ORDER.length - 1) * gap;
     const left = ARENA_WIDTH / 2 - totalWidth / 2;
 
+    const modeCenterX = {} as Record<GameMode, number>;
     MODE_ORDER.forEach((mode, i) => {
       const x = left + width / 2 + i * (width + gap);
+      modeCenterX[mode] = x;
       const bg = this.add.rectangle(x, y, width, height, 0x14141c, 1).setStrokeStyle(2, 0x3a3a4a, 1);
       const text = this.add
         .text(x, y, GAME_MODE_LABELS[mode], {
@@ -181,41 +196,57 @@ export class MenuScene extends Phaser.Scene {
       this.modeButtons[mode] = { bg, text };
     });
 
-    // Single Player's whole distinguishing feature (docs/gameplay.md) -
-    // shown only while that mode's selected, since it's meaningless for
-    // Cooperative ("not competing for a personal high score") or
-    // Competitive (score doesn't decide the round there either). A
-    // two-column layout (ranks 1-5 left, 6-10 right), not one tall list -
-    // the vertical gap between the mode toggle's bottom edge and
-    // CARDS_TOP (~135px) doesn't fit a single 10-row list at a readable
-    // size.
+    // One leaderboard panel per mode now ("separately tracked," decided)
+    // - only the one matching `this.mode` is ever visible
+    // (refreshModeButtons). "Top 3 box aligned with single player box,"
+    // decided, generalized to every mode: each panel shares its own mode
+    // button's width and center-x (modeCenterX, captured in the loop
+    // above) rather than being independently centered on the screen.
     const leaderboardTop = y + height / 2 + 20;
-    this.leaderboardTitleText = this.add
-      .text(ARENA_WIDTH / 2, leaderboardTop, 'TOP 10', {
+    MODE_ORDER.forEach((mode) => {
+      this.leaderboardPanels[mode] = this.createLeaderboardPanel(mode, modeCenterX[mode]!, leaderboardTop, width);
+    });
+
+    this.refreshModeButtons();
+  }
+
+  private createLeaderboardPanel(mode: GameMode, centerX: number, top: number, width: number): LeaderboardPanel {
+    const height = 100;
+    const border = this.add
+      .rectangle(centerX, top + height / 2, width, height, 0x0d0d16, 1)
+      .setStrokeStyle(2, 0x3a3a4a, 1)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => {
+        if (!this.confirmingQuit) this.openHighScores(mode);
+      });
+    const title = this.add
+      .text(centerX, top + 8, 'TOP 3', {
         fontFamily: 'monospace',
-        fontSize: '16px',
+        fontSize: '13px',
         color: '#9a9ab0',
       })
       .setOrigin(0.5, 0);
-    const columnY = leaderboardTop + 22;
-    this.leaderboardLeftText = this.add
-      .text(ARENA_WIDTH / 2 - 160, columnY, '', {
+    const text = this.add
+      .text(centerX, top + 26, '', {
         fontFamily: 'monospace',
-        fontSize: '15px',
+        fontSize: '14px',
         color: '#c9c9d6',
-        lineSpacing: 4,
+        align: 'center',
+        lineSpacing: 2,
       })
-      .setOrigin(0, 0);
-    this.leaderboardRightText = this.add
-      .text(ARENA_WIDTH / 2 + 20, columnY, '', {
+      .setOrigin(0.5, 0);
+    const hint = this.add
+      .text(centerX, top + 84, 'CLICK FOR FULL LEADERBOARD', {
         fontFamily: 'monospace',
-        fontSize: '15px',
-        color: '#c9c9d6',
-        lineSpacing: 4,
+        fontSize: '11px',
+        color: toCssHex(COLORS.players[0]),
       })
-      .setOrigin(0, 0);
+      .setOrigin(0.5, 0);
+    return { border, title, text, hint };
+  }
 
-    this.refreshModeButtons();
+  private openHighScores(mode: GameMode): void {
+    this.scene.start('HighScores', { mode, entries: this.leaderboardCaches[mode] });
   }
 
   private refreshModeButtons(): void {
@@ -229,14 +260,19 @@ export class MenuScene extends Phaser.Scene {
       text.setAlpha(selected ? 1 : 0.7);
     });
 
-    const showLeaderboard = this.mode === 'singlePlayer';
-    this.leaderboardTitleText.setVisible(showLeaderboard);
-    this.leaderboardLeftText.setVisible(showLeaderboard);
-    this.leaderboardRightText.setVisible(showLeaderboard);
-    if (showLeaderboard) {
-      this.refreshLeaderboardDisplay(); // last-known snapshot immediately, even if stale
-      void this.loadLeaderboard(); // then fetch fresh and redisplay once it resolves
-    }
+    MODE_ORDER.forEach((mode) => {
+      const visible = mode === this.mode;
+      const panel = this.leaderboardPanels[mode]!;
+      panel.border.setVisible(visible);
+      panel.title.setVisible(visible);
+      panel.text.setVisible(visible);
+      panel.hint.setVisible(visible);
+      panel.border.disableInteractive();
+      if (visible) panel.border.setInteractive({ useHandCursor: true });
+    });
+
+    this.refreshLeaderboardDisplay(this.mode); // last-known snapshot immediately, even if stale
+    void this.loadLeaderboard(this.mode); // then fetch fresh and redisplay once it resolves
     // Card lock state (see refreshCardStatus) is driven by this.mode too,
     // but doesn't need refreshing here - update() already calls
     // refreshCardStatus() every frame, and cards don't exist yet the
@@ -244,26 +280,23 @@ export class MenuScene extends Phaser.Scene {
     // createPlayerCards() in create()).
   }
 
-  private async loadLeaderboard(): Promise<void> {
-    this.leaderboardCache = await fetchLeaderboard();
-    // The player may have switched away from Single Player while this
-    // was in flight - don't bother updating now-hidden text.
-    if (this.mode === 'singlePlayer') this.refreshLeaderboardDisplay();
+  private async loadLeaderboard(mode: GameMode): Promise<void> {
+    this.leaderboardCaches[mode] = await fetchLeaderboard(mode);
+    // The player may have switched to a different mode while this was in
+    // flight - don't bother updating a now-hidden panel.
+    if (this.mode === mode) this.refreshLeaderboardDisplay(mode);
   }
 
-  /** Renders `leaderboardCache` as two 5-row columns (ranks 1-5, 6-10) - an empty cache (genuinely no scores yet, *or* the fetch failed and degraded to empty per `HighScoreApi.ts`'s contract) reads the same either way: a calm "no scores yet," not an alarming error. */
-  private refreshLeaderboardDisplay(): void {
-    if (this.leaderboardCache.length === 0) {
-      this.leaderboardLeftText.setText('NO SCORES YET');
-      this.leaderboardRightText.setText('');
+  /** Renders that mode's cached top 3 (decided) as a single centered column - an empty cache (genuinely no scores yet, *or* the fetch failed and degraded to empty per `HighScoreApi.ts`'s contract) reads the same either way: a calm "no scores yet," not an alarming error. The panel stays clickable either way - HighScoreScene shows the same "no scores yet" state on its own, not a dead end. */
+  private refreshLeaderboardDisplay(mode: GameMode): void {
+    const panelText = this.leaderboardPanels[mode]!.text;
+    const cache = this.leaderboardCaches[mode];
+    if (cache.length === 0) {
+      panelText.setText('NO SCORES YET');
       return;
     }
 
-    const formatColumn = (entries: LeaderboardEntry[], startRank: number): string =>
-      entries.map((entry, i) => `${startRank + i}. ${entry.initials} ${entry.score}`).join('\n');
-
-    this.leaderboardLeftText.setText(formatColumn(this.leaderboardCache.slice(0, 5), 1));
-    this.leaderboardRightText.setText(formatColumn(this.leaderboardCache.slice(5, 10), 6));
+    panelText.setText(cache.slice(0, 3).map((entry, i) => `${i + 1}. ${entry.initials} ${entry.score}`).join('\n'));
   }
 
   private createPlayerCards(): void {

@@ -17,4 +17,12 @@ export const CATEGORY = {
   PICKUP: 0x0010,
   UFO_SHOT: 0x0020,
   COMMANDER: 0x0040,
+  FRACTURE: 0x0080,
+  // The Cardinal's own plasma ball (Phase 2) - a separate bit from
+  // FRACTURE rather than reusing it, even though both are "boss
+  // projectile vs. ship": the two bosses' collision filters should read
+  // independently, not implicitly coupled through a shared category. The
+  // rest of The Cardinal's body (arms, core) is a plain-math hazard, not
+  // Matter-backed at all - see `entities/Cardinal.ts`'s own doc comment.
+  CARDINAL: 0x0100,
 } as const;

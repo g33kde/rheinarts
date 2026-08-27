@@ -273,6 +273,146 @@ ship's plain distance to the station's center against
 the visual silhouette, a forgiving trigger rather than a pixel-precise
 dock) once per frame; there's no sensor body or collision event involved.
 
+## Black Hole: "Accretion Disk," decided
+
+Mode-agnostic (unlike Commander/Station, not Cooperative-only) - a
+periodic, fixed-position gravity hazard (`docs/gameplay.md`'s "Gravity
+Well"). Chosen from four live-rendered concepts (Accretion Disk, Warning
+Rings, Spiral Vortex, and a fourth added mid-review after
+[NASA's own black hole visualization](https://svs.gsfc.nasa.gov/13326)
+came up as a reference - a warm-lensed variant closer to the real
+imagery) - Accretion Disk won out as the most recognizable silhouette
+without needing the lensed variant's extra rendering complexity
+(asymmetric brightness, a second arc bowed over the shadow) for a
+same-scale in-arena hazard most players will only glance at while
+dodging it.
+
+**The visual radii are the literal gameplay radii, not a separate
+"looks right" approximation** - deliberate, since a "cross this and nothing
+gets you back out" hazard has to be exactly as dangerous as it looks, not
+approximately. Three concentric zones, drawn at `BLACK_HOLE.gravityRadius`
+/ `eventHorizonRadius` / `lethalRadius` directly:
+
+- **Gravity field** (outer, escapable): a soft violet (`#9b6bff`) glow,
+  approximated with several layered concentric circles at decreasing
+  alpha from `glowRadius` inward to `eventHorizonRadius` (Phaser
+  `Graphics` has no true radial-gradient fill, so this is the same
+  "layered flat fills" trick standing in for one) - no hard edge, since
+  the boundary itself isn't a hard cutoff mechanically either (the pull
+  ramps up gradually, escapable the whole way). `glowRadius` is a
+  visual-only stand-in for the actual gravity reach - once the pull was
+  extended to affect the whole screen (decided later, `GameConfig.ts`'s
+  `BLACK_HOLE.gravityRadius`), drawing the glow out to that same literal
+  radius would just tint the whole arena instead of reading as a hazard,
+  so the glow stayed compact while the real physics reaches much
+  further, tapering off gradually rather than cutting off at the glow's
+  edge.
+- **Accretion disk**: a tilted ellipse ring (`scaleY ≈ 0.4`) at roughly
+  the gravity field's inner portion, slowly rotating, with small violet
+  particles drawn spiraling inward along it and respawning at the outer
+  edge once they reach center - continuous, not a one-shot burst (unlike
+  `DestructionBurst`, this state lives inside the entity itself, redrawn
+  every frame, closer to how `Commander`'s limb-sway state works than to
+  a fire-and-forget effect).
+- **Event horizon** (the point of no return): a bright pulsing red
+  (`#e0463c`) ring at exactly `eventHorizonRadius` - deliberately the
+  same hazard red as the UFO, reused rather than a new hue, since it's
+  playing the identical "this is the dangerous one" role. Pulses
+  continuously, not just on approach - it's a boundary, not a warning
+  that fades once acknowledged.
+- **Lethal center**: a solid black void circle at `lethalRadius` with a
+  small pulsing red core - the only part of the whole hazard that
+  actually destroys anything (a shielded ship survives it - see
+  `docs/gameplay.md`'s "Gravity Well" section for the eject-back-out
+  behavior on a shield save).
+
+No player-color variant needed (like Shield, UFO, and Space Station -
+it's environmental, not owned by anyone). Despawns with the same
+burst/shake feedback as any other destruction, in its own violet, when
+its `lifespanMs` runs out - a small "it's gone now" beat rather than
+just vanishing silently.
+
+## Score popup: "Drift & Glow," rock-sized, decided
+
+The floating `+<points>` number on a hit (`docs/gameplay.md`'s Asteroids
+and UFO sections), reviewed as three live-rendered motion concepts:
+
+- **A, Classic Rise**: plain bold text, straight up, ease-out fade, a
+  soft drop-shadow for contrast. No embellishment.
+- **B, Punchy Pop**: scales in with a springy overshoot plus a quick glow
+  halo - more game-feel "juice," better suited to a bigger, rarer hit
+  than every single asteroid tick.
+- **C, Drift & Glow** (chosen): a slight sideways drift and gentle
+  rotation, a thin dark outline stroke, a soft persistent glow. Floatier
+  and more legible over a busy, cluttered field than A's plainness.
+
+**Then sized down, on request, to match `ASTEROID.small.radius`** - "the
+size of the smallest rocks." The first pass (26px text) was reviewed
+again at true 1:1 pixel scale next to a real small-rock silhouette drawn
+at its exact radius (8px, no CSS/canvas scaling tricks - the only honest
+way to judge a size claim, same principle as the Black Hole's literal
+gameplay radii above) and confirmed too big; the shipped size is 11px
+text with proportionally scaled-down glow/drift/outline
+(`GameConfig.ts`'s `SCORE_POPUP`) - small enough to read as a quick
+accent, not a HUD element competing with the actual gameplay for
+attention.
+
+Colored to the scoring player's own HUD color
+(`COLORS.players[ownerIndex]`), same as every other player-owned visual
+in this game (ship, projectile trail, HUD corner) - no separate palette
+of its own.
+
+## The Fracture: "Shard Cluster," decided
+
+Debris's first boss (`docs/roadmap.md`), reviewed as three live-rendered
+silhouette concepts for its intact Core form (Cross Formation, Faceted
+Monolith, Shard Cluster) - **Shard Cluster** won: jagged crystal shards
+loosely tethered to a pulsing core, reusing `systems/AsteroidShape.ts`'s
+existing jagged-polygon generator rather than a new shape algorithm. A
+new color, deliberately not reused from elsewhere: a pale icy `#a8e6ff`
+(`COLORS.fracture`) for the shell, with the glowing tethers/core in the
+game's existing `COLORS.ufo` red - the same hue the UFO and the Black
+Hole's event horizon already use for "this is the dangerous part,"
+reused again rather than inventing a second danger color.
+
+The same concept was extended live through both later phases before any
+of it was built, and all three are now landed (`docs/roadmap.md` item
+19): a **Fragment** (Phase 2) is a smaller version of the same
+silhouette (three shards instead of six), still with the icy
+`COLORS.fracture` shell, but its core/tethers are tinted per role
+instead of staying uniform red:
+
+- 🔴 **Aggressive** keeps the Core's own `COLORS.ufo` red, its shards
+  jittering erratically rather than gently bobbing.
+- 🔵 **Gravity** reuses `COLORS.blackHole` violet - a deliberate cross-
+  reference, since this fragment's whole identity is a gravity pull
+  (cosmetic only for now, not an actual force on anything) - with small
+  particles spiraling slowly inward, the same "layered flat fills"
+  technique the Black Hole's own accretion disk already uses.
+- 🟡 **Launcher** gets a new gold, `COLORS.fractureLauncher` - nothing
+  else in the palette fit - and periodically flings a small decorative
+  shard outward that fades over its flight, standing in for the
+  "debris launcher" role until it's a real attack.
+
+A **Swarm** bit (Phase 3) drops the shared core/tether entirely and is
+no longer a jagged shard at all - **redesigned to "floating parts,"
+decided** (a live mockup comparison, `docs/roadmap.md` item 19's Pass 4):
+a small blocky tetromino-shaped fragment (one of the 7 standard Tetris
+layouts, randomized per spawn), dark metal plating, a slow pulsing
+muted-jade glow (`COLORS.scrap`, picked over gold/copper/green
+candidates - pure green ruled out, too close to Player 4's own
+acid-green), plus a gentle floating bob on top of its existing spin and
+drift. Sized to read as "at or under the smallest asteroid" now,
+correcting a real gap - it used to be bigger. Same entity
+(`entities/FractureSwarmBit.ts`)
+now also drops from The Cardinal's own destroyed arms (`docs/roadmap.md`
+item 22), so this redesign applies to both bosses' scrap identically.
+All three of The Fracture's own tiers still materialize with the same
+fade/scale-in (ease-out cubic, the same curve `ScorePopup` already
+uses) rather than popping in instantly - "materialize," decided back in
+Pass 1, carried through to every tier that spawns afterward, Swarm's own
+redesign included.
+
 ## Start screen / menu, decided
 
 Structured like HyperOut's own start/menu screen — big glowing title,
@@ -301,8 +441,18 @@ applies here on the menu too, not just the play field.
   segmented-button language as HyperOut's own mode picker, now a 3-way
   rather than 2-way toggle. Selecting Single Player locks the P2-P4
   player cards (they read LOCKED regardless of their own source/
-  readiness, per `docs/gameplay.md`'s "Single Player" section) and shows
-  the persisted personal best score beneath the toggle.
+  readiness, per `docs/gameplay.md`'s "Single Player" section).
+  **Every mode now has its own top-3 leaderboard panel beneath the
+  toggle** (stale note this replaces: this line used to describe a
+  persisted personal best score, then later a Single-Player-only global
+  board - "behave like the one for single player, but are separately
+  tracked," decided, extended it to all three) - only the panel matching
+  the selected mode is visible, each its own bordered "card," clickable
+  through to that mode's own full top-10 screen, see below. **Sized and
+  positioned to match its own mode button exactly** (same width, same
+  center-x), decided - reads as belonging to that specific button rather
+  than an independently centered box that happens to share the screen
+  with it.
 - **Start has no player-count gating.** A solo P1 can press Start
   immediately, regardless of mode — decided over requiring 2+ active
   players before Competitive would do anything. (Competitive with only
@@ -317,6 +467,41 @@ applies here on the menu too, not just the play field.
   in the game, and persist across reloads via `localStorage`
   (`systems/AudioSettings.ts`), same pattern as HyperOut's own
   `saveSettings`/`loadSettings`.
+
+## High score screen: "Arcade Marquee," decided
+
+The full top-10 board (`HighScoreScene`), reached by clicking the
+mode-select screen's top-3 panel for that mode - "looks like the
+Highscore screen of an 80s arcade, but in the style and colors of
+Debris," decided. One instance of this scene per mode, receiving which
+one via `init(data)` - see `docs/gameplay.md`'s "Global high scores"
+section for what's actually ranked per mode. Gets the same
+viewport-level CRT overlay every other scene already gets for free
+(`debris/game/index.html`'s `.crt` div) - nothing scene-specific needed
+for that half of "80s arcade."
+
+The Debris-specific half: a big glowing title using the exact same
+treatment the start screen's own "DEBRIS" title already uses (white
+fill, Player 1 cyan stroke + `setShadow` glow) rather than inventing a
+second logo treatment - **the headline, decided**: the game mode itself
+(`GAME_MODE_LABELS[mode]` - "SINGLE PLAYER"/"COOPERATIVE"/"COMPETITIVE"),
+with "HIGH SCORES" moved to a smaller subtitle beneath it, since three
+separate boards now need to say which one you're looking at (the
+original single-mode version just said "HIGH SCORES" alone). Then ten
+monospace rows in a single centered column. Classic-arcade "podium"
+tiering, not a flat list: rank 1 is biggest and gold
+(`COLORS.fractureLauncher`, reused rather than a new color - the only
+gold already in the palette), ranks 2-3 a step down in white, 4-10 the
+same neutral grey (`#c9c9d6`) every other body
+text on this screen already uses. "Any key (or a click) to return,"
+decided - a click was deliberately left out at first (this screen is
+only ever *entered* by a click, so accepting `pointerdown` immediately
+risked that same click bouncing straight back to the menu), then added
+back on request: `waitForKeyPress()` delays attaching the click
+listener by `CLICK_GRACE_MS` (400ms) instead of wiring it up the
+instant the scene exists, so the opening click - already fully
+dispatched to MenuScene before this scene even exists - has nothing
+here yet to catch.
 
 ## In-round HUD, decided
 

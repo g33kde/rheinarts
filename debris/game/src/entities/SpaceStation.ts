@@ -4,30 +4,74 @@ import type { Vector2 } from '../utilities/Vector2';
 
 const PULSE_PERIOD_MS = 1800;
 
+/** `t` in [0,1] in, eased `t` in [0,1] out - same shape every other entity's own inline ease math (Fracture's materialize, etc.) uses, kept local rather than a shared utility since this is the only place in the codebase that needs ease-*in*-out specifically. */
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+}
+
 /**
  * "Cross Dock," decided in docs/art_direction.md - the Cooperative-only
  * rescue drop-off point (docs/gameplay.md's "Emergency Ejection &
- * Rescue"), fixed at arena center for the whole round. Not Matter-backed
- * at all (decided: trigger zone only, no physical collision) - a plain
- * static `Graphics` object; `GameScene` checks a carrying ship's distance
- * against `dropOffRadius` itself
+ * Rescue"), normally fixed at arena center for the whole round. Not
+ * Matter-backed at all (decided: trigger zone only, no physical
+ * collision) - a plain `Graphics` object; `GameScene` checks a carrying
+ * ship's distance against `dropOffRadius` itself
  * (`systems/CommanderRescue.ts`'s `isWithinDropOffRange`), not a
  * collision event, same reasoning Shield/Ship-style Matter sensors
  * weren't needed here.
+ *
+ * **Relocates during a boss fight, decided** - "the space station moves
+ * before the boss fight to a random corner, then moves back after, make
+ * the move visible" (GameScene's `beginBossAnnouncement()`/
+ * `enterStageClear()`). `travelTo()` starts an eased glide rather than a
+ * teleport; `position` reflects wherever it currently is mid-glide, so
+ * every distance check that already reads it (drop-off range, a rescued
+ * player's respawn point, Black Hole spawn clearance) stays correct
+ * automatically without any of those call sites needing to know a move
+ * is even happening.
  */
 export class SpaceStation {
   private readonly graphics: Phaser.GameObjects.Graphics;
-  readonly position: Vector2;
+  private currentPosition: Vector2;
+  private travelFrom: Vector2 | undefined;
+  private travelTarget: Vector2 | undefined;
+  private travelStartedAtMs = 0;
+  private travelDurationMs = 0;
   readonly dropOffRadius = SPACE_STATION.dropOffRadius;
 
   constructor(scene: Phaser.Scene, position: Vector2) {
-    this.position = position;
+    this.currentPosition = position;
     this.graphics = scene.add.graphics();
     this.graphics.setPosition(position.x, position.y);
     this.draw(0);
   }
 
+  get position(): Vector2 {
+    return this.currentPosition;
+  }
+
+  /** Begins an eased glide to `target` - "make the move visible," decided, so this is never an instant reposition. Calling this again mid-glide just retargets smoothly from the current in-flight position, not the original start. */
+  travelTo(target: Vector2, nowMs: number, durationMs: number): void {
+    this.travelFrom = this.currentPosition;
+    this.travelTarget = target;
+    this.travelStartedAtMs = nowMs;
+    this.travelDurationMs = durationMs;
+  }
+
   update(nowMs: number): void {
+    if (this.travelTarget && this.travelFrom) {
+      const t = this.travelDurationMs > 0 ? Math.min(1, (nowMs - this.travelStartedAtMs) / this.travelDurationMs) : 1;
+      const eased = easeInOutCubic(t);
+      this.currentPosition = {
+        x: this.travelFrom.x + (this.travelTarget.x - this.travelFrom.x) * eased,
+        y: this.travelFrom.y + (this.travelTarget.y - this.travelFrom.y) * eased,
+      };
+      this.graphics.setPosition(this.currentPosition.x, this.currentPosition.y);
+      if (t >= 1) {
+        this.travelFrom = undefined;
+        this.travelTarget = undefined;
+      }
+    }
     this.draw(nowMs);
   }
 

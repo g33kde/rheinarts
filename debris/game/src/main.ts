@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { ARENA_HEIGHT, ARENA_WIDTH, COLORS } from './config/GameConfig';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
+import { HighScoreScene } from './scenes/HighScoreScene';
 import { MenuScene } from './scenes/MenuScene';
 import { SplashScene } from './scenes/SplashScene';
 import { patchPhaserGamepadHoleBug } from './systems/PhaserGamepadPatch';
@@ -36,5 +37,5 @@ new Phaser.Game({
       debug: false,
     },
   },
-  scene: [BootScene, SplashScene, MenuScene, GameScene],
+  scene: [BootScene, SplashScene, MenuScene, GameScene, HighScoreScene],
 });

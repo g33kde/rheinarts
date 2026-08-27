@@ -30,17 +30,17 @@ describe('fetchLeaderboard', () => {
       'fetch',
       vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(entries) }),
     );
-    expect(await fetchLeaderboard()).toEqual(entries);
+    expect(await fetchLeaderboard('singlePlayer')).toEqual(entries);
   });
 
   it('degrades to an empty array on a non-ok response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve([]) }));
-    expect(await fetchLeaderboard()).toEqual([]);
+    expect(await fetchLeaderboard('singlePlayer')).toEqual([]);
   });
 
   it('degrades to an empty array when fetch itself throws (offline, API down)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')));
-    expect(await fetchLeaderboard()).toEqual([]);
+    expect(await fetchLeaderboard('singlePlayer')).toEqual([]);
   });
 });
 
@@ -52,16 +52,16 @@ describe('submitHighScore', () => {
   it('returns the parsed response on success', async () => {
     const body = { accepted: true, highscores: makeEntries([999]) };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(body) }));
-    expect(await submitHighScore('ABC', 999)).toEqual(body);
+    expect(await submitHighScore('ABC', 999, 'singlePlayer')).toEqual(body);
   });
 
   it('degrades to accepted:false on a non-ok response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve({}) }));
-    expect(await submitHighScore('ABC', 999)).toEqual({ accepted: false, highscores: [] });
+    expect(await submitHighScore('ABC', 999, 'singlePlayer')).toEqual({ accepted: false, highscores: [] });
   });
 
   it('degrades to accepted:false when fetch itself throws', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')));
-    expect(await submitHighScore('ABC', 999)).toEqual({ accepted: false, highscores: [] });
+    expect(await submitHighScore('ABC', 999, 'singlePlayer')).toEqual({ accepted: false, highscores: [] });
   });
 });

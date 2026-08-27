@@ -9,6 +9,1283 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-08-26 — Menu music swapped to asteroid-field.mp3
+
+One-line change, on request: `systems/Music.ts`'s `MENU_MUSIC_URL` now
+points at `asteroid-field.mp3` (already sitting in `debris/music/`,
+same as every other track) instead of `menu.mp3`. `MENU_MUSIC_KEY`
+itself is unchanged, so no other call site (`SplashScene`/`MenuScene`/
+`GameScene`'s own `stopSound(this, MENU_MUSIC_KEY)`) needed touching.
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (108/108)
+all clean; `npm run build` clean; confirmed `asteroid-field.mp3` itself
+serves (`200`) via the user's own dev server.
+
+---
+
+## 2026-08-26 — Boss-fight respawns + Space Station relocate to a corner
+
+### What was built
+
+"During boss fights the respawn point needs to be out of boss position,"
+per direct request - both bosses live at or near arena-center, exactly
+where the normal respawn/drop-off points already are.
+
+- **Player respawns**: `GameScene.spawnOffsetFor()` now checks
+  `isBossEncounterActive()` first - during a boss fight, every mode with
+  a lives/respawn system (Competitive, Single Player) spawns in one of 4
+  fixed screen corners (new `BOSS_CORNER_POSITIONS`, same P1/P2/P3/P4
+  quadrant order `PLAYER_HUD_CORNERS` already uses) instead of the usual
+  small center-diamond (`PLAYER_SPAWN_OFFSETS`) or Single Player's
+  dead-center spawn. "Per-player corners," decided over clustering
+  everyone at the bottom edge.
+- **Space Station** (Cooperative's rescue drop-off, previously fixed at
+  arena-center for the whole round): now relocates to a random corner
+  right as a boss's announcement starts, and travels back the moment the
+  stage actually clears. "Make the move visible," decided - `SpaceStation`
+  gained a real `travelTo(target, nowMs, durationMs)`, an eased glide
+  (ease-in-out cubic, `SPACE_STATION.relocateTravelMs` = 2.5s) rather
+  than a teleport. `position` is a live getter now instead of a fixed
+  field set once in the constructor, so every existing distance check
+  that already reads it (drop-off range, a rescued player's respawn
+  point, Black Hole spawn clearance) stays correct through the glide
+  automatically, no call site changes needed. A new
+  `spaceStationRelocated` flag gates the return trip so every stage-clear
+  doesn't need to separately ask "was that a boss stage" - it only
+  travels home if it's actually away.
+- Both share `BOSS_CORNER_POSITIONS` (absolute arena positions, inset
+  220px from the true screen corners) so the respawn points and the
+  Space Station's own relocation targets can never drift apart.
+
+Also checked, on request: the boss-stage music switching from the
+earlier cross-boss-conventions work. Traced every call site
+(`materializeFracture()`/`materializeCardinal()` calling `playStageMusic()`
+with the right keys, the normal-wave branch swapping back, the no-op
+guard) - the logic is correct. Couldn't confirm by ear (no browser tool
+in this environment).
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` clean.
+- `npx vitest run` - 108/108, unchanged (Phaser positioning/timing logic,
+  no new pure logic to unit test).
+- `npm run build` - clean production build.
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed file - `200` each.
+
+### Not done yet
+
+No in-browser confirmation that the corner spawns/Space Station glide
+actually read as clear of both bosses' danger zones, or that the glide
+itself looks right (no browser tool in this environment) - for the user
+to check against their own live dev server. The music-switching check
+above is code-review-only, not an audible confirmation. Not
+deployed - `debris/game` only.
+
+---
+
+## 2026-08-26 — Black Hole retiming: 2-minute stage grace period, shorter uptime, approach warning
+
+### What was built
+
+"Make black hole appear not before 2 min into any stage. This will give
+the players time to clear the rocks first. Black holes will stay for 15
+seconds, then disappear. 5 seconds before black hole appears play sound
+black-hole-approaching.mp3" - three changes to `BLACK_HOLE`
+(`GameConfig.ts`) and its spawn-check in `GameScene.update()`.
+
+- **2-minute stage grace period**: new `BLACK_HOLE.minStageElapsedMs`
+  (120000). The spawn check now takes whichever is more restrictive of
+  the existing 60-second post-despawn pause and this new stage-relative
+  floor, measured against `stageElapsedMs` - which already resets to 0
+  at every stage transition (the earlier stage-fresh-reset work), so
+  every stage gets its own fresh 2-minute window with no new timestamp
+  to track.
+- **Shorter active duration**: `activeDurationMs` 30000 → 15000.
+  `pauseDurationMs` (60s) is unchanged - not mentioned in the request.
+- **5-second approach warning**: new `BLACK_HOLE.approachWarningMs`
+  (5000). The spawn check now computes *remaining time until eligible*
+  (for both the pause and the stage-grace gates) rather than only a
+  boolean "eligible yet," and plays a new one-shot SFX,
+  `black-hole-approaching.mp3` (a file the user had already dropped into
+  `debris/music/`), exactly once per upcoming spawn - a new
+  `blackHoleWarningPlayed` flag resets at round start, every stage
+  transition (`resetStageHazards()`), and right after a black hole
+  actually spawns, so the next cycle later in the same stage can warn
+  again.
+- **New `systems/Music.ts` entry**: `BLACK_HOLE_APPROACHING_SFX_KEY`/
+  `_URL` - grouped with the music tracks rather than `systems/Sfx.ts`,
+  since the file lives in `debris/music/` (Vite's publicDir) like the
+  other tracks there, not bundled via ES import like `Sfx.ts`'s own
+  keys; played as a one-shot (`this.sound.play`, not `playLoopingSound`)
+  at the call site despite living in the same file as the loop tracks.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` clean.
+- `npx vitest run` - 108/108, unchanged (a GameConfig retune + a
+  GameScene timing/SFX change, no new pure logic to unit test).
+- `npm run build` - clean production build.
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed file - `200` each - plus a
+  direct check that `black-hole-approaching.mp3` itself actually serves
+  - `200`.
+
+### Not done yet
+
+No in-browser confirmation that the warning fires at the right moment
+or that 2 minutes actually feels like enough clearing time in practice
+(no browser tool in this environment) - for the user to check against
+their own live dev server. Not deployed - `debris/game` only.
+
+---
+
+## 2026-08-26 — Stage-fresh reset + scrap pickup redesign ("floating parts")
+
+### What was built
+
+Two separate requests, landed together.
+
+**Stage-fresh reset**: "after every stage and bossfight, start the stage
+fresh - remove all Black Holes and reset rock count," decided, scoped
+specifically to *stage* transitions, not a whole-round reset (`create()`
+already has its own separate reset block for that). New
+`GameScene.resetStageHazards(nowMs)` - clears the `asteroids` array and
+force-despawns an active Black Hole - called from all three stage-begin
+points (`beginNextLevel()`'s normal-wave branch, `materializeFracture()`,
+`materializeCardinal()`) right before that stage's own `spawnWave()`.
+The asteroid clear is mostly belt-and-suspenders (stage-clear already
+requires it to be empty), but the Black Hole despawn is a real fix: one
+can still be actively alive at the exact instant the last asteroid of a
+stage dies (its own timer runs independently of asteroid count), and
+would otherwise carry over ticking into the next stage untouched.
+
+**Scrap pickup redesign**: "it looks like rocks, it needs to look like
+floating parts, make them pulse slightly" - a live mockup comparison
+(old jagged-shard look vs. several redesign directions, then a
+tetromino-shape request, then a size check against the small asteroid,
+then a 3-way color comparison) landed as:
+
+- **Shape**: `entities/FractureSwarmBit.ts` now renders one of the 7
+  standard tetromino layouts (I/O/T/S/Z/J/L), picked randomly per spawn
+  and scaled to a consistent footprint regardless of that shape's own
+  natural bounding box (a 4-wide I-piece and a 2x2 O-piece both read as
+  "the same size class") - replacing `generateAsteroidPoints`'s jagged
+  rock silhouette entirely.
+- **Material/color**: dark metal plating (`COLORS.cardinalFill`, reused
+  rather than a new fill) with a pulsing muted-jade glow - new
+  `COLORS.scrap` (`#4fae82`), picked after comparing gold/copper/jade
+  candidates live. Pure green was ruled out outright: too close to
+  Player 4's own acid-green (`COLORS.players[3]`), same class of
+  conflict that pushed The Cardinal off Player 1's cyan earlier.
+  "Glow" is Phaser's usual layered-flat-fills stand-in (a soft, larger,
+  low-alpha rect behind the solid cell) - `Graphics` has no true blur,
+  same technique The Fracture's own core glow and Black Hole already use.
+- **Pulse + motion**: a ~1.4s scale-breathing cycle layered on top of
+  the existing materialize fade/scale-in, plus a small floating bob
+  (drawn only, not physically applied) on top of the existing spin and
+  straight-line drift - "floating, not flying."
+- **Size**: "smaller than or the same size as the little rocks," decided
+  - `FRACTURE.swarmRadius` shrunk from 12 (24px across, bigger than the
+    smallest asteroid's own 16px) to 7 (14px, safely under it).
+- Reused as-is by The Cardinal's own arm-scrap (`processPendingCardinalArmHits`),
+  so this redesign applies to both bosses' scrap identically with no
+  extra work.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` clean.
+- `npx vitest run` - 108/108, unchanged (this is Phaser rendering + a
+  small GameScene reset helper, no new pure logic to unit test).
+- `npm run build` - clean production build.
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed file - `200` each.
+
+### Not done yet
+
+No in-browser confirmation of the pulse timing/bob amplitude feel, or
+that the Black Hole/rock reset is actually unnoticeable in normal play
+(it's designed to be invisible when nothing was carrying over) - for the
+user to check against their own live dev server. Not deployed -
+`debris/game` only.
+
+---
+
+## 2026-08-26 — The Cardinal (Debris's second boss) + random boss-stage rotation
+
+### What was built
+
+Full implementation of The Cardinal, following the design spec + visual
+mockup reviewed and approved across the last several turns
+(`docs/roadmap.md`'s "The Cardinal" section, item 22 for the landed
+summary) - a permanent four-armed rotating fixture at exact arena-center,
+three phases, plus the random-per-stage boss-pool structure needed to
+actually reach it in a real playthrough.
+
+- **New `systems/CardinalCombat.ts`** (pure, tested): `applyHit(hp)` -
+  same shape as `FractureCombat.ts`'s own, kept as a separate module per
+  boss rather than a shared import - and `determinePhase(armsAlive,
+  coreDestroyed)`, resolving the three-phase state
+  (`armed`/`coreExposed`/`critical`). 10 new tests
+  (`tests/cardinalCombat.test.ts`).
+- **New `entities/Cardinal.ts`** - the boss itself. Deliberately **not
+  Matter-backed at all**, unlike The Fracture: a rotating cross with
+  four independently-destructible hit zones doesn't fit Matter's
+  category/mask model, so it owns one plain `Graphics` visual (the whole
+  body rotated as a single rigid transform via `setRotation`, each arm
+  drawn once in local space at a fixed 0/90/180/270 offset) and exposes
+  pure query methods (`isArmAlive`, `armAngleRad`, `isLaserActiveForArm`,
+  `phase`, HP fractions, detonation progress) that `GameScene` hit-tests
+  against every frame via plain distance/segment math - the same "plain
+  math hazard" pattern `BlackHole` and `FractureLaser` already
+  established. The laser's own charge/fire/fade cycle lives entirely
+  inside this class (never random-angle like Fracture's laser - it's
+  always "wherever the arms currently point"), so GameScene only ever
+  *asks*, never triggers, that half of its attacks.
+- **New `entities/CardinalPlasmaBall.ts`** - the one exception, a normal
+  small Matter-backed projectile (own `CATEGORY.CARDINAL` mask, sensor
+  vs. ship), same shape as `FractureShard`.
+- **`GameConfig.ts`**: new `CARDINAL` block (arm/core HP, reach, timing,
+  scores - every number not explicitly "decided" by the brief is a
+  proposed starting point, same caveat the design spec itself carried),
+  new `COLORS.cardinal`/`cardinalFill` (a teal shifted off Player 1's
+  exact cyan, per the earlier color decision), `UFO.maxConcurrentDuringBoss`
+  wired into the earlier boss-stage-conventions work.
+- **`GameScene.ts`** (the bulk of the integration):
+  - **Phase 1 - Armed**: each arm's own 20 HP
+    (`pendingCardinalArmHits`/`processPendingCardinalArmHits`) -
+    destroyed independently, explodes into scrap (reuses
+    `FractureSwarmBit`, pushed into the existing `fractureSwarm`
+    array/pickup flow rather than a new one - the pickup resolution
+    doesn't care which boss dropped it, and Cardinal's scrap
+    deliberately never calls `beginScrapCountdown()` so it has no
+    expiry, matching "collectible until the boss finally exploded").
+    Ram hazard is the core only, not the arms (`updateCardinalAttacks`).
+    A single consolidated health bar (`createCardinalHealthBar`/
+    `updateCardinalHealthBar`, a `Rectangle` fill using the same
+    left-anchored-origin pattern `MenuScene`'s own volume sliders
+    already use) sums all 4 arms below the boss.
+  - **Phase 2 - Core exposed**: `pendingCardinalCoreHits`/
+    `processPendingCardinalCoreHits` for the core's own 20 HP; a plasma
+    ball fires at the nearest player every 2 seconds
+    (`Cardinal.canFirePlasma`/`recordPlasmaFired`, lead-aim reusing
+    `systems/UfoTargeting.ts`, same math the UFO's own shot uses).
+  - **Phase 3 - Critical**: `resolveCardinalDetonation` - a large lethal
+    blast radius (`CARDINAL.detonationMaxRadius`) once the 5-second
+    countdown (rendered inside the core by `Cardinal` itself, plus a
+    danger ring that grows in real time to its full radius exactly as
+    the timer hits zero) runs out; clears any uncollected arm-scrap at
+    the same moment.
+  - **`isBossEncounterActive()`** (renamed from
+    `isFractureEncounterActive`, per the earlier cross-boss-conventions
+    entry) now also covers `this.cardinal !== undefined`.
+  - **The boss-stage rotation, now actually implemented**: the old
+    `fractureIntroduced` one-time latch is gone, replaced by
+    `lastStageWasBoss` - `beginNextLevel()` triggers a randomly-picked
+    boss (`pickRandomBoss()`, 50/50 today) after every normal stage
+    clear, and a normal wave after every boss's own clear, alternating
+    for the rest of the round. `beginFractureAnnouncement()` generalized
+    into `beginBossAnnouncement(boss)`, dispatching to
+    `materializeFracture()` or the new `materializeCardinal()`.
+- **Available in all three modes** - Single Player, Cooperative,
+  Competitive alike, per the earlier mode-availability decision. A ship
+  killed by any Cardinal attack in Cooperative routes through the
+  existing Emergency Ejection & Rescue system like any other hazard, no
+  special-casing needed.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` clean (one real `tsc` catch along
+  the way: a literal-type comparison in `coreHpFraction()` TypeScript
+  correctly flagged as always-false, since `CARDINAL.coreHp` is a `const`
+  literal `20` - removed the dead guard rather than silencing it).
+- `npx vitest run` - 108/108 (was 101; +7 new `cardinalCombat.test.ts`
+  cases).
+- `npm run build` - clean production build (67 modules, was 64).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every new/changed file - `200` each. Also
+  confirmed a dead-config sweep - every single `CARDINAL.*` constant is
+  actually referenced somewhere in the new code, nothing left over from
+  the design-spec phase that never got wired in.
+
+### Not done yet
+
+No in-browser playthrough of an actual Cardinal fight (no browser tool
+in this environment) - static verification only, for the user to check
+against their own live dev server: watch the rotation, get an arm
+destroyed and confirm the scrap/cross-degrading/health-bar all track
+correctly, clear all four arms and confirm the plasma-ball phase kicks
+in with the right cooldown/targeting, and confirm the Phase 3 countdown
+ring/detonation actually kills a ship caught inside it. The three
+"still open" tuning questions from the design spec remain genuinely
+open (instant-kill vs. heavy-damage framing for the Phase 3 blast,
+exact numeric tuning beyond what's now hardcoded as a starting point,
+plasma-ball lead-aim vs. straight-shot feel in practice) - built with a
+reasonable default for each, not re-litigated here. Not deployed -
+`debris/game` only.
+
+---
+
+## 2026-08-26 — Cross-boss stage conventions (announcement, hazard suppression, UFO cap, music)
+
+### What was built
+
+Requested directly, ahead of The Cardinal (or the random per-stage boss
+pool, `docs/roadmap.md`'s "Bosses" section) actually being built: four
+rules meant to apply to *every* boss stage, current and future, written
+generically now even though The Fracture is still the only trigger that
+exists in code.
+
+- **Boss name announcement, generalized.** `GameScene`'s
+  `showFractureAnnouncement()` (hardcoded "THE FRACTURE" text) is now
+  `showBossAnnouncement(name: string)`, called today as
+  `showBossAnnouncement('THE FRACTURE')` from `beginFractureAnnouncement()`.
+  Ready to take `'THE CARDINAL'` the moment that boss has an actual
+  trigger of its own.
+- **No Black Holes during a boss stage** - already true for The
+  Fracture; the gate (`isFractureEncounterActive()`) is renamed to
+  `isBossEncounterActive()`, generic rather than Fracture-specific, so
+  it reads correctly once a second boss exists, even though it's still
+  only ever true for The Fracture today.
+- **Boss stages cap concurrent UFOs at 4** - new
+  `UFO.maxConcurrentDuringBoss` (`GameConfig.ts`), the one exception to
+  the existing "no cap on concurrent UFOs" rule for normal play (item
+  4's own decision, untouched). Gated by the same
+  `isBossEncounterActive()` check; deliberately doesn't reset
+  `lastUfoSpawnAtMs` while capped, so a new UFO spawns immediately once
+  a slot frees up if the interval had already elapsed, rather than
+  waiting a fresh full interval from whenever the cap happened to clear.
+- **Per-stage-type looped music.** `systems/Music.ts` gained
+  `FRACTURE_MUSIC_KEY` (`the-fractured.mp3`) and `CARDINAL_MUSIC_KEY`
+  (`the-cardinal.mp3`, preloaded now even though nothing triggers it yet
+  - The Cardinal has no entity/trigger in code). Normal stages keep the
+  existing `GAMEPLAY_MUSIC_KEY` (`neon-horizon.mp3` - already the
+  existing gameplay track, not a new asset). New
+  `GameScene.playStageMusic(key)` swaps the currently-looping track,
+  no-ops if it's already the requested one (so back-to-back normal
+  stages never audibly restart the same song), called at every
+  stage-begin point: `create()` (round start), `beginNextLevel()`'s
+  normal-wave branch, and `materializeFracture()`. New
+  `currentStageMusicKey` field tracks which track is actually live, so
+  `enterPaused()`/`exitPaused()`/`goToMainMenu()` pause/resume/stop
+  whichever track is really playing instead of always assuming gameplay
+  music - pausing mid-Fracture-fight no longer leaks gameplay music back
+  in on resume.
+- Both new audio files were already sitting in `debris/music/`
+  (user-supplied, same as the existing `menu.mp3`/`neon-horizon.mp3`) -
+  no placeholder assets needed, just wiring.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` clean.
+- `npx vitest run` - 101/101, unchanged (this is all Phaser scene/audio
+  wiring, no new pure logic to unit test).
+- `npm run build` - clean production build (64 modules, unchanged).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed file - `200` each - plus a
+  direct check that all three music files (`the-fractured.mp3`,
+  `the-cardinal.mp3`, `neon-horizon.mp3`) actually serve - `200` each.
+
+### Not done yet
+
+The random per-stage boss-pool structure itself (`docs/roadmap.md`'s
+"Bosses" section) - today's single one-time Fracture trigger
+(`fractureIntroduced` latch) is unchanged, so none of this is
+exercisable for a second boss yet. The Cardinal has no entity/code at
+all still, only its design spec + visual mockup - `CARDINAL_MUSIC_KEY`
+is preloaded and ready, but nothing calls `playStageMusic(CARDINAL_MUSIC_KEY)`
+or `showBossAnnouncement('THE CARDINAL')` anywhere yet. No in-browser
+audio confirmation (no browser tool in this environment) - for the user
+to check against their own live dev server. Not deployed - `debris/game`
+only.
+
+---
+
+## 2026-08-25 — Dev-only stage timer
+
+### What was built
+
+Requested directly, explicitly a dev aid: "add a timer during stages on
+the top center screen, shows minutes, seconds, milliseconds of current
+stage, resets every stage." No ambiguity worth an `AskUserQuestion` here
+- the request specified placement, format, and reset trigger outright.
+
+- **New `utilities/StageTimer.ts`**: `formatStageTimer(elapsedMs): string`,
+  a pure `MM:SS.mmm` formatter (no hour digit - stages never run that
+  long), unit tested (`tests/stageTimer.test.ts`, 6 cases: zero,
+  sub-second, seconds+ms, double-digit minutes, fractional-ms flooring,
+  negative-input clamping).
+- **`GameScene.ts`**: new `stageElapsedMs`/`stageTimerText` fields. A
+  small `Text` sits just below the existing mode-label line at the top
+  center. Accumulated in `update()` via `stageElapsedMs += deltaMs`,
+  gated by the same `if (this.state !== 'playing') return;` the rest of
+  gameplay-only logic already uses - deliberately *not* read off a raw
+  `this.time.now` timestamp diff, since that keeps ticking through
+  pause/overlays and would've needed its own separate resume-tracking
+  logic to stay correct; accumulating only while actually playing gets
+  the "pauses automatically" behavior for free across every non-playing
+  state (paused, stage-clear overlay, the Fracture announcement,
+  initials entry, game over) with no extra bookkeeping.
+- **Resets to zero** at both of the game's actual stage-transition
+  points: `beginNextLevel()` (the normal next-wave path out of "STAGE
+  CLEARED") and `materializeFracture()` (the Fracture stage's own entry
+  point, reached via the boss announcement instead). Also reset at
+  round start (`create()`), same as every other per-round field.
+- **`docs/roadmap.md`**: landed as item 21, plus - per the same
+  request, "add to roadmap to remove the timer for final version" - an
+  explicit "Not yet started" entry listing exactly what removal touches,
+  so this doesn't get forgotten and accidentally ship.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` clean.
+- `npx vitest run` - 101/101 (was 95; +6 new `stageTimer.test.ts` cases).
+- `npm run build` - clean production build (64 modules, was 63).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled both changed/new files - `200` each.
+
+### Not done yet
+
+No in-browser confirmation of on-screen placement/legibility (no
+browser tool in this environment) - for the user to check against their
+own live dev server. Not deployed - `debris/game` only. This feature is
+explicitly temporary; see the roadmap's removal note above.
+
+---
+
+## 2026-08-25 — Separately-tracked high scores for Cooperative and Competitive
+
+### What was built
+
+Direct follow-up, requested on the spot: what the previous entry's
+roadmap note left as open questions ("what would even be ranked,
+per-mode vs. shared board") - resolved and implemented, extending the
+Single-Player-only leaderboard system to all three modes, each tracked
+independently.
+
+- **Backend (`debris-highscore-api`)**: `leaderboard.ts` gained
+  `VALID_MODES`/`Mode`/`isValidMode` and `filePathForMode(basePath, mode)`
+  - Single Player keeps its existing unsuffixed file path (no migration
+  risk to already-live data), Cooperative/Competitive each get a sibling
+  `-cooperative`/`-competitive.json` file. `server.ts`'s `GET`/`POST
+  /highscores` now read `mode` from the query string / JSON body,
+  400-ing on anything not in `VALID_MODES`. Caught and fixed before
+  shipping: the route dispatcher's `req.url === '/highscores'` exact
+  match would've broken the moment `GET` requests carried a `?mode=`
+  query string - now splits off the query string before comparing.
+  5 new tests in `leaderboard.test.ts` (17/17 passing).
+- **`systems/HighScoreApi.ts`**: `fetchLeaderboard`/`submitHighScore`
+  both now require a `mode: GameMode` argument, threaded into the query
+  string / POST body.
+- **`MenuScene.ts`**: one leaderboard panel per mode
+  (`leaderboardPanels`/`leaderboardCaches`, both `Record<GameMode, ...>`,
+  replacing the old single-panel fields), each built by a new
+  `createLeaderboardPanel(mode, centerX, top, width)` and aligned under
+  its own mode-toggle button (extending the previous entry's Single
+  Player alignment fix to all three). `refreshModeButtons()` shows only
+  the active mode's panel and fetches for that mode alone.
+- **`HighScoreScene.ts`**: takes a `mode` param via `init()`; headline
+  changed from a single "HIGH SCORES" title to `GAME_MODE_LABELS[mode]`
+  as the big title with "H I G H   S C O R E S" as a smaller subtitle
+  beneath it - "change the headlines of all 3 accordingly: game mode,
+  and below keep High Scores," decided.
+- **`GameScene.ts`**: the initials-entry flow (previously hardcoded to
+  Single Player) is now one shared path parameterized by
+  `mode`/`input`/`baseOverlayLines`, reused by all three round-outcome
+  branches (`finishSinglePlayerRound`, new `finishCompetitiveRound`, new
+  `finishCooperativeRound`) instead of duplicating the UI/update/confirm
+  flow three times. **Who enters initials**, resolved via
+  AskUserQuestion: Single Player, the player themself; Competitive, the
+  winner (`winner.input`); Cooperative, whichever player was still alive
+  last. Cooperative needed a new field for this -
+  `evaluateRoundOutcome` never actually returns an "alive at round end"
+  state for Cooperative (only `loss` or `continue`, since the mode has
+  no win condition at all), so "last standing" is tracked instead as
+  "last eliminated" via a new `lastEliminatedSlotIndex`, set at both of
+  Cooperative's own elimination call sites
+  (`processCommanderExpiry`, `processPendingCommanderHazardHits`).
+- **Docs**: `docs/gameplay.md` gained a "Global high scores" section (a
+  table of what's ranked and who enters initials, per mode) replacing
+  the old Single-Player-only bullet; `docs/art_direction.md`'s "Arcade
+  Marquee" entry and mode-toggle bullet updated for the three-panel/
+  mode-headline treatment; `DEPLOYMENT.md`'s PVC description updated to
+  mention three leaderboard files instead of one.
+
+### Verified
+
+- `debris/highscore-api`: `npx tsc --noEmit`, `npx eslint .` clean;
+  `npx vitest run` 17/17. Manual `curl` smoke test on an isolated port
+  and temp data directory (after finding and killing a stray leftover
+  server process from earlier in the session that was silently
+  answering on the port first chosen for this, which would otherwise
+  have made the test look like it passed against stale code): confirmed
+  400s on missing/invalid `mode`, and that all three modes read/write
+  genuinely separate files.
+- `debris/game`: `npx tsc --noEmit`, `npx eslint .` clean; `npx vitest
+  run` clean (existing `highScoreApi.test.ts` call sites updated to pass
+  a mode); `npm run build` clean.
+- Transpile smoke check against the user's own already-running dev
+  server, same as the previous entry.
+
+### Not done yet
+
+No in-browser confirmation of the three-panel menu layout or the
+Cooperative/Competitive initials-entry flow end-to-end (no browser tool
+in this environment) - static verification only, for the user to check
+against their own live dev server. Not deployed - `debris/game` and
+`debris/highscore-api` only.
+
+---
+
+## 2026-08-25 — TOP 3 panel aligned to the Single Player button
+
+### What was built
+
+Direct follow-up: the previous entry's panel resize/reposition attempts
+were only ever shown as HTML mockup previews, which turned out to be an
+unreliable way to verify this - three preview iterations in a row still
+didn't land right (a center-vs-top-left origin mix-up in one, a
+container-query font unit that may not have resolved at all in another,
+and a final one the user reported simply "does not work"). Rather than
+keep iterating on approximations, made the actual change directly in
+`MenuScene.ts` this time and verified it the normal way (tsc/eslint/
+tests/build), for the user to check live against their own
+already-running dev server (Vite HMR) instead of another mockup.
+
+- **`MenuScene.createModeToggle()`**: the mode-button loop now captures
+  `singlePlayerCenterX` (the Single Player button's own center-x) as it
+  builds the row. The leaderboard panel's width and center-x are now
+  literally `width` (the same constant every mode button already uses)
+  and `singlePlayerCenterX` - not `360` and `ARENA_WIDTH / 2`, two
+  independent numbers with no relationship to anything else on screen.
+  "Top 3 box aligned with single player box," decided - the panel now
+  reads as belonging to that specific button (same edges) rather than a
+  separately-floating box that happened to be centered on the same
+  screen.
+- Vertical position/height/fonts inside the panel are unchanged from
+  the previous entry - only the width and horizontal position moved.
+
+### Verified
+
+- `npx tsc --noEmit` - caught a real mistake along the way (a
+  `let singlePlayerWidth` that was never actually reassigned, since
+  every mode button already shares the same `width` constant - `eslint`
+  flagged it, removed rather than silenced).
+- `npx eslint .`, `npx vitest run` (95/95, unchanged) - clean.
+- `npm run build` - clean production build (63 modules).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled the changed file - `200`.
+
+### Not done yet
+
+No in-browser confirmation this actually reads as aligned - only static
+verification, no browser tool in this environment. This entry
+deliberately skipped another mockup preview in favor of the user
+checking the real, already-running page directly. Also added to
+`docs/roadmap.md`'s "Future ideas" (requested separately, not built):
+high score boxes for Cooperative and Competitive - genuinely open
+questions there (what would even be ranked, per-mode vs. shared board),
+not a small follow-up like this entry. Not deployed - `debris/game` only.
+
+---
+
+## 2026-08-25 — Fixed the top-3 panel overlap, added click support to HighScoreScene
+
+### What was built
+
+Direct follow-up against the previous entry, reported with a screenshot:
+the TOP 3 mode-select panel's hint text ("CLICK FOR FULL LEADERBOARD")
+visually overlapped the 3rd score row. Two changes, one bug fix and one
+requested addition - `AskUserQuestion`d first on whether the panel's
+click-to-open should stay at all (given the bug, the intent was
+ambiguous from the report alone) - answer: keep it, just fix the overlap.
+
+- **Layout bug fixed** (`MenuScene.ts`): the previous panel size/
+  positions were a guess that didn't hold up against real measured text
+  height once actually rendered - `panelHeight` 95 -> 100, and every
+  child element (title/rows/hint) now stacked top-down from
+  `leaderboardTop` with its own explicit offset, rather than the hint
+  text being back-calculated from an assumed total content height that
+  turned out wrong. Font sizes trimmed slightly (title 15->13px, rows
+  16->14px, hint 12->11px, row `lineSpacing` 4->2) to fit the same
+  ~115px vertical budget between the mode toggle and the player cards
+  comfortably instead of exactly.
+- **HighScoreScene's return prompt now also accepts a click**, on
+  request - reverses the previous entry's deliberate choice to leave
+  `pointerdown` out (that choice was reasoned through at the time to
+  avoid the *opening* click bouncing straight back to the menu).
+  Resolved without reintroducing that risk: `waitForKeyPress()` now
+  delays attaching the `pointerdown` listener by `CLICK_GRACE_MS`
+  (400ms, `this.time.delayedCall`) instead of wiring it up the instant
+  the scene exists - the opening click is already fully dispatched to
+  MenuScene before this scene is even created, so there's nothing here
+  yet for it to hit. Prompt text updated to "PRESS ANY KEY OR CLICK TO
+  RETURN" to match.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 95/95 passing, unchanged (layout/input wiring, no
+  new pure logic).
+- `npm run build` - clean production build (63 modules).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled both changed files - `200`.
+
+### Not done yet
+
+No in-browser confirmation the overlap is actually gone or that the
+400ms click-grace window feels right (too short still risks the bounce,
+too long reads as unresponsive) - only static verification, no browser
+tool in this environment. Not deployed - `debris/game` only.
+
+---
+
+## 2026-08-25 — High score screen (80s arcade style) + game-over goes to main menu
+
+### What was built
+
+Two related, directly-requested changes to the round-end/menu flow.
+
+- **Leaderboard trimmed to top 3 on the mode-select screen**
+  (`MenuScene.ts`) - was a two-column top-10 (`leaderboardLeftText`/
+  `leaderboardRightText`), now a single centered column
+  (`leaderboardText`) inside a bordered, clickable panel
+  (`leaderboardBorder`), same `Rectangle` + `Text` + `pointerdown`
+  "button" pattern every other interactive element on this screen
+  already uses. The panel disables/re-enables its own interactivity
+  alongside its visibility (only live while Single Player is selected).
+- **New `HighScoreScene`** (`scenes/HighScoreScene.ts`, new file,
+  registered in `main.ts`'s scene list) - "looks like the Highscore
+  screen of an 80s arcade, but in the style and colors of Debris,"
+  decided. Full top 10, one centered monospace column, rank 1 biggest
+  and gold (reusing `COLORS.fractureLauncher`, not a new color), ranks
+  2-3 a step down in white, the rest in the same grey every other body
+  text on the screen uses. Title reuses the start screen's own "DEBRIS"
+  glow treatment (white fill, Player 1 cyan stroke + `setShadow`)
+  rather than inventing a second logo style. Gets the game's existing
+  viewport-level CRT overlay for free, like every other scene - nothing
+  scene-specific needed for that half of "80s arcade." Receives
+  MenuScene's already-fetched leaderboard via `init(data)` for an
+  instant render, then re-fetches for freshness the same way MenuScene's
+  own leaderboard already does.
+  - **"Any key to return," implemented as keyboard/gamepad only,
+    deliberately no `pointerdown`** - unlike GameScene's own
+    `waitForKeyPress`. This scene is only ever *entered* by a click (the
+    mode-select panel), so accepting clicks here too risked that same
+    click bouncing straight back to the menu it just came from - not
+    guessed at, reasoned through before writing the code, since nothing
+    else in this codebase had exercised "register a pointerdown listener
+    in `create()` of a scene that was itself just opened by a
+    pointerdown" before.
+- **GAME OVER no longer restarts, it returns to the main menu**
+  (`GameScene.enterGameOver()`) - was `scene.restart({ mode: this.mode
+  })`, now `goToMainMenu()`, the exact same cleanup (stops gameplay
+  music/thrust sound) the pause menu's own "MAIN MENU" button already
+  used, reused rather than duplicated. Applies uniformly to every
+  game-over path (Competitive win/draw/loss, Cooperative loss, Single
+  Player loss with or without a qualifying high score) since they all
+  funnel through that one method. All six "PRESS ANY KEY TO RESTART"
+  overlay lines updated to "PRESS ANY KEY FOR MAIN MENU" to match - a
+  stale prompt would have been actively misleading. The Pause menu's own
+  explicit RESTART button is untouched - a deliberate manual restart is
+  a different action from what happens automatically once a round ends.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean (one real mistake caught by
+  `tsc` along the way: naming a scene field `cache` collides with
+  `Phaser.Scene`'s own built-in `cache` property/CacheManager - renamed
+  to `entries`).
+- `npx vitest run` - 95/95 passing, unchanged (scene/UI wiring, no new
+  pure logic to extract).
+- `npm run build` - clean production build (63 modules, up from 62).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed/new file - all `200`.
+
+### Not done yet
+
+No in-browser click-through of the actual flow (menu panel click ->
+HighScoreScene -> any key -> back to menu; game over -> any key -> main
+menu) - only static verification and a transpile check, no browser tool
+in this environment. Not deployed - `debris/game` only.
+
+---
+
+## 2026-08-25 — Fixed a real crash: Fracture arrays updated before being filtered
+
+### What was built
+
+User report: "when hit by a golden shard, the game crashed / freezes."
+Real bug, not a one-off - a repeat of a pattern this codebase already
+hit and fixed once before (`GameScene.update()`'s own comment calls it
+out by name: "This was the real 'crash when hitting a rock' bug").
+
+`fractureFragments`/`fractureSwarm`/`fractureShards` were only filtered
+by `isAlive` *after* their own `.update()` calls ran each frame, not
+before, unlike every other entity array (`asteroids`, `projectiles`,
+`shields`, `ufos`, `ufoShots`, `commanders`) which are filtered
+immediately after pending-hit processing, specifically so an entity
+destroyed this frame never has `.update()` called on its
+already-destroyed Phaser GameObject. Since
+`processPendingFractureShardHits`/`processPendingFractureFragmentHits`/
+`processPendingScrapPickups` all run earlier in the same `update()` and
+can destroy a shard/Fragment/Swarm bit, the later
+`this.fractureShards.forEach((shard) => shard.update(...))` (and the
+Fragment/Swarm equivalents) would call `.update()` on that
+just-destroyed entity - it touches `this.visual` internally
+(`setRotation`, `setPosition`, `g.clear()`), which throws once the
+underlying GameObject is gone. An uncaught exception inside `update()`
+stops Phaser's `requestAnimationFrame` loop entirely - the "freeze" the
+user actually saw, not a crash dialog.
+
+**Only reported via a shard hit, but not actually shard-specific**:
+Fragment kills (shooting one down) and scrap pickups (touching a Swarm
+piece) were exactly as broken, just not yet the specific thing the user
+happened to trigger and notice.
+
+Fix: moved the `fractureFragments`/`fractureSwarm`/`fractureShards`
+filter calls to the early filter block, right alongside the six
+existing arrays, before any entity `.update()` runs this frame -
+exactly the fix already on record for the original version of this bug.
+`fractureLasers` was never at risk the same way (it self-destroys
+*inside* its own `update()`, not from an earlier `process*` call) and
+keeps its existing later-block filter unchanged. The later block still
+also re-filters `fractureFragments`/`fractureSwarm`/`fractureShards` -
+not redundant: `updateScrapCountdown` (Swarm, on countdown expiry) and
+each entity's own lifetime-expiry self-destroy (Fragment/Shard) both
+still happen after the early filter, same reason the original six
+arrays are also filtered twice already.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 95/95 passing, unchanged (a call-ordering fix, not
+  a logic change - nothing here was extractable pure logic to test).
+- `npm run build` - clean production build (62 modules).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled the changed file - `200`.
+
+### Not done yet
+
+No in-browser playtest confirming the actual crash is gone (no browser
+tool in this environment) - the fix is a direct, mechanical application
+of a pattern this codebase has already proven fixes this exact failure
+mode once before, not a guess. Not deployed - `debris/game` only.
+
+---
+
+## 2026-08-25 — The Fracture, pass 3: real attacks, ship contact, Swarm as scrap
+
+### What was built
+
+Direct follow-up request against pass 2's split-but-otherwise-inert
+Fracture: real attacks for the Core and every Fragment role, ship
+contact ("behave like rocks"), forced Black Hole removal on spawn, and
+a full redesign of Swarm from a shootable hazard into a scrap pickup.
+Given the number of load-bearing forks, three were resolved via
+`AskUserQuestion` before writing any code: whether Swarm contact is
+lethal (always safe, pure pickup), whether the stage-clear gate needs
+every scrap piece collected (no - the user's own custom answer replaced
+both offered options with a 10-second on-screen countdown instead), and
+who the launcher Fragment aims at (a random living ship, not nearest).
+
+- **Core (Phase 1) rework**: now spawns off-screen above top-center
+  (`FRACTURE_SPAWN_OFFSCREEN_Y`) and drifts down
+  (`FRACTURE.driftSpeedPxPerStep`) until it reaches arena-center, then
+  stops (`Fracture.update()` now takes `arenaHeight`, detects arrival,
+  zeroes velocity) - matches the original "floating in the center of
+  the arena" pitch, just arrived at over a few seconds instead of
+  instantly. Once stopped, fires a long laser in a random direction
+  every 2s, one at a time (`Fracture.canFireLaser`/`recordLaserFired`,
+  same readiness-check shape `Ufo.canFire`/`recordFired` already uses).
+- **`entities/FractureLaser.ts`** (new): a long thin hazard, unlike
+  every other circular thing in this game. Not Matter-backed - a
+  rotated-rectangle body would've been a first for this codebase and
+  untestable without a live browser, so hit-testing is a plain
+  point-to-segment distance check instead (`systems/BeamGeometry.ts`,
+  tested), same "pure math hazard" style the Black Hole already
+  established. Telegraph (dim line) → active (thick lethal line) →
+  fade, self-destroying once its own timeline finishes, same shape as
+  `DestructionBurst`.
+- **Fragment (Phase 2) roles are real attacks now**, not cosmetic
+  flourishes:
+  - 🔴 **Aggressive** - a pulsing ring out to 3x its own radius every
+    5s, lethal only while expanding. Pure radius-over-time math lives
+    in `systems/FractureRing.ts` (tested) so the timing/growth curve
+    doesn't need a live entity to verify.
+  - 🔵 **Gravity** - "acts like a small black hole," decided: reuses
+    `systems/BlackHoleGravity.ts`'s `computeGravityForce` directly
+    (`GameScene.applyFractureGravityForces`, new, mirrors
+    `applyBlackHoleGravityForces` almost exactly) against the same
+    entity scope the real Gravity Well pulls (ships/asteroids/UFOs/
+    Shields/adrift Commanders), out to 3x the Fragment's own radius.
+  - 🟡 **Launcher** - fires a gold shard
+    (`entities/FractureShard.ts`, new - a jagged gold `Graphics`
+    projectile, same constant-velocity/sensor/wrap shape as `UfoShot`)
+    at a random living ship every 3s
+    (`FractureFragment.canFireShard`/`recordShardFired`).
+  Removed the old cosmetic-only gravity-particle-and-decorative-fling
+  code path in favor of the real thing where it now overlaps (the
+  particle spiral stays as a visual, launcher's old fading-dot fling is
+  gone, replaced by an actual `FractureShard`).
+- **Ship contact, "behave like rocks," decided**: the Core and every
+  Fragment's collision mask now includes `CATEGORY.SHIP` alongside
+  `CATEGORY.PROJECTILE`. Resolved in `handleCollision` exactly like an
+  asteroid ram already is - straight into the existing `pendingShipHits`
+  queue (Shield absorbs it, same as every other hazard), no new
+  resolution logic needed. Neither side of the contact damages the
+  Fracture itself, mirroring that an asteroid ram doesn't destroy the
+  asteroid either. Scoped to ships only - asteroids still pass through
+  every tier untouched, not requested this round.
+- **Swarm (Phase 3) redesigned as a pickup, decided**: no longer
+  shootable at all (its collision mask dropped `CATEGORY.PROJECTILE`,
+  keeping only `CATEGORY.SHIP`, and it's now `isSensor: true`) - touching
+  one is always safe and adds 1 to that player's new `scrap` field
+  (`PlayerSlot.scrap`), shown in their HUD (`refreshAllPlayerHud`) right
+  after their lives/status line, only once nonzero.
+  `entities/FractureSwarmBit.ts` lost its `hitsRemaining`/`takeHit`
+  machinery entirely - a pickup doesn't have "hits." Resolved via a new
+  `pendingScrapPickups` queue, same shape as `pendingShieldPickups`.
+- **10-second scrap-collection countdown**: once the last Fragment dies
+  (`processPendingFractureFragmentHits` checks
+  `fractureFragments.every(f => !f.isAlive)`), `beginScrapCountdown`
+  starts a visible on-screen timer (`GameScene.scrapCountdownText`,
+  the game's first numeric HUD countdown). When it runs out,
+  `updateScrapCountdown` destroys whatever Swarm pieces are left
+  uncollected - collection was always optional, never gating the
+  stage-clear check itself.
+- **"If Fracture appears, remove all existing black holes," decided**:
+  `materializeFracture()` now force-despawns an active Black Hole the
+  instant the Core appears, not just blocks new spawns (the previous
+  pass's behavior) - `isFractureEncounterActive()` also gained the
+  countdown window to its definition, so Black Hole spawning stays
+  suppressed through scrap collection too.
+- Two new pure-logic modules, both tested the same way every other rule
+  in this codebase is: `systems/BeamGeometry.ts`
+  (`distanceToSegment`/`isPointOnBeam`) and `systems/FractureRing.ts`
+  (`ringPhaseAt`/`ringLethalRadiusAt`).
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 95/95 passing (13 new: 6 in `beamGeometry.test.ts`,
+  7 in `fractureRing.test.ts`).
+- `npm run build` - clean production build (62 modules, up from 58).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed/new file directly - all
+  `200`.
+
+### Not done yet
+
+Asteroid contact with any Fracture tier (still ships-only), and the
+death/implosion sequence (`docs/roadmap.md`'s "The Fracture" section) -
+a lethal hit at the Core/Fragment tiers still just destroys/splits it
+outright, no implosion/pull-everything-in/explosion beat. Swarm's own
+visual redesign ("make them look like broken parts of Fracture") is
+explicitly waiting on the user's approval before being built - flagged,
+not forgotten. No in-browser playtest of feel (does the laser's 2s
+cooldown read as fair, does the gravity Fragment's pull feel meaningfully
+different from the real Gravity Well, does a random-ship-targeted
+launcher shard feel fair in 4-player Cooperative where it might always
+pick the same unlucky player) - only static verification and a
+transpile check. Not deployed - `debris/game` only.
+
+---
+
+## 2026-08-25 — The Fracture, pass 2: Core → Fragment → Swarm
+
+### What was built
+
+Direct follow-up request against the previous entry's entry-sequence-only
+Fracture: specific HP tuning per tier, the actual splitting mechanic,
+movement for the split-off pieces, and suppressing the Gravity Well
+during the fight. All four landed together, since they're really one
+change (the splitting logic needs the HP numbers to know when to split,
+and the "no black hole" rule only makes sense once there's a multi-stage
+fight worth protecting from interruption).
+
+- **HP retuned**: `FRACTURE.maxHits` 30 → 20 (Core). New
+  `fragmentMaxHits` (10, Phase 2) and `swarmMaxHits` (1, Phase 3, one-
+  shot like every other enemy in the game).
+- **Splitting, not just dying**: `GameScene.processPendingFractureCoreHits`
+  no longer ends the encounter on the Core's death - it now calls
+  `spawnFractureFragments()`, which creates one `FractureFragment` per
+  role (🔴 aggressive, 🔵 gravity, 🟡 launcher - always all three, not
+  three random picks) at the Core's death position, mirroring exactly
+  how an asteroid spawns its two children on split. Each Fragment's own
+  death (`processPendingFractureFragmentHits`) calls
+  `spawnFractureSwarm()`, scattering `FRACTURE.swarmCountPerFragment`
+  (6) `FractureSwarmBit`s outward - up to 18 total across the whole
+  fight, reading as "dozens" per the original pitch without ever having
+  that many alive from one single Fragment. Swarm bits
+  (`processPendingFractureSwarmHits`) are the end of the line - no
+  further split.
+- **Two new entity classes**, both reusing `systems/AsteroidShape.ts`'s
+  jagged-polygon generator and the exact `applyHit()`/materialize-
+  invulnerability pattern the Core already established:
+  - `entities/FractureFragment.ts` - a smaller Shard Cluster (three
+    shards instead of six), core/tether tinted per role. The role only
+    drives a cosmetic idle flourish so far, not a real attack: aggressive
+    jitters its shards, gravity spirals small particles inward (visual
+    homage to the Black Hole's own accretion disk, no actual pull force),
+    launcher periodically flings a small decorative shard outward that
+    fades over its flight.
+  - `entities/FractureSwarmBit.ts` - no shared core at all, just one
+    small jagged shard drifting and tumbling on its own.
+- **Fragments and Swarm bits actually move** - "boss fracture do move in
+  phase 2," decided directly, unlike the stationary Core. Plain
+  constant-velocity drift set at spawn (`FRACTURE.fragmentSpeed` 0.4,
+  `swarmSpeed` 0.9 - Swarm faster than Fragment, same "smaller is
+  faster" convention `docs/gameplay.md` already uses for asteroid size
+  tiers), with the same screen-wrap every other entity gets.
+  Deliberately not player-seeking - "pure momentum, no steering," same
+  philosophy asteroids already use.
+- **Stage-clear gate extended a second time**: now
+  `!this.isFractureEncounterActive()` (true while the Core, any
+  Fragment, or any Swarm bit is still alive), not just `!this.fracture` -
+  the fight isn't over until every tier is gone.
+- **"During boss do not spawn black hole," decided**: the same
+  `isFractureEncounterActive()` check now also gates the Gravity Well's
+  spawn timer, right next to the existing UFO/Shield timers in
+  `GameScene.update()`. An already-active Gravity Well at the exact
+  moment the boss triggers is left to run out its own lifespan rather
+  than force-despawned mid-flight - only *new* spawns are suppressed,
+  a deliberate simplification worth flagging rather than silently
+  deciding either way.
+- Renamed `pendingFractureHits` → `pendingFractureCoreHits` for clarity
+  now that there are three parallel pending-hit queues
+  (`pendingFractureFragmentHits`, `pendingFractureSwarmHits` alongside
+  it), all resolved the same way every other pending-hit queue in this
+  file already is - queued in `handleCollision` (Matter is still
+  mid-step there), resolved in `update()`.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 82/82 passing, unchanged (`applyHit()` itself didn't
+  change - both new entity classes reuse the exact same tested function,
+  just with different `hitsRemaining` starting values).
+- `npm run build` - clean production build (58 modules, up from 56).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed/new file directly - all
+  `200`.
+
+### Not done yet
+
+Same standing list as the previous entry, still accurate: no actual
+attacks (the Phase 2 role flourishes are cosmetic, not gameplay effects
+on ships), no ship/asteroid contact at any tier, no death/implosion
+sequence. No in-browser playtest of feel (does the Fragment/Swarm split
+read as escalating or just more of the same, do the HP numbers feel
+right relative to each other, does suppressing the Gravity Well actually
+matter or was it never colliding with the fight in practice) - only
+static verification and a transpile check. Not deployed - `debris/game`
+only.
+
+---
+
+## 2026-08-25 — The Fracture, first pass: trigger, announcement, materialize
+
+### What was built
+
+Debris's first boss. Went through the now-established design flow for
+this project: an `AskUserQuestion` on the two load-bearing forks before
+writing any code (does defeating it become required to clear the stage,
+or are the 4 rocks alone sufficient; does it apply to all three modes or
+just Cooperative/Competitive) - both came back "yes, all the way" -
+then a live concept review for the intact Phase 1 silhouette (three
+options: Cross Formation, Faceted Monolith, Shard Cluster), **Shard
+Cluster** chosen, then that same concept extended live through Phase 2
+(the three-fragment split) and Phase 3 (the swarm) for reference, before
+any implementation started.
+
+Explicitly scoped down to just the *entry sequence* on request - "let's
+build it into the game" was specifically about trigger + announcement +
+materialize, not the full Core → Fractured → Swarm boss described in
+`docs/roadmap.md`'s "The Fracture" section. What actually landed:
+
+- **Trigger**: the very first stage clear of a round (all three modes)
+  diverts into the boss sequence instead of a normal next wave -
+  `GameScene.beginNextLevel()`'s `fractureIntroduced` flag latches so
+  this only ever happens once per round.
+- **Announcement**: a 3-second "THE FRACTURE" banner in the boss's own
+  danger-red, at 96px - bigger than every other overlay's 48px, and the
+  game's first *non-interactive, timed* overlay (`GameScene.
+  showFractureAnnouncement()` + `time.delayedCall`) - every other one
+  (STAGE CLEARED, GAME OVER, PAUSED) waits for a keypress instead.
+  Physics stays paused throughout, same as every other overlay state.
+- **Materialize**: fades/scales in at **top-middle**
+  (`FRACTURE_SPAWN_Y`), together with 4 large asteroids spawned via the
+  existing `spawnWave()` - no new asteroid-spawn path needed. The
+  fade/scale-in itself is `entities/Fracture.ts`'s own ease-out-cubic
+  ramp over `FRACTURE.materializeDurationMs`, same curve `ScorePopup`
+  already uses.
+- **A basic destructible Phase 1**: Debris's first multi-hit enemy -
+  every other enemy (asteroids, the UFO) dies in one shot.
+  `systems/FractureCombat.ts`'s `applyHit()` (tested) is the whole rule;
+  `FRACTURE.maxHits` (30) is a pure starting guess, same standing caveat
+  as every other untested constant in `GameConfig.ts`. A new
+  `CATEGORY.FRACTURE` collision category, and `Projectile`'s own mask
+  extended to include it - the only category that can hit it at all
+  right now (see "Not done yet").
+  Invulnerable while still materializing (`Fracture.isMaterializing()`)
+  - a shot lands and gets consumed, but doesn't count, same fairness
+  spirit as `SHIP.respawnInvulnerabilityMs`.
+- **Stage-clear condition extended**: `if (this.asteroids.length === 0
+  && !this.fracture)` - the round doesn't advance until it's dead too,
+  per the `AskUserQuestion` answer. On death (hitsRemaining reaches
+  zero): destroyed outright (no split - that's Phase 2, not built),
+  burst + shake + the game's single biggest score payout so far
+  (`FRACTURE.score` = 1000) via the existing `awardScore()`/`ScorePopup`
+  path, same as any other kill.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 82/82 passing (3 new in `fractureCombat.test.ts`).
+- `npm run build` - clean production build (56 modules, up from 54).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled every changed/new file
+  (`Fracture.ts`, `FractureCombat.ts`, `GameScene.ts`, `GameConfig.ts`,
+  `Projectile.ts`, `CollisionCategories.ts`) directly - all `200`.
+
+### Not done yet
+
+Everything past the entry sequence, on purpose - see
+`docs/roadmap.md` item 19 for the full list: Phase 2 (splitting into the
+aggressive/gravity/launcher trio), Phase 3 (the swarm), any actual
+attacks (laser, crystal projectiles), the death/implosion sequence, and
+ship/asteroid contact - it currently has **no** collision interaction
+with anything except a player's own shot (its collision mask is
+`CATEGORY.PROJECTILE` only), so ships and asteroids currently fly
+straight through it. Also stale against the original pitch: "The
+Fracture" future-ideas section said "anchored at the arena's center" -
+this pass materializes at top-middle instead, per this session's more
+specific instruction; `docs/roadmap.md` flags the discrepancy for
+whoever picks up "slow movement" next. No in-browser playtest of feel
+(is 3 seconds the right announcement length, does top-middle read well,
+does 30 hits feel appropriately huge) - only static verification and a
+transpile check. Not deployed - `debris/game` only.
+
+---
+
+## 2026-08-25 — Score popup on hit
+
+### What was built
+
+Requested directly: "when a shot hits a target, a little number popup
+should appear with the value that is added to the players score... in
+the color of the player." Went through the established "show me before
+building" flow, `AskUserQuestion` not needed here since the request was
+already unambiguous.
+
+- Reviewed 3 live-rendered motion concepts (Classic Rise, Punchy Pop,
+  Drift &amp; Glow), each firing on a loop cycling all 4 player colors and
+  the game's real score values (+20/+50/+100/+200), in the game's own
+  monospace font. User picked **Drift &amp; Glow** (C) - sideways drift,
+  gentle rotation, outlined text, soft glow, floatier than the plain
+  option.
+- Follow-up request: "C, but smaller. size of the smallest rocks." -
+  re-reviewed at true 1:1 pixel scale (no CSS/canvas stretching) next to
+  a real small-rock silhouette drawn at its exact radius
+  (`ASTEROID.small.radius`, 8px), side by side with the original size,
+  so the size claim was an actual pixel measurement rather than a
+  description. Confirmed, then built at that scale.
+- **`entities/ScorePopup.ts`** (new): a single `Phaser.GameObjects.Text`,
+  not the `Graphics`-particle pattern `DestructionBurst` uses - that
+  pattern is about avoiding Phaser's `ParticleEmitter` for *many*
+  decorative dots, not a rule against `Text`, which the HUD already uses
+  throughout. Same hand-managed `update()`/`isAlive`/`destroy()` shape as
+  every other transient effect in this game (`GameScene` drives it every
+  frame, no Phaser tween). Rise/drift/rotation/fade are plain eased math
+  against elapsed time; the glow is `Text.setShadow(...)`, a blurred
+  shadow standing in for the reviewed concept's canvas radial gradient -
+  close enough at this size to not be worth a second `Graphics` object
+  per popup.
+- **`GameConfig.ts`**: new `SCORE_POPUP` block - `fontSizePx: 11`
+  (matches the reviewed rock-sized concept, was 26px in the first
+  review), plus proportionally-scaled `glowBlurPx`, `strokeWidthPx`,
+  `driftRange`, `riseDistancePx`, `rotationRad`, `lifespanMs: 650`.
+- **`GameScene.ts`**: `awardScore(ownerIndex, amount)` gained a required
+  `position: Vector2` parameter (the hit location) and now spawns a
+  `ScorePopup` there in `COLORS.players[ownerIndex]` - both existing call
+  sites (`destroyAsteroid`, the UFO-kill branch of
+  `processPendingUfoHits`) already had the position in scope, just
+  weren't passing it through. New `scorePopups` array, reset in
+  `create()`, updated/filtered every frame alongside the existing
+  `bursts` array.
+- Also fixed a doc staleness this entry surfaced: `docs/art_direction.md`'s
+  Black Hole section still described the gravity-field glow as drawn at
+  `gravityRadius` - stale since the earlier same-day whole-screen-gravity
+  change split that into a separate visual-only `glowRadius`. Corrected
+  while in the file.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 79/79 passing, unchanged (no new pure logic to
+  test - `ScorePopup` is presentation-only, driven by `GameConfig`
+  constants already covered by the concept review, not novel game
+  rules).
+- `npm run build` - clean production build (54 modules, up from 53).
+- Transpile smoke check against the user's own already-running dev
+  server (port 5173): curled `ScorePopup.ts` and the changed
+  `GameScene.ts` directly, both `200`.
+
+### Not done yet
+
+No in-browser playtest of the popup's timing/legibility during actual
+play (does 650ms read as too fast/slow mid-fight, does the glow read at
+11px against a busy field) - only static verification and a transpile
+check. Not deployed - `debris/game` only, ships with the next
+`rheinarts:<tag>` portal build/push/deploy.
+
+---
+
+## 2026-08-25 — Gravity Well: whole-screen reach + real spawn/pause cadence
+
+### What was built
+
+Follow-up tuning request on the same-day Gravity Well feature (previous
+entry), directly specified: "the black hole should affect the whole
+screen, the farther away the lesser the effect," and a concrete
+spawn/pause cadence - "spawn for 30 seconds, then disappear, then pause
+60 seconds before spawning again."
+
+- **`GameConfig.ts`**: `BLACK_HOLE.gravityRadius` 260 → 2300px, past the
+  1920x1200 arena's own diagonal (~2265px), so the linear falloff in
+  `computeGravityForce` never hard-cuts to zero anywhere in the playable
+  field - every point on screen now feels *some* pull, fading out
+  gradually rather than sharply within a small local radius.
+  `pullForceMax` is untouched (still weak enough to out-thrust right at
+  the event horizon) - only the *reach* changed, not the near-field
+  strength.
+- **Split the visual glow from the physics radius.** `entities/BlackHole.ts`
+  drew its outer glow rings straight from `gravityRadius` - fine at
+  260px, but a literal 2300px halo would just tint the whole screen
+  instead of reading as a hazard. Added a separate `BLACK_HOLE.glowRadius`
+  (260, the old value) for the visual only; the gameplay force still
+  reaches the whole arena, the drawn glow stays a compact ring near the
+  hole itself.
+- **Fixed a real bug in the spawn timer** while wiring up the new 30s/60s
+  cadence: the previous entry's `lastBlackHoleSpawnAtMs` was set once at
+  scene start and never reset, so once past the first spawn delay the
+  "only respawn after `spawnIntervalMs`" check was permanently
+  satisfied - a black hole would despawn and then respawn essentially
+  instantly, with no real pause at all. Renamed/split into
+  `blackHoleDespawnedAtMs` (reset in `despawnBlackHole()`, which now
+  takes `nowMs`) and `blackHoleSpawnedAtMs`, checked against two
+  distinct config values - `BLACK_HOLE.activeDurationMs` (30000, was
+  `lifespanMs` at 14000) and `BLACK_HOLE.pauseDurationMs` (60000, was the
+  buggy `spawnIntervalMs`).
+
+No changes to `systems/BlackHoleGravity.ts` itself - the pure
+force/capture/lethal functions didn't need new logic, only different
+config values fed into the existing linear falloff, plus the `GameScene`
+timer fix above.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 79/79 passing, unchanged (the pure gravity math
+  didn't change, only config values and `GameScene`'s own timer state).
+- `npm run build` - clean production build.
+- Dev server already running on the user's own port (5173) picks this up
+  live via HMR - not separately smoke-checked this entry.
+
+### Not done yet
+
+No in-browser playtest of the new whole-screen falloff or the 30s/60s
+cadence - static verification only. Not deployed - `debris/game` only,
+ships with the next `rheinarts:<tag>` portal build/push/deploy.
+
+---
+
+## 2026-08-25 — Gravity Well (mode-agnostic black hole hazard)
+
+### What was built
+
+Next roadmap item after the leaderboard work: "Black hole that can
+appear." Scoped through `AskUserQuestion` into a periodic, fixed-in-place
+hazard that pulls *everything* toward it (ships, asteroids, the UFO,
+shields, adrift commanders alike — no mode carve-outs), lethal only in a
+tiny core, but with the event horizon itself as a genuine point of no
+return: cross it and you're captured, no escaping back out under your
+own thrust.
+
+**Physics** (`systems/BlackHoleGravity.ts`, pure and unit-tested): three
+concentric zones per `BLACK_HOLE` config in `GameConfig.ts` -
+`gravityRadius` (a distance-falloff pull, escapable), `eventHorizonRadius`
+(inescapable - velocity gets overridden, not just nudged, and pulls
+harder the closer to center), `lethalRadius` (destroyed on contact).
+Getting the two-pass Matter.js ordering right in `GameScene.ts` took
+noticing that `Ship.update()` unconditionally re-clamps/re-sets velocity
+from thrust input *every frame*, regardless of what else touched it that
+frame:
+
+- Gravity (escapable zone) is applied via `applyForce`, and that call has
+  to happen *before* `ship.update()` runs, so it blends with thrust
+  instead of being immediately overwritten by it.
+- Capture (event-horizon zone) is applied via `setVelocity`, and that
+  call has to happen *after* `ship.update()` runs, so it has final say
+  and can't be clobbered by the ship's own per-frame clamp.
+
+Lethal hits for ships/UFO reuse the existing `pendingShipHits` /
+`pendingUfoHits` queues (the UFO push sets `awardScore: false`, since
+falling into a hazard isn't a player kill) rather than a parallel
+destruction path, so a black hole elimination goes through the exact
+same explosion/respawn/scoring machinery as every other death - one
+source of truth for "how does something die," not a second one bolted on
+for this hazard specifically.
+
+**Judgment call**: a Shield absorbs the lethal-center hit instead of
+dying to it (consistent with Shield already being the answer to "how do
+I survive things that would otherwise kill me" everywhere else in
+Debris), and on absorption the ship gets teleported back out past the
+event horizon and given brief invulnerability (`shieldEjectSpeed`,
+`shieldEjectInvulnerabilityMs`) - straight `setVelocity`-only recovery
+would immediately get re-captured by the same field it just escaped,
+since it's still inside the event horizon the instant the shield pops.
+
+**Visual** (`entities/BlackHole.ts`, no Matter body - GameScene runs pure
+distance checks against it every frame, same non-physics-entity pattern
+as `SpaceStation`): reviewed 4 live-rendered concepts (Accretion Disk,
+Warning Rings, Spiral Vortex, and a 4th - Lensed Disk - added mid-review
+after the user linked a NASA black-hole visualization page as reference,
+`https://svs.gsfc.nasa.gov/13326`, which I fetched directly). Concept A,
+Accretion Disk, was chosen: layered concentric circles standing in for a
+radial gradient (Phaser Graphics has no true radial fill) for the
+gravity field, a tilted slowly-rotating elliptical disk ring with inward-
+spiraling particles, a solid black void at the lethal radius, and a
+pulsing rim at exactly the event-horizon radius. The three drawn radii
+are the *literal* `BLACK_HOLE` config values, not independently-tuned
+"looks right" numbers - for fairness, what the player sees has to be
+exactly where the gameplay boundaries actually are.
+
+### Verified
+
+- `npx tsc --noEmit`, `npx eslint .` - clean.
+- `npx vitest run` - 79/79 passing (11 new in `blackHoleGravity.test.ts`
+  covering `computeGravityForce`/`isCaptured`/`isLethal`/
+  `computeCaptureVelocity`).
+- `npm run build` - clean production build.
+- Dev-server smoke check: `npx vite` on a fresh port, curled `/`,
+  `/src/main.ts`, and the three new source files
+  (`entities/BlackHole.ts`, `scenes/GameScene.ts`,
+  `systems/BlackHoleGravity.ts`) directly to confirm Vite transpiles them
+  without error - all `200`.
+
+### Not done yet
+
+No in-browser playtest of the hazard itself this entry (spawn timing,
+capture feel, the shield-eject escape) - only static verification
+(types/lint/tests/build) and a transpile-level smoke check. Not deployed
+either, since this is `debris/game` only - it ships with the next
+`rheinarts:<tag>` portal build/push/deploy, same as every other
+frontend-only change this session.
+
+---
+
 ## 2026-08-26 — Fixed the /api/debris/ nginx proxy for real (three more bugs, found live)
 
 ### What was built

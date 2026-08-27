@@ -9,7 +9,18 @@ import rheinArtsLogoUrl from '../assets/rhein-arts.png';
 import shieldUpUrl from '../assets/shield-up.wav';
 import splashUrl from '../assets/splash.png';
 import { EARTH_TEXTURE_KEY, JUPITER_TEXTURE_KEY } from '../entities/Background';
-import { GAMEPLAY_MUSIC_KEY, GAMEPLAY_MUSIC_URL, MENU_MUSIC_KEY, MENU_MUSIC_URL } from '../systems/Music';
+import {
+  BLACK_HOLE_APPROACHING_SFX_KEY,
+  BLACK_HOLE_APPROACHING_SFX_URL,
+  CARDINAL_MUSIC_KEY,
+  CARDINAL_MUSIC_URL,
+  FRACTURE_MUSIC_KEY,
+  FRACTURE_MUSIC_URL,
+  GAMEPLAY_MUSIC_KEY,
+  GAMEPLAY_MUSIC_URL,
+  MENU_MUSIC_KEY,
+  MENU_MUSIC_URL,
+} from '../systems/Music';
 import {
   ASTEROID_HIT_SFX_KEY,
   SHIELD_PICKUP_SFX_KEY,
@@ -46,6 +57,9 @@ export class BootScene extends Phaser.Scene {
     const base = import.meta.env.BASE_URL;
     this.load.audio(MENU_MUSIC_KEY, `${base}${MENU_MUSIC_URL}`);
     this.load.audio(GAMEPLAY_MUSIC_KEY, `${base}${GAMEPLAY_MUSIC_URL}`);
+    this.load.audio(FRACTURE_MUSIC_KEY, `${base}${FRACTURE_MUSIC_URL}`);
+    this.load.audio(CARDINAL_MUSIC_KEY, `${base}${CARDINAL_MUSIC_URL}`);
+    this.load.audio(BLACK_HOLE_APPROACHING_SFX_KEY, `${base}${BLACK_HOLE_APPROACHING_SFX_URL}`);
   }
 
   create(): void {

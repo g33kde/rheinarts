@@ -109,7 +109,10 @@ above but from a different directory - **not** part of the root
   why), a `ClusterIP` `Service` (internal only - nginx is the only thing
   that calls it, via the `/api/debris/` proxy in `nginx.conf`), and a
   `PersistentVolumeClaim` (`debris-highscores-pvc`) so the leaderboard
-  file survives pod restarts/reschedules.
+  files (three now, one per game mode - `HIGHSCORE_FILE_PATH` plus a
+  `-cooperative`/`-competitive` sibling each, see
+  `debris/highscore-api/src/leaderboard.ts`'s `filePathForMode`) survive
+  pod restarts/reschedules.
 
 ### 1. Build the API image
 

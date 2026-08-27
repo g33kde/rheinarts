@@ -15,6 +15,28 @@ export const COLORS = {
   ufoFill: 0x1c0d0d,
   shield: 0x5dade2,
   flame: 0xffb46b,
+  blackHole: 0x9b6bff, // Gravity Well's gravity field/accretion disk - "Accretion Disk," docs/art_direction.md. The event horizon/lethal core deliberately reuse `ufo` (red) instead of a color of their own - see that doc's note on why.
+  fracture: 0xa8e6ff, // The Fracture boss's icy crystal shell - new, distinct from Player 1's cyan and from Asteroid's neutral grey. Its core/cracks deliberately reuse `ufo` red again, same "red is the dangerous part" convention as Black Hole's event horizon.
+  fractureFill: 0x0d2430,
+  // Phase 2 fragment role tints (core/tether color only - the shard shell stays `fracture`/`fractureFill` on all three, still visibly "one family"). Aggressive reuses `ufo` red (same core as Phase 1's own), gravity reuses `blackHole` violet (a deliberate cross-reference - this fragment's whole gimmick is a gravity pull, same hue as the game's actual gravity hazard), launcher gets a new gold since nothing else in the palette fit.
+  fractureLauncher: 0xffd166,
+  // The Cardinal's own idle/ambient identity - a colder, more saturated
+  // aqua-teal than Player 1's cyan (`players[0]`, 0x00e5ff), "shift to a
+  // distinct cyan-teal," decided, picked live against the visual mockup.
+  // Its charging telegraph deliberately reuses `fractureLauncher` gold
+  // (not a new color) and its firing/critical state reuses `ufo` red,
+  // same "reuse an existing danger hue rather than invent another one"
+  // convention every other boss/hazard in this palette already follows.
+  cardinal: 0x00ffb8,
+  cardinalFill: 0x111420,
+  // Scrap pickup (FractureSwarmBit, shared by both bosses) - "muted
+  // jade," decided after comparing gold/copper/jade candidates in a
+  // live mockup. Deliberately its own hue, not reused from anywhere
+  // else: desaturated and darker than both Player 4's acid green
+  // (`players[3]`, 0x8aff4d) and The Cardinal's own teal (`cardinal`,
+  // 0x00ffb8), so it can't be mistaken for either at a glance despite
+  // sitting in the same green/teal region of the palette.
+  scrap: 0x4fae82,
 } as const;
 
 /**
@@ -115,6 +137,7 @@ export const UFO = {
   score: 200, // decided: keep the original placeholder, per docs/gameplay.md's "200+ points"
   fireCooldownMs: 1800,
   spawnIntervalMs: 12000, // no cap on concurrent UFOs, decided - if nothing's killed the last one, a new one spawns anyway
+  maxConcurrentDuringBoss: 4, // "boss stages spawn max 4 UFOs," decided - the one exception to the no-cap rule above, gated by GameScene.isBossEncounterActive()
   shotSpeed: 6, // px/step - slightly slower than the player's PROJECTILE.speed (8), stays dodgeable
   shotRadius: 2.5,
   shotLifetimeMs: 1500,
@@ -151,6 +174,26 @@ export const EFFECTS = {
 } as const;
 
 /**
+ * The floating "+<score>" number that appears where a shot lands,
+ * decided on request - in the scoring player's own HUD color
+ * (`COLORS.players[ownerIndex]`), same "cheap, reads well, doesn't get
+ * in the way" spirit as `DestructionBurst`. Sized on request too:
+ * reviewed via `entities/ScorePopup.ts`'s live concept comparison
+ * against a real drawn small rock (`ASTEROID.small.radius`, 8px) at true
+ * 1:1 pixel scale - "the size of the smallest rocks," confirmed - not an
+ * eyeballed guess.
+ */
+export const SCORE_POPUP = {
+  fontSizePx: 11,
+  strokeWidthPx: 1.4,
+  glowBlurPx: 6, // Phaser Text `setShadow`'s blur, standing in for the reviewed concept's canvas radial-gradient glow
+  riseDistancePx: 22,
+  driftRange: [5, 9] as const, // random left/right sideways drift magnitude, direction randomized per popup
+  rotationRad: 0.1, // peak tilt mid-flight (eases to 0 at both start and end) - see the "Drift & Glow" concept
+  lifespanMs: 650,
+} as const;
+
+/**
  * Cooperative-only "emergency exit" mechanic, decided on request: an
  * unshielded hit in Cooperative no longer costs a life and auto-respawns
  * - it ejects the pilot as a drifting Commander another player must
@@ -180,4 +223,224 @@ export const COMMANDER = {
 export const SPACE_STATION = {
   armLength: SHIP_HULL_SCALE * 3, // "Cross Dock," docs/art_direction.md - the visual scale reference for "3x ship size"
   dropOffRadius: SHIP_HULL_SCALE * 3 * 1.15, // slightly bigger than the visual silhouette - a forgiving trigger, not a pixel-precise dock
+  // "Moves before the boss fight to a random corner, then moves back
+  // after, make the move visible," decided - an eased glide, not a
+  // teleport (SpaceStation.travelTo()). Same duration for the outbound
+  // and return trip.
+  relocateTravelMs: 2500,
+} as const;
+
+/**
+ * Gravity Well hazard (docs/gameplay.md), mode-agnostic - a periodic,
+ * fixed-position black hole. `eventHorizonRadius` and `lethalRadius` are
+ * genuine point-of-no-return boundaries, and the *visual* rings in
+ * `entities/BlackHole.ts` are drawn at exactly those values, not a
+ * separate "looks about right" size - see docs/art_direction.md's note
+ * on why that matters for fairness. `gravityRadius` isn't a hard
+ * boundary at all (see below) so it isn't drawn 1:1 - `glowRadius` is
+ * the visual-only stand-in for it, and is drawn at face value.
+ *
+ * - `gravityRadius` down to `eventHorizonRadius`: escapable - a real
+ *   Matter force, strong enough to matter near the hole, weak enough to
+ *   out-thrust anywhere outside `eventHorizonRadius`. Deliberately spans
+ *   the whole arena ("should affect the whole screen, farther away =
+ *   lesser effect," decided) with a continuous linear falloff, not a
+ *   sharp local cutoff - there's no real "edge" to this zone to draw a
+ *   boundary at, which is why the visual glow uses its own, much
+ *   smaller `glowRadius` instead.
+ * - `eventHorizonRadius` down to `lethalRadius`: captured - "once in the
+ *   event horizon you cannot get out," decided - velocity is overridden
+ *   directly (not just forced) every frame from this point on, ignoring
+ *   thrust entirely, accelerating as it nears center.
+ * - Inside `lethalRadius`: destroyed (a ship's Shield still saves it -
+ *   see the eject-back-out behavior in docs/gameplay.md).
+ *
+ * All tuning below is a starting guess, not playtested - same standing
+ * caveat as every other physics constant in this file.
+ */
+export const BLACK_HOLE = {
+  // "Should affect the whole screen, the farther away the lesser the
+  // effect," decided - not a tight local hazard. Set past the arena's own
+  // diagonal (~2265px for 1920x1200), so `computeGravityForce`'s linear
+  // falloff never hard-cuts to zero anywhere in the playable field -
+  // every point on screen feels *some* pull, tapering off gradually
+  // toward the far corners rather than sharply at a nearby radius.
+  gravityRadius: 2300,
+  // Visual-only, deliberately *not* the same as `gravityRadius` above: the
+  // pull's falloff no longer has a real edge to draw a boundary at (it
+  // fades continuously all the way across the arena), so painting the
+  // glow out to 2300px would just tint the whole screen instead of
+  // reading as a hazard. This stays a compact halo near the hole itself -
+  // `entities/BlackHole.ts` is the only thing that reads it.
+  glowRadius: 260,
+  eventHorizonRadius: 70,
+  lethalRadius: 14,
+  // px/step^2-ish Matter force unit (see the applyForce gotcha above) -
+  // roughly 2/3 of SHIP.thrustForce right at the event horizon boundary,
+  // so sustained thrust can still win against it there. Unchanged even
+  // though `gravityRadius` grew a lot - "weak enough to out-thrust" is a
+  // near-field property of the linear falloff, not tied to how far out
+  // the (much weaker, at range) pull reaches.
+  pullForceMax: 0.00002,
+  captureBaseSpeed: 1.5, // px/step, the instant something crosses the event horizon
+  captureAccelerationPerPx: 0.05, // additional px/step per px closer to center - accelerating infall
+  // "Stay for 15 seconds, then disappear, then pause 60 sec before
+  // spawning again," decided - two distinct durations. (Previously a
+  // single `spawnIntervalMs` measured from scene start, never reset on
+  // despawn - a bug that made it effectively respawn instantly every
+  // time, with no real pause at all. See GameScene's timer fix.)
+  activeDurationMs: 15000, // was 30000 - "black holes will stay for 15 seconds," decided
+  pauseDurationMs: 60000,
+  // "Not before 2 min into any stage - gives players time to clear the
+  // rocks first," decided - a floor on top of `pauseDurationMs` above,
+  // not a replacement for it (GameScene.update() takes whichever of the
+  // two is more restrictive). Measured against `stageElapsedMs`, which
+  // already resets to 0 at every stage transition.
+  minStageElapsedMs: 120000,
+  // "5 seconds before black hole appears, play black-hole-approaching.mp3,"
+  // decided - GameScene plays this once the *later* of the two gates
+  // above is within this many ms of clearing.
+  approachWarningMs: 5000,
+  minDistanceFromStation: 320, // Cooperative only - keeps it clear of the Space Station's own footprint
+  minDistanceFromShips: 300, // avoids spawning it directly on top of an active ship
+  shieldEjectSpeed: 4, // px/step outward burst when a shielded ship survives the lethal center
+  shieldEjectInvulnerabilityMs: 2000, // same idea as SHIP.respawnInvulnerabilityMs - a beat to get clear before it can recapture you
+} as const;
+
+/**
+ * The Fracture boss (docs/roadmap.md's "Enemy roster" future-ideas
+ * section), built in three passes - see docs/roadmap.md item 19 for the
+ * exact split. This pass adds real attacks (a laser for the Core, a
+ * role-specific attack per Fragment), ship contact ("behave like rocks,"
+ * kills unless shielded, same `pendingShipHits` path an asteroid ram
+ * already uses), and turns Swarm from a shootable hazard into a safe
+ * touch-to-collect scrap pickup - decided via `AskUserQuestion`, along
+ * with the 10-second collection countdown once the last Fragment dies.
+ *
+ * Debris's first multi-hit enemy - every other enemy (asteroids, UFO)
+ * dies in one shot. Every numeric value below is a pure starting guess,
+ * same standing caveat as every other untested constant in this file.
+ *
+ * Three tiers, each splitting into the next on death:
+ * - **Core** (Phase 1): one hitbox. Spawns off-screen above top-center
+ *   and drifts down to the arena's center, then stops - "decided," a
+ *   later, more specific instruction than the original "top-middle"
+ *   pitch. Once stopped, fires a long laser beam in a random direction
+ *   every `laserCooldownMs`, one at a time.
+ * - **Fragment** (Phase 2): 3 of them on the Core's death, one per role,
+ *   each with a real attack now (not just a cosmetic flourish):
+ *   - 🔴 aggressive - a pulsing ring out to `ringMaxRadiusMultiplier` x
+ *     its own radius, every `ringCooldownMs`.
+ *   - 🔵 gravity - a Black-Hole-style pull (reuses
+ *     `systems/BlackHoleGravity.ts` directly) out to
+ *     `gravityPullRadiusMultiplier` x its own radius, continuously.
+ *   - 🟡 launcher - fires a gold shard at a random living ship every
+ *     `shardCooldownMs`.
+ *   They actually move too, unlike the stationary Core - decided.
+ * - **Swarm** (Phase 3): `swarmCountPerFragment` spawn per Fragment's
+ *   death. Always safe to touch - decided - a pickup, not a hazard:
+ *   collecting one adds 1 to that player's scrap count. Once the last
+ *   Fragment dies, a `scrapCollectionMs` countdown starts (shown on
+ *   screen); whatever's still uncollected when it runs out is gone.
+ *
+ * **Ship contact** ("behave like rocks," decided): the Core and every
+ * Fragment kill an unshielded ship on touch, exactly like ramming an
+ * asteroid (`Ship`'s own hazard-contact path, Shield absorbs it) - the
+ * Fracture side takes no damage from this, same as an asteroid doesn't
+ * from ramming a ship either. Swarm pickups are the deliberate
+ * exception - never lethal. Scoped to ships only, not asteroids -
+ * asteroids still pass through every Fracture tier untouched.
+ */
+export const FRACTURE = {
+  radius: 85, // Matter hitbox - covers the Core's full visual footprint (tether length + shard size)
+  maxHits: 20,
+  score: 1000, // flat, the single biggest single payout in the game - defeating the Core specifically
+  spawnAsteroidCount: 4, // "together with 4 big rocks," decided - spawned via the existing spawnWave(), not a new asteroid-spawn path
+  announcementDurationMs: 3000, // "a big announcement... 3 seconds," decided - the game's first non-interactive, timed overlay (every other one waits for a keypress)
+  materializeDurationMs: 900, // fade/scale-in beat once each tier appears, before it's actually hittable/collectible - applies to every tier
+
+  driftSpeedPxPerStep: 0.6, // Core's descent from off-screen to arena-center - Matter velocity units, not px/sec
+  laserCooldownMs: 2000, // "every 2 seconds," decided
+  laserTelegraphMs: 400, // dim warning line before it's actually lethal - fairness, same spirit as every other hazard's telegraph in this game
+  laserActiveMs: 300,
+  laserFadeMs: 200,
+  laserLength: 1400, // "long," decided - comfortably crosses most of the 1920x1200 arena from a central origin
+  laserWidth: 14, // hit-test thickness, not a Matter body - see entities/FractureLaser.ts
+
+  fragmentRadius: 45, // smaller than the Core's 85 - a real hitbox reduction to sell "this piece is not the whole boss anymore"
+  fragmentMaxHits: 10,
+  fragmentScore: 300,
+  fragmentSpeed: 0.4, // px/step (Matter velocity units, not px/sec - see SHIP's own doc comment in this file) - moves, unlike the stationary Core
+
+  ringMaxRadiusMultiplier: 3, // "3x the size of itself," decided
+  ringCooldownMs: 5000, // "every 5 seconds," decided
+  ringTelegraphMs: 300,
+  ringExpandMs: 500,
+  ringFadeMs: 200,
+
+  gravityPullRadiusMultiplier: 3, // "3x the size of itself," decided
+  gravityPullForceMax: 0.000012, // "a SMALL black hole" - weaker than BLACK_HOLE.pullForceMax (0.00002), same escapable-force math via computeGravityForce
+
+  shardCooldownMs: 3000, // "every 3 seconds," decided
+  shardSpeed: 5, // px/step - between UFO.shotSpeed (6) and PROJECTILE.speed (8), reads as a heavier "shard" than a clean laser bolt
+
+  swarmRadius: 7, // "smaller than or the same size as the little rocks," decided - was 12 (24px across, bigger than ASTEROID.small's own 8px-radius/16px-across footprint); now 7 (14px across), safely under it
+  swarmSpeed: 0.9, // faster than fragmentSpeed - "smaller is faster," same as ASTEROID's own size tiers
+  swarmCountPerFragment: 6, // 3 fragments x 6 = up to 18 total, reads as "dozens" across the whole Phase 3 escalation without ever having that many alive from one single fragment
+  scrapCollectionMs: 10000, // "a 10 sec countdown," decided - starts once the last Fragment dies
+} as const;
+
+/**
+ * Debris's second boss (docs/roadmap.md's "The Cardinal") - a permanent
+ * four-armed fixture at exact arena-center, never drifts or moves like
+ * The Fracture does. Every number below not explicitly called out as
+ * "decided" in the brief is a proposed starting point, same "not a final
+ * decision" caveat the design spec itself carries - picked to feel
+ * roughly in scale with `FRACTURE` above, not derived from anything more
+ * rigorous than that.
+ *
+ * Deliberately **not Matter-backed at all**, unlike The Fracture (which
+ * "behaves like rocks" via a real Matter body/collision mask): a single
+ * rigid body with four independently-destructible, continuously-rotating
+ * hit zones doesn't fit Matter's category/mask model any more cleanly
+ * than a laser beam does - same "plain math hazard" reasoning
+ * `systems/BeamGeometry.ts` and `BlackHole`'s own gravity/lethal checks
+ * already established for exactly this situation. `entities/Cardinal.ts`
+ * owns a plain `Graphics` visual (no Matter body); GameScene hit-tests
+ * ships/projectiles against it every frame via distance/segment math,
+ * the same way it already does for the Black Hole and The Fracture's own
+ * laser. The one exception is the Phase 2 plasma ball
+ * (`entities/CardinalPlasmaBall.ts`), which is a normal small traveling
+ * projectile and *is* Matter-backed, same shape as `FractureShard`.
+ */
+export const CARDINAL = {
+  armCount: 4,
+  armHp: 20, // "20 Hitpoint each arm," decided - tracked independently per arm, not a shared pool
+  coreHp: 20, // "the core has 20 hitpoints," decided
+  coreRadius: 75, // ram hazard throughout every phase; also the Phase 2/3 hittable radius once arms are gone
+  armReach: 300, // distance from center to the cannon tip
+  armInnerRadius: 60, // the arm's hit-zone starts just past the core, not from dead-center - keeps arm hits and core hits from overlapping
+  armHitWidth: 56, // hit-test thickness for the outer/cannon end of an arm - not a Matter body, see the doc comment above
+  spawnAsteroidCount: 3, // together with a few rocks, same "combined with ambient chaos" spirit as FRACTURE.spawnAsteroidCount (4) - fewer, since the rotating laser cross already fills the arena with danger on its own
+  materializeDurationMs: 900, // matches FRACTURE's own fade/scale-in beat - same "materialize," decided convention, applied here too
+  announcementDurationMs: 3000, // matches FRACTURE's "a big announcement... 3 seconds" - the same shared showBossAnnouncement() treatment
+
+  rotationPeriodMs: 20000, // "somewhere in the 15-25 second range," proposed in the design spec - picked 20s
+  laserCooldownMs: 3000, // "every 3 seconds," decided
+  laserTelegraphMs: 700, // longer than FRACTURE's 400ms single-beam telegraph - four simultaneous lines need more warning to track
+  laserActiveMs: 1000, // "exactly 1 second," decided - non-negotiable per the brief
+  laserFadeMs: 200, // matches FRACTURE.laserFadeMs
+  laserLength: 1500, // comfortably crosses the 1920px-wide arena from a central origin - a bit longer than FRACTURE.laserLength (1400) since all four sweep the whole arena, not just one direction
+  laserWidth: 14, // matches FRACTURE.laserWidth - hit-test thickness, not a Matter body
+
+  plasmaCooldownMs: 2000, // "every 2 seconds," decided
+  plasmaSpeed: 5, // px/step (Matter velocity units) - between FRACTURE.shardSpeed (5) and UFO.shotSpeed (6)
+  plasmaRadius: 8,
+  plasmaLifetimeMs: 4000,
+
+  detonationCountdownMs: 5000, // "a 5 sec timer," decided
+  detonationMaxRadius: 480, // "roughly as far as the arms/lasers used to reach," proposed - matches the visual mockup's own blast-ring radius
+
+  armScore: 150, // per arm destroyed
+  coreScore: 1200, // the final blow that ends the fight - biggest single payout after FRACTURE.score (1000), since this is the later/harder of the two bosses
 } as const;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  filePathForMode,
   insertEntry,
   isValidInitials,
+  isValidMode,
   isValidScore,
   normalizeInitials,
   qualifies,
@@ -91,5 +93,44 @@ describe('insertEntry', () => {
     insertEntry(entries, { initials: 'NEW', score: 999 }, 10);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.score).toBe(500);
+  });
+});
+
+describe('isValidMode', () => {
+  it('accepts the three known modes', () => {
+    expect(isValidMode('singlePlayer')).toBe(true);
+    expect(isValidMode('cooperative')).toBe(true);
+    expect(isValidMode('competitive')).toBe(true);
+  });
+
+  it('rejects anything else', () => {
+    expect(isValidMode('coop')).toBe(false);
+    expect(isValidMode('')).toBe(false);
+    expect(isValidMode(null)).toBe(false);
+    expect(isValidMode(undefined)).toBe(false);
+    expect(isValidMode(42)).toBe(false);
+  });
+});
+
+describe('filePathForMode', () => {
+  it('singlePlayer keeps the base path exactly - no migration for the pre-existing live file', () => {
+    expect(filePathForMode('./data/debris-highscores.json', 'singlePlayer')).toBe(
+      './data/debris-highscores.json',
+    );
+  });
+
+  it('cooperative/competitive get a sibling file with the mode suffixed before .json', () => {
+    expect(filePathForMode('./data/debris-highscores.json', 'cooperative')).toBe(
+      './data/debris-highscores-cooperative.json',
+    );
+    expect(filePathForMode('./data/debris-highscores.json', 'competitive')).toBe(
+      './data/debris-highscores-competitive.json',
+    );
+  });
+
+  it('still works if the base path has no .json extension', () => {
+    expect(filePathForMode('./data/debris-highscores', 'cooperative')).toBe(
+      './data/debris-highscores-cooperative.json',
+    );
   });
 });

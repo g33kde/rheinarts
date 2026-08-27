@@ -4,19 +4,32 @@ import {
   ARENA_HEIGHT,
   ARENA_WIDTH,
   ASTEROID,
+  BLACK_HOLE,
+  CARDINAL,
   COLORS,
   COMMANDER,
   EFFECTS,
+  FRACTURE,
   LIVES_PER_PLAYER,
   SHIELD,
   SHIP,
+  SPACE_STATION,
   UFO,
 } from '../config/GameConfig';
 import { PlayfieldBackground } from '../entities/Background';
 import { Asteroid } from '../entities/Asteroid';
+import { BlackHole } from '../entities/BlackHole';
+import { Cardinal } from '../entities/Cardinal';
+import { CardinalPlasmaBall } from '../entities/CardinalPlasmaBall';
 import { Commander } from '../entities/Commander';
 import { DestructionBurst } from '../entities/DestructionBurst';
+import { Fracture } from '../entities/Fracture';
+import { FractureFragment, type FractureFragmentRole } from '../entities/FractureFragment';
+import { FractureLaser } from '../entities/FractureLaser';
+import { FractureShard } from '../entities/FractureShard';
+import { FractureSwarmBit } from '../entities/FractureSwarmBit';
 import { Projectile } from '../entities/Projectile';
+import { ScorePopup } from '../entities/ScorePopup';
 import { Shield } from '../entities/Shield';
 import { Ship } from '../entities/Ship';
 import { SpaceStation } from '../entities/SpaceStation';
@@ -28,11 +41,24 @@ import type { PlayerInput } from '../input/PlayerInput';
 import { canFire } from '../systems/CombatSystem';
 import { nextAsteroidSize, splitHeading, type AsteroidSize } from '../systems/AsteroidSplit';
 import { getMusicVolume, getSfxVolume } from '../systems/AudioSettings';
+import {
+  computeCaptureVelocity,
+  computeGravityForce,
+  isCaptured,
+  isLethal,
+} from '../systems/BlackHoleGravity';
+import { distanceToSegment, isPointOnBeam } from '../systems/BeamGeometry';
 import { hasRescueWindowExpired, isWithinDropOffRange } from '../systems/CommanderRescue';
 import { computeSlotAssignments, type InputSource } from '../systems/GamepadAssignment';
 import { filterStandardGamepads } from '../systems/GamepadDetection';
 import { fetchLeaderboard, qualifiesForLeaderboard, submitHighScore } from '../systems/HighScoreApi';
-import { GAMEPLAY_MUSIC_KEY, MENU_MUSIC_KEY } from '../systems/Music';
+import {
+  BLACK_HOLE_APPROACHING_SFX_KEY,
+  CARDINAL_MUSIC_KEY,
+  FRACTURE_MUSIC_KEY,
+  GAMEPLAY_MUSIC_KEY,
+  MENU_MUSIC_KEY,
+} from '../systems/Music';
 import { evaluateRoundOutcome, GAME_MODE_LABELS, type GameMode } from '../systems/RoundOutcome';
 import {
   ASTEROID_HIT_SFX_KEY,
@@ -43,9 +69,11 @@ import {
 } from '../systems/Sfx';
 import { applyAimSpread, computeLeadAimHeading } from '../systems/UfoTargeting';
 import { toCssHex } from '../utilities/Color';
-import type { Vector2 } from '../utilities/Vector2';
+import { formatStageTimer } from '../utilities/StageTimer';
+import { fromAngle, normalize, type Vector2 } from '../utilities/Vector2';
+import type { MatterGameObject } from '../entities/MatterGameObject';
 
-type SessionState = 'playing' | 'stageClear' | 'gameOver' | 'paused' | 'enteringInitials';
+type SessionState = 'playing' | 'stageClear' | 'gameOver' | 'paused' | 'enteringInitials' | 'bossAnnouncement';
 
 interface PlayerSlot {
   /** The original P1-P4 slot number (0-3) - NOT this player's position in the (possibly sparse, inactive-slots-skipped) `players` array. Everything that needs a stable "which player" identity (scoring, ship color, self-hit immunity) keys off this, never array position. */
@@ -59,6 +87,8 @@ interface PlayerSlot {
   eliminated: boolean;
   /** The Commander this player is currently towing toward the space station, if any (Cooperative only) - null otherwise, including while this player has no Commander to carry. */
   towedCommander: Commander | null;
+  /** The Fracture's Phase 3 currency (docs/roadmap.md) - starts at 0, +1 per Swarm piece collected by touch. Shown in the HUD only once nonzero, same "no line at all until it matters" convention `cooperativeStatusLine` already uses. */
+  scrap: number;
   /** This player's own corner HUD (see PLAYER_HUD_CORNERS) - one Text object per active player, refreshed by refreshAllPlayerHud() whenever score, lives, or Cooperative rescue status change. */
   hudText: Phaser.GameObjects.Text;
 }
@@ -75,7 +105,40 @@ const PLAYER_SPAWN_OFFSETS: readonly Vector2[] = [
   { x: 150, y: 100 },
 ];
 
+// "The respawn point needs to be out of boss position - corner of
+// screen," decided: both bosses occupy/threaten arena-center, where
+// PLAYER_SPAWN_OFFSETS above would otherwise still put a fresh respawn.
+// Absolute arena positions (not offsets) since SpaceStation.travelTo()
+// also targets these directly for its own boss-fight relocation - inset
+// from the true screen corners so nothing spawns/sits flush against the
+// wrap boundary. Same quadrant order as PLAYER_HUD_CORNERS (P1 top-left,
+// P2 top-right, P3 bottom-left, P4 bottom-right).
+const BOSS_CORNER_INSET = 220;
+const BOSS_CORNER_POSITIONS: readonly Vector2[] = [
+  { x: BOSS_CORNER_INSET, y: BOSS_CORNER_INSET },
+  { x: ARENA_WIDTH - BOSS_CORNER_INSET, y: BOSS_CORNER_INSET },
+  { x: BOSS_CORNER_INSET, y: ARENA_HEIGHT - BOSS_CORNER_INSET },
+  { x: ARENA_WIDTH - BOSS_CORNER_INSET, y: ARENA_HEIGHT - BOSS_CORNER_INSET },
+];
+// spawnOffsetFor() adds this to arena-center, same as PLAYER_SPAWN_OFFSETS -
+// derived from the absolute corners above so the two never drift apart.
+const BOSS_RESPAWN_OFFSETS: readonly Vector2[] = BOSS_CORNER_POSITIONS.map((corner) => ({
+  x: corner.x - ARENA_WIDTH / 2,
+  y: corner.y - ARENA_HEIGHT / 2,
+}));
+
 const HUD_MARGIN = 12;
+
+// "Appears outside of screen... top center," decided - safely above the
+// visible arena (y < 0) even accounting for FRACTURE.radius's ~85px
+// visual footprint, so no part of it is visible at the moment it spawns.
+const FRACTURE_SPAWN_OFFSCREEN_Y = -150;
+
+// The Cardinal's consolidated arm/core health bar - "below the boss,"
+// decided. Pure UI layout, not gameplay-relevant, so kept file-local
+// rather than in GameConfig.ts (same treatment FRACTURE_SPAWN_OFFSCREEN_Y
+// above already gets).
+const CARDINAL_HEALTH_BAR = { width: 260, height: 14, marginTop: 40 };
 
 /**
  * One screen corner per slot - P1 top-left, P2 top-right, P3 bottom-left,
@@ -171,10 +234,87 @@ export class GameScene extends Phaser.Scene {
   private ufos: Ufo[] = [];
   private ufoShots: UfoShot[] = [];
   private bursts: DestructionBurst[] = [];
+  private scorePopups: ScorePopup[] = [];
   // Cooperative only - both stay empty/undefined in Competitive/Single
   // Player, since that's the only mode with a rescue mechanic to track.
   private commanders: Commander[] = [];
   private spaceStation: SpaceStation | undefined;
+  // True only while the station is away at a boss-fight corner (or
+  // gliding to/from one) - "moves before the boss fight, moves back
+  // after," decided. Gates enterStageClear()'s return-trip trigger so
+  // every stage-clear doesn't need to separately check "was that a boss
+  // stage" - it only travels home if it's actually away.
+  private spaceStationRelocated = false;
+  // Mode-agnostic, unlike commanders/spaceStation - see GameConfig.ts's
+  // BLACK_HOLE doc comment. At most one active at a time (decided): a
+  // new one only spawns once the previous has despawned.
+  private blackHole: BlackHole | undefined;
+  private blackHoleDespawnedAtMs = -Infinity; // pause-timer start; also gates the very first spawn of the round
+  private blackHoleSpawnedAtMs = -Infinity; // active-timer start
+  // "5 seconds before black hole appears, play black-hole-approaching.mp3,"
+  // decided - true once the warning has fired for the *upcoming* spawn,
+  // so it only plays once per cycle. Reset whenever a fresh "waiting to
+  // spawn" cycle begins: round start, every new stage (resetStageHazards()),
+  // and right after a black hole actually spawns (so the next cycle,
+  // later in the same stage, can warn again).
+  private blackHoleWarningPlayed = false;
+  // The Fracture (docs/roadmap.md) - see GameConfig.ts's FRACTURE doc
+  // comment for the three-tier Core -> Fragment -> Swarm shape.
+  private fracture: Fracture | undefined; // Phase 1
+  private fractureFragments: FractureFragment[] = []; // Phase 2
+  private fractureSwarm: FractureSwarmBit[] = []; // Phase 3 - scrap pickups, not a hazard. Also reused as-is for The Cardinal's own arm-scrap (see processPendingCardinalArmHits) - the pickup mechanic doesn't care which boss dropped it, and Cardinal's own scrap deliberately never triggers beginScrapCountdown, so it's never swept by the 10s-expiry path below either.
+  private fractureLasers: FractureLaser[] = []; // Phase 1's attack
+  private fractureShards: FractureShard[] = []; // Phase 2 launcher's attack
+  // "Every normal stage clear is followed by a boss stage, not just the
+  // first one," decided - replaces the old one-time `fractureIntroduced`
+  // latch. Tracks whether the stage that just cleared was itself a boss
+  // stage: false -> beginNextLevel() triggers a randomly-picked boss
+  // next; true -> it spawns a normal wave instead. Starts false, so the
+  // very first stage-clear of the round still triggers a boss first,
+  // same as the original behavior.
+  private lastStageWasBoss = false;
+  private cardinal: Cardinal | undefined;
+  private cardinalPlasmaBalls: CardinalPlasmaBall[] = [];
+  // Set once the last Fragment dies, cleared once the countdown runs
+  // out - "a 10 sec countdown on screen. time to collect the scrap,"
+  // decided. Also part of isBossEncounterActive() below, so Black
+  // Hole spawning stays suppressed through the collection window too.
+  private scrapCountdownEndsAtMs: number | undefined;
+  private scrapCountdownText: Phaser.GameObjects.Text | undefined;
+  // The Cardinal's own consolidated arm/core health bar, "below the
+  // boss," decided - created once (hidden) and shown/repositioned only
+  // while a Cardinal fight is actually in progress.
+  private cardinalHealthBarBorder: Phaser.GameObjects.Rectangle | undefined;
+  private cardinalHealthBarFill: Phaser.GameObjects.Rectangle | undefined;
+  private cardinalHealthBarLabel: Phaser.GameObjects.Text | undefined;
+  // Cooperative only - "whichever player is still alive/last standing"
+  // enters initials on a qualifying pooled score, decided. Cooperative's
+  // round only ends once *everyone* is eliminated (no "win" outcome for
+  // this mode - RoundOutcome.ts), so there's never someone genuinely
+  // still alive at that exact moment; this tracks whoever was the last
+  // to fall instead, updated at every Cooperative elimination site
+  // (processCommanderExpiry, processPendingCommanderHazardHits).
+  private lastEliminatedSlotIndex: number | undefined;
+  // Dev-only stage timer - "add a timer during stages on the top center
+  // screen, shows minutes, seconds, milliseconds of current stage,
+  // resets every stage," decided; roadmap.md flags this for removal
+  // before the final version. Accumulated only while `state === 'playing'`
+  // (see update()'s early-return above this point) rather than read off
+  // wall-clock `this.time.now`, so it pauses for free across every
+  // non-playing state (paused, stageClear, bossAnnouncement,
+  // enteringInitials, gameOver) without needing to track a separate
+  // "when did we last resume" timestamp.
+  private stageElapsedMs = 0;
+  private stageTimerText: Phaser.GameObjects.Text | undefined;
+  // Whichever track is currently looping for the *current* stage -
+  // `GAMEPLAY_MUSIC_KEY` for a normal stage, a boss's own key
+  // (`FRACTURE_MUSIC_KEY` today) once its announcement lands. Tracked
+  // explicitly (not just "whatever Phaser's sound manager happens to be
+  // playing") so enterPaused()/exitPaused()/goToMainMenu() pause/resume/
+  // stop whichever track is actually live instead of always assuming
+  // gameplay music - "boss stages get their own music, looped, swapping
+  // back for normal stages," decided.
+  private currentStageMusicKey: string | undefined;
   private lastShieldSpawnAtMs = -Infinity;
   private lastUfoSpawnAtMs = -Infinity;
   private scores: number[] = [];
@@ -202,6 +342,25 @@ export class GameScene extends Phaser.Scene {
   private pendingShipHits: Ship[] = [];
   private pendingUfoHits: { ufo: Ufo; projectile: Projectile | undefined; awardScore: boolean }[] = [];
   private pendingUfoShotHits: UfoShot[] = [];
+  private pendingFractureCoreHits: { projectile: Projectile }[] = [];
+  private pendingFractureFragmentHits: { fragment: FractureFragment; projectile: Projectile }[] = [];
+  private pendingFractureShardHits: { ship: Ship; shard: FractureShard }[] = [];
+  // The Cardinal isn't Matter-backed at all (see its own doc comment), so
+  // these two are populated by a manual per-frame distance/segment check
+  // in updateCardinalAttacks() instead of handleCollision() - queued the
+  // same way regardless, for the same reasons every other pendingX array
+  // is: dedupe multiple projectiles hitting the same target in one
+  // frame, and never destroy/mutate mid-iteration.
+  private pendingCardinalArmHits: { armIndex: number; projectile: Projectile }[] = [];
+  private pendingCardinalCoreHits: { projectile: Projectile }[] = [];
+  // Unlike the two above, this one *is* a real Matter collision (the
+  // plasma ball has its own sensor body) - populated from
+  // handleCollision(), same shape as pendingFractureShardHits.
+  private pendingCardinalPlasmaHits: { ship: Ship; plasma: CardinalPlasmaBall }[] = [];
+  // Swarm pickups are never lethal (decided) - a separate queue from
+  // every other pendingX hit array above, same shape as
+  // pendingShieldPickups, not a "hit" at all.
+  private pendingScrapPickups: { ship: Ship; swarmBit: FractureSwarmBit }[] = [];
   // Competitive-only: a ship hit by an *enemy* player's shot. The
   // shooter's own shot is filtered out in handleCollision before this is
   // ever populated - see the self-hit-immunity note there.
@@ -228,6 +387,7 @@ export class GameScene extends Phaser.Scene {
     this.background = new PlayfieldBackground(this);
     stopSound(this, MENU_MUSIC_KEY);
     playLoopingSound(this, GAMEPLAY_MUSIC_KEY, getMusicVolume());
+    this.currentStageMusicKey = GAMEPLAY_MUSIC_KEY;
 
     // scene.restart() reuses this same instance (no fresh constructor
     // call), so every field a round can leave in a non-default state -
@@ -241,21 +401,48 @@ export class GameScene extends Phaser.Scene {
     this.ufos = [];
     this.ufoShots = [];
     this.bursts = [];
+    this.scorePopups = [];
     this.commanders = [];
     // Only Cooperative has a rescue mechanic to send anyone to - see the
     // class doc comment's mode breakdown.
     this.spaceStation =
       this.mode === 'cooperative' ? new SpaceStation(this, { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }) : undefined;
+    this.spaceStationRelocated = false;
+    this.blackHole = undefined;
+    this.fracture = undefined;
+    this.fractureFragments = [];
+    this.fractureSwarm = [];
+    this.fractureLasers = [];
+    this.fractureShards = [];
+    this.lastStageWasBoss = false;
+    this.cardinal = undefined;
+    this.cardinalPlasmaBalls = [];
+    this.cardinalHealthBarBorder = undefined;
+    this.cardinalHealthBarFill = undefined;
+    this.cardinalHealthBarLabel = undefined;
+    this.scrapCountdownEndsAtMs = undefined;
+    this.scrapCountdownText = undefined;
+    this.lastEliminatedSlotIndex = undefined;
+    this.stageElapsedMs = 0;
     this.scores = [0, 0, 0, 0]; // fixed, indexed by slotIndex - not sized to how many players are actually active
     this.state = 'playing';
     this.lastShieldSpawnAtMs = this.time.now;
     this.lastUfoSpawnAtMs = this.time.now;
+    this.blackHoleDespawnedAtMs = this.time.now;
+    this.blackHoleWarningPlayed = false;
     this.wasAnyThrusting = false;
     this.pendingHits = [];
     this.pendingShieldPickups = [];
     this.pendingShipHits = [];
     this.pendingUfoHits = [];
     this.pendingUfoShotHits = [];
+    this.pendingFractureCoreHits = [];
+    this.pendingFractureFragmentHits = [];
+    this.pendingFractureShardHits = [];
+    this.pendingCardinalArmHits = [];
+    this.pendingCardinalCoreHits = [];
+    this.pendingCardinalPlasmaHits = [];
+    this.pendingScrapPickups = [];
     this.pendingFriendlyFireHits = [];
     this.pendingRespawns = [];
     this.pendingCommanderPickups = [];
@@ -270,6 +457,17 @@ export class GameScene extends Phaser.Scene {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#9a9ab0',
+      })
+      .setOrigin(0.5, 0);
+
+    // Dev-only, see `stageElapsedMs`'s own comment - sits just below the
+    // mode label rather than sharing its line, so neither ever has to
+    // fight the other for center-x space.
+    this.stageTimerText = this.add
+      .text(ARENA_WIDTH / 2, 26, formatStageTimer(this.stageElapsedMs), {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#6a6a80',
       })
       .setOrigin(0.5, 0);
 
@@ -348,13 +546,28 @@ export class GameScene extends Phaser.Scene {
         lives: LIVES_PER_PLAYER,
         eliminated: false,
         towedCommander: null,
+        scrap: 0,
         hudText,
       });
     });
   }
 
-  /** Solo play spawns dead-center - the 4-point diamond exists to keep simultaneous players apart, which is moot with only one ship ever on screen. Shared by buildPlayers() and processPendingRespawns() so a respawn lands in the same place a round-start spawn would. */
+  /**
+   * Solo play spawns dead-center - the 4-point diamond exists to keep
+   * simultaneous players apart, which is moot with only one ship ever on
+   * screen. Shared by buildPlayers() and processPendingRespawns() so a
+   * respawn lands in the same place a round-start spawn would.
+   *
+   * **During a boss fight, every mode (including Single Player) spawns
+   * in its own corner instead** - "the respawn point needs to be out of
+   * boss position," decided - since both the diamond and Single Player's
+   * dead-center point sit on or near arena-center, exactly where both
+   * bosses live. In practice this only ever matters for
+   * processPendingRespawns() - buildPlayers() only runs at round start,
+   * before any boss stage can possibly be in progress.
+   */
   private spawnOffsetFor(slotIndex: number): Vector2 {
+    if (this.isBossEncounterActive()) return BOSS_RESPAWN_OFFSETS[slotIndex]!;
     return this.mode === 'singlePlayer' ? { x: 0, y: 0 } : PLAYER_SPAWN_OFFSETS[slotIndex]!;
   }
 
@@ -368,6 +581,13 @@ export class GameScene extends Phaser.Scene {
     this.processPendingShipHits(nowMs);
     this.processPendingUfoHits();
     this.processPendingUfoShotHits();
+    this.processPendingFractureCoreHits(nowMs);
+    this.processPendingFractureFragmentHits(nowMs);
+    this.processPendingFractureShardHits(nowMs);
+    this.processPendingCardinalArmHits(nowMs);
+    this.processPendingCardinalCoreHits(nowMs);
+    this.processPendingCardinalPlasmaHits(nowMs);
+    this.processPendingScrapPickups(nowMs);
     this.processPendingRespawns(nowMs);
     this.processPendingCommanderPickups();
     this.processPendingCommanderHazardHits();
@@ -382,6 +602,17 @@ export class GameScene extends Phaser.Scene {
     this.ufos = this.ufos.filter((ufo) => ufo.isAlive);
     this.ufoShots = this.ufoShots.filter((shot) => shot.isAlive);
     this.commanders = this.commanders.filter((commander) => commander.isAlive);
+    // Same reasoning, for entities the Fracture pending-hit processing
+    // above can destroy: processPendingFractureFragmentHits (a
+    // Fragment), processPendingScrapPickups (a Swarm bit), and
+    // processPendingFractureShardHits (a shard) all run before this
+    // point - this was the actual "crash/freeze on a golden shard hit"
+    // bug, and would have hit Fragment kills and scrap pickups too,
+    // just less frequently triggered in testing so far.
+    this.fractureFragments = this.fractureFragments.filter((fragment) => fragment.isAlive);
+    this.fractureSwarm = this.fractureSwarm.filter((swarmBit) => swarmBit.isAlive);
+    this.fractureShards = this.fractureShards.filter((shard) => shard.isAlive);
+    this.cardinalPlasmaBalls = this.cardinalPlasmaBalls.filter((plasma) => plasma.isAlive);
 
     this.background.update(deltaSeconds);
     this.spaceStation?.update(nowMs);
@@ -389,12 +620,28 @@ export class GameScene extends Phaser.Scene {
     this.bursts.forEach((burst) => burst.update(nowMs, deltaSeconds));
     this.bursts = this.bursts.filter((burst) => burst.isAlive);
 
+    this.scorePopups.forEach((popup) => popup.update(nowMs));
+    this.scorePopups = this.scorePopups.filter((popup) => popup.isAlive);
+
     if (this.state === 'enteringInitials') {
       this.updateInitialsEntry();
       return;
     }
 
     if (this.state !== 'playing') return;
+
+    this.stageElapsedMs += deltaMs;
+    this.stageTimerText?.setText(formatStageTimer(this.stageElapsedMs));
+
+    // Must run before this frame's per-entity update() calls below, not
+    // just before next frame - Ship.update() re-clamps/re-sets velocity
+    // from thrust every frame regardless of input, so a gravity force
+    // applied *after* it would just get silently overwritten. Applying
+    // it first means gravity accumulates into the same Matter step as
+    // thrust, exactly like the escapable outer band is supposed to work
+    // (docs/gameplay.md's Gravity Well - fight it with sustained thrust).
+    this.applyBlackHoleGravityForces();
+    this.applyFractureGravityForces();
 
     this.players.forEach((player) => {
       if (!player.ship.isAlive) return;
@@ -442,6 +689,24 @@ export class GameScene extends Phaser.Scene {
     this.commanders.forEach((commander) => commander.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
     this.processCommanderExpiry(nowMs);
     this.processStationDropOffs(nowMs);
+    this.blackHole?.update(nowMs, deltaSeconds);
+    this.fracture?.update(nowMs, ARENA_HEIGHT);
+    this.fractureFragments.forEach((fragment) => fragment.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
+    this.fractureSwarm.forEach((swarmBit) => swarmBit.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
+    this.fractureShards.forEach((shard) => shard.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
+    this.fractureLasers.forEach((laser) => laser.update(nowMs));
+    this.updateFractureAttacks(nowMs);
+    this.updateScrapCountdown(nowMs);
+    this.cardinal?.update(nowMs);
+    this.cardinalPlasmaBalls.forEach((plasma) => plasma.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
+    this.updateCardinalAttacks(nowMs);
+    this.updateCardinalHealthBar();
+    // After every entity's own update() this frame, same reasoning as
+    // applyBlackHoleGravityForces() above but inverted: this needs the
+    // *final* say, overriding whatever thrust/drift each entity's own
+    // update() just produced - "once in the event horizon you cannot get
+    // out" has to mean it, not just usually win.
+    this.processBlackHoleCaptureAndLethal(nowMs);
 
     this.asteroids = this.asteroids.filter((asteroid) => asteroid.isAlive);
     this.projectiles = this.projectiles.filter((projectile) => projectile.isAlive);
@@ -449,20 +714,92 @@ export class GameScene extends Phaser.Scene {
     this.ufos = this.ufos.filter((ufo) => ufo.isAlive);
     this.ufoShots = this.ufoShots.filter((shot) => shot.isAlive);
     this.commanders = this.commanders.filter((commander) => commander.isAlive);
+    this.fractureFragments = this.fractureFragments.filter((fragment) => fragment.isAlive);
+    this.fractureSwarm = this.fractureSwarm.filter((swarmBit) => swarmBit.isAlive);
+    this.fractureShards = this.fractureShards.filter((shard) => shard.isAlive);
+    this.fractureLasers = this.fractureLasers.filter((laser) => laser.isAlive);
+    this.cardinalPlasmaBalls = this.cardinalPlasmaBalls.filter((plasma) => plasma.isAlive);
 
     if (nowMs - this.lastShieldSpawnAtMs >= SHIELD.spawnIntervalMs) {
       this.spawnShield();
       this.lastShieldSpawnAtMs = nowMs;
     }
 
-    if (nowMs - this.lastUfoSpawnAtMs >= UFO.spawnIntervalMs) {
+    // "Boss stages spawn max 4 UFOs," decided - only capped during a
+    // boss encounter; normal stages keep the original "no cap" behavior
+    // (UFO.spawnIntervalMs's own doc comment). Deliberately doesn't
+    // reset `lastUfoSpawnAtMs` while capped, so the instant a slot frees
+    // up (a UFO dies) a new one spawns right away if the interval had
+    // already elapsed, rather than waiting a fresh full interval from
+    // whenever the cap happened to clear.
+    const ufoSpawnCapped = this.isBossEncounterActive() && this.ufos.length >= UFO.maxConcurrentDuringBoss;
+    if (!ufoSpawnCapped && nowMs - this.lastUfoSpawnAtMs >= UFO.spawnIntervalMs) {
       this.spawnUfo();
       this.lastUfoSpawnAtMs = nowMs;
     }
 
-    if (this.asteroids.length === 0) {
+    // "During boss do not spawn black hole," decided - suppressed for
+    // the whole encounter (Core through the scrap-collection countdown),
+    // not just Phase 1. Any already-active one at the moment the Core
+    // materializes is also force-despawned (materializeFracture()) -
+    // this check only ever needs to worry about *new* spawns.
+    if (!this.blackHole && !this.isBossEncounterActive()) {
+      // "Not before 2 min into any stage - gives players time to clear
+      // the rocks first," decided: the later of the usual post-despawn
+      // pause and this stage's own 2-minute grace period actually gates
+      // the spawn. stageElapsedMs already resets to 0 at every stage
+      // transition (resetStageHazards()), so this alone gives every
+      // stage a fresh grace period with no extra timestamp to track.
+      const pauseRemainingMs = BLACK_HOLE.pauseDurationMs - (nowMs - this.blackHoleDespawnedAtMs);
+      const stageRemainingMs = BLACK_HOLE.minStageElapsedMs - this.stageElapsedMs;
+      const remainingMs = Math.max(pauseRemainingMs, stageRemainingMs);
+
+      if (remainingMs <= 0) {
+        this.spawnBlackHole(nowMs);
+      } else if (remainingMs <= BLACK_HOLE.approachWarningMs && !this.blackHoleWarningPlayed) {
+        this.sound.play(BLACK_HOLE_APPROACHING_SFX_KEY, { volume: getSfxVolume() });
+        this.blackHoleWarningPlayed = true;
+      }
+    } else if (this.blackHole && nowMs - this.blackHoleSpawnedAtMs >= BLACK_HOLE.activeDurationMs) {
+      this.despawnBlackHole(nowMs);
+    }
+
+    // The Cardinal's own finale - a timed countdown, not a hit that kills
+    // it (see Cardinal.isDetonationReady's own doc comment). Resolved
+    // here rather than inside updateCardinalAttacks() since it also
+    // needs to run the frame *after* the stage-clear check below would
+    // otherwise have nothing left to wait for.
+    if (this.cardinal?.phase === 'critical' && this.cardinal.isDetonationReady(nowMs)) {
+      this.resolveCardinalDetonation(nowMs);
+    }
+
+    // Extended once The Fracture is in play (docs/roadmap.md): the stage
+    // isn't actually clear until it's dead too - not just the Core, every
+    // Fragment and every Swarm bit it split into - not just the rocks.
+    // "Must defeat The Fracture fully," decided. No effect before it
+    // exists (all three are already empty/undefined either way).
+    if (this.asteroids.length === 0 && !this.isBossEncounterActive()) {
       this.enterStageClear();
     }
+  }
+
+  /**
+   * True from the moment a boss's Core materializes until its fight is
+   * fully over (The Fracture: through the last Swarm bit's scrap-
+   * collection countdown; The Cardinal: until its own Phase 3 detonation
+   * resolves) - gates the stage-clear check above, Black Hole spawning,
+   * and the UFO spawn cap above, generically across whichever boss is
+   * actually in play. Named generically rather than
+   * `isFractureEncounterActive` now that these rules apply to "all
+   * bosses, current and future," decided.
+   */
+  private isBossEncounterActive(): boolean {
+    return (
+      this.fracture !== undefined ||
+      this.fractureFragments.length > 0 ||
+      this.scrapCountdownEndsAtMs !== undefined ||
+      this.cardinal !== undefined
+    );
   }
 
   /** Moves every UFO, then has each one fire independently if its own cooldown and a live target both allow it. */
@@ -561,6 +898,386 @@ export class GameScene extends Phaser.Scene {
     this.ufos.push(new Ufo(this, x, y, heading));
   }
 
+  private spawnBlackHole(nowMs: number): void {
+    this.blackHole = new BlackHole(this, this.pickBlackHoleSpawnPosition());
+    this.blackHoleSpawnedAtMs = nowMs;
+    this.blackHoleWarningPlayed = false; // ready to warn again for the *next* spawn cycle
+  }
+
+  /** The hole's own "it's gone now" beat - same burst/shake feedback as any other destruction, in its own violet rather than staying silent. Starts the `pauseDurationMs` clock. */
+  private despawnBlackHole(nowMs: number): void {
+    if (!this.blackHole) return;
+    this.spawnBurst(this.blackHole.position, COLORS.blackHole, EFFECTS.shipBurst);
+    this.shakeCamera(EFFECTS.minorShake);
+    this.blackHole.destroy();
+    this.blackHole = undefined;
+    this.blackHoleDespawnedAtMs = nowMs;
+  }
+
+  /** Avoids spawning directly on top of an active ship or (Cooperative only) the Space Station - a few random attempts, then gives up and uses whatever the last attempt was rather than risk looping forever. */
+  private pickBlackHoleSpawnPosition(): Vector2 {
+    const maxAttempts = 20;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const candidate = { x: Math.random() * ARENA_WIDTH, y: Math.random() * ARENA_HEIGHT };
+
+      const farFromStation =
+        !this.spaceStation ||
+        Math.hypot(candidate.x - this.spaceStation.position.x, candidate.y - this.spaceStation.position.y) >=
+          BLACK_HOLE.minDistanceFromStation;
+
+      const farFromShips = this.players.every(
+        (player) =>
+          !player.ship.isAlive ||
+          Math.hypot(candidate.x - player.ship.position.x, candidate.y - player.ship.position.y) >=
+            BLACK_HOLE.minDistanceFromShips,
+      );
+
+      if (farFromStation && farFromShips) return candidate;
+      if (attempt === maxAttempts - 1) return candidate;
+    }
+    return { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }; // unreachable - satisfies the return type
+  }
+
+  /**
+   * The escapable outer band, applied to every entity type the hole
+   * affects (decided: pulls everything, not just ships) - a real Matter
+   * force, not an override, so it blends with whatever else is already
+   * pushing an object around this frame (a ship's own thrust, most
+   * importantly). Must run before this frame's per-entity update() calls
+   * - see the call site's own comment for why that ordering matters.
+   */
+  private applyBlackHoleGravityForces(): void {
+    const hole = this.blackHole;
+    if (!hole) return;
+
+    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): void => {
+      const force = computeGravityForce(
+        position,
+        hole.position,
+        BLACK_HOLE.gravityRadius,
+        BLACK_HOLE.eventHorizonRadius,
+        BLACK_HOLE.pullForceMax,
+      );
+      if (force.x !== 0 || force.y !== 0) {
+        visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
+      }
+    };
+
+    this.players.forEach((player) => {
+      if (player.ship.isAlive) applyGravity(player.ship.visual, player.ship.position);
+    });
+    this.asteroids.forEach((asteroid) => {
+      if (asteroid.isAlive) applyGravity(asteroid.visual, asteroid.position);
+    });
+    this.ufos.forEach((ufo) => {
+      if (ufo.isAlive) applyGravity(ufo.visual, ufo.position);
+    });
+    this.shields.forEach((shield) => {
+      if (shield.isAlive) applyGravity(shield.visual, shield.position);
+    });
+    this.commanders.forEach((commander) => {
+      if (commander.isAlive && commander.isAdrift) applyGravity(commander.visual, commander.position);
+    });
+  }
+
+  /**
+   * The gravity-role Fragment's own attack ("acts like a small black
+   * hole, attracts everything 3x the size of itself," decided) - reuses
+   * `computeGravityForce` directly rather than a second pull-force
+   * implementation. Same entity scope as the Black Hole's own pull
+   * (ships/asteroids/UFOs/shields/adrift Commanders) for "everything";
+   * other Fracture pieces don't pull each other. Must run here, before
+   * this frame's per-entity update() calls, same ordering reason as
+   * applyBlackHoleGravityForces() above.
+   */
+  private applyFractureGravityForces(): void {
+    const gravityFragments = this.fractureFragments.filter((f) => f.role === 'gravity' && f.isAlive);
+    if (gravityFragments.length === 0) return;
+
+    const pullRadius = FRACTURE.fragmentRadius * FRACTURE.gravityPullRadiusMultiplier;
+    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): void => {
+      gravityFragments.forEach((fragment) => {
+        const force = computeGravityForce(
+          position,
+          fragment.position,
+          pullRadius,
+          FRACTURE.fragmentRadius,
+          FRACTURE.gravityPullForceMax,
+        );
+        if (force.x !== 0 || force.y !== 0) {
+          visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
+        }
+      });
+    };
+
+    this.players.forEach((player) => {
+      if (player.ship.isAlive) applyGravity(player.ship.visual, player.ship.position);
+    });
+    this.asteroids.forEach((asteroid) => {
+      if (asteroid.isAlive) applyGravity(asteroid.visual, asteroid.position);
+    });
+    this.ufos.forEach((ufo) => {
+      if (ufo.isAlive) applyGravity(ufo.visual, ufo.position);
+    });
+    this.shields.forEach((shield) => {
+      if (shield.isAlive) applyGravity(shield.visual, shield.position);
+    });
+    this.commanders.forEach((commander) => {
+      if (commander.isAlive && commander.isAdrift) applyGravity(commander.visual, commander.position);
+    });
+  }
+
+  /**
+   * Everything Fracture-attack-related that needs to check against ship
+   * positions each frame. Firing *readiness* lives on the entities
+   * themselves (`Fracture.canFireLaser`, `FractureFragment.canFireShard`)
+   * - this is the "does the currently-active attack actually touch a
+   * ship" half, plus the two attacks that need GameScene to spawn
+   * something (a laser, a shard) rather than just reporting a hit
+   * radius. Same split as Black Hole: the hazard owns its own timing,
+   * GameScene owns hit-testing against everything else.
+   */
+  private updateFractureAttacks(nowMs: number): void {
+    if (this.fracture?.canFireLaser(nowMs)) {
+      this.spawnFractureLaser(this.fracture.position, nowMs);
+      this.fracture.recordLaserFired(nowMs);
+    }
+
+    this.fractureLasers.forEach((laser) => {
+      if (!laser.isActive(nowMs)) return;
+      this.players.forEach((player) => {
+        if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
+        if (
+          isPointOnBeam(player.ship.position, laser.origin, laser.angleRad, FRACTURE.laserLength, FRACTURE.laserWidth) &&
+          !this.pendingShipHits.includes(player.ship)
+        ) {
+          this.pendingShipHits.push(player.ship);
+        }
+      });
+    });
+
+    this.fractureFragments.forEach((fragment) => {
+      if (!fragment.isAlive) return;
+
+      if (fragment.role === 'aggressive') {
+        const ringRadius = fragment.currentRingHitRadius(nowMs);
+        if (ringRadius !== undefined) {
+          this.players.forEach((player) => {
+            if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
+            const distance = Math.hypot(
+              player.ship.position.x - fragment.position.x,
+              player.ship.position.y - fragment.position.y,
+            );
+            if (distance <= ringRadius && !this.pendingShipHits.includes(player.ship)) {
+              this.pendingShipHits.push(player.ship);
+            }
+          });
+        }
+      }
+
+      if (fragment.role === 'launcher' && fragment.canFireShard(nowMs)) {
+        // "In direction of any ship," decided: a random living ship, not
+        // necessarily the nearest - unlike the UFO's own lead-aim targeting.
+        const livingShips = this.players.filter((p) => p.ship.isAlive).map((p) => p.ship);
+        if (livingShips.length > 0) {
+          const target = livingShips[Math.floor(Math.random() * livingShips.length)]!;
+          const heading = Math.atan2(target.position.y - fragment.position.y, target.position.x - fragment.position.x);
+          this.fractureShards.push(new FractureShard(this, fragment.position, heading, nowMs));
+        }
+        fragment.recordShardFired(nowMs);
+      }
+    });
+  }
+
+  private spawnFractureLaser(origin: Vector2, nowMs: number): void {
+    const angle = Math.random() * Math.PI * 2;
+    this.fractureLasers.push(new FractureLaser(this, origin, angle, nowMs));
+  }
+
+  /**
+   * The Cardinal isn't Matter-backed (see its own doc comment), so all
+   * three of its interactions - the laser cross vs. ships, projectiles
+   * vs. its arms/core, and the ship-ram hazard the core always is - are
+   * plain per-frame distance/segment checks here, the same "plain math
+   * hazard" pattern `processBlackHoleCaptureAndLethal` and
+   * `updateFractureAttacks`'s own laser check already use. The Phase 2
+   * plasma ball is the one exception (a real Matter body), fired from
+   * here but hit-tested via the normal handleCollision() path.
+   */
+  private updateCardinalAttacks(nowMs: number): void {
+    const cardinal = this.cardinal;
+    if (!cardinal) return;
+
+    // Ship-vs-core ram - always active, every phase, same "behaves like
+    // a rock" precedent The Fracture's own Core already set. Arms are
+    // deliberately not a ram hazard (only their laser is dangerous) -
+    // see CARDINAL's own doc comment in GameConfig.ts.
+    this.players.forEach((player) => {
+      if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
+      const distance = Math.hypot(player.ship.position.x - cardinal.position.x, player.ship.position.y - cardinal.position.y);
+      if (distance <= CARDINAL.coreRadius && !this.pendingShipHits.includes(player.ship)) {
+        this.pendingShipHits.push(player.ship);
+      }
+    });
+
+    if (cardinal.phase === 'armed') {
+      for (let armIndex = 0; armIndex < CARDINAL.armCount; armIndex += 1) {
+        if (!cardinal.isArmAlive(armIndex)) continue;
+        const angle = cardinal.armAngleRad(armIndex);
+
+        // Firing beam vs. ships - full laserLength from the core's own
+        // center, same shape as The Fracture's own laser hit-test.
+        if (cardinal.isLaserActiveForArm(armIndex, nowMs)) {
+          this.players.forEach((player) => {
+            if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
+            if (
+              isPointOnBeam(player.ship.position, cardinal.position, angle, CARDINAL.laserLength, CARDINAL.laserWidth) &&
+              !this.pendingShipHits.includes(player.ship)
+            ) {
+              this.pendingShipHits.push(player.ship);
+            }
+          });
+        }
+
+        // Projectile vs. this specific arm's physical span (inner radius
+        // to cannon tip) - independent of whether it's currently firing,
+        // an arm can be shot any time it's alive.
+        const direction = fromAngle(angle);
+        const armStart = {
+          x: cardinal.position.x + direction.x * CARDINAL.armInnerRadius,
+          y: cardinal.position.y + direction.y * CARDINAL.armInnerRadius,
+        };
+        const armEnd = {
+          x: cardinal.position.x + direction.x * CARDINAL.armReach,
+          y: cardinal.position.y + direction.y * CARDINAL.armReach,
+        };
+        this.projectiles.forEach((projectile) => {
+          if (!projectile.isAlive) return;
+          if (distanceToSegment(projectile.position, armStart, armEnd) <= CARDINAL.armHitWidth / 2) {
+            if (!this.pendingCardinalArmHits.some((hit) => hit.projectile === projectile)) {
+              this.pendingCardinalArmHits.push({ armIndex, projectile });
+            }
+          }
+        });
+      }
+    } else if (cardinal.phase === 'coreExposed') {
+      // Core becomes a valid target only once every arm is down.
+      this.projectiles.forEach((projectile) => {
+        if (!projectile.isAlive) return;
+        const distance = Math.hypot(projectile.position.x - cardinal.position.x, projectile.position.y - cardinal.position.y);
+        if (distance <= CARDINAL.coreRadius && !this.pendingCardinalCoreHits.some((hit) => hit.projectile === projectile)) {
+          this.pendingCardinalCoreHits.push({ projectile });
+        }
+      });
+
+      if (cardinal.canFirePlasma(nowMs)) {
+        const target = this.nearestAliveShip(cardinal.position);
+        if (target) {
+          const heading = computeLeadAimHeading(cardinal.position, target.ship.position, target.ship.velocity, CARDINAL.plasmaSpeed);
+          this.cardinalPlasmaBalls.push(new CardinalPlasmaBall(this, cardinal.position, heading, nowMs));
+        }
+        cardinal.recordPlasmaFired(nowMs);
+      }
+    }
+  }
+
+  /**
+   * The inescapable inner band (capture) and the lethal center, applied
+   * after this frame's per-entity update() calls - see the call site's
+   * comment. Ships route a non-survivable hit through the existing
+   * `pendingShipHits` queue (same Cooperative-eject/Competitive-lives
+   * handling as every other hazard); asteroids/UFO/Shield/Commander
+   * reuse their own existing pending-hit queues the same way, rather
+   * than duplicating that logic here.
+   */
+  private processBlackHoleCaptureAndLethal(nowMs: number): void {
+    const hole = this.blackHole;
+    if (!hole) return;
+
+    const captureIfNeeded = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): void => {
+      if (!isCaptured(position, hole.position, BLACK_HOLE.eventHorizonRadius)) return;
+      const velocity = computeCaptureVelocity(
+        position,
+        hole.position,
+        BLACK_HOLE.eventHorizonRadius,
+        BLACK_HOLE.captureBaseSpeed,
+        BLACK_HOLE.captureAccelerationPerPx,
+      );
+      visual.setVelocity(velocity.x, velocity.y);
+    };
+
+    this.players.forEach((player) => {
+      const ship = player.ship;
+      if (!ship.isAlive) return;
+      if (isLethal(ship.position, hole.position, BLACK_HOLE.lethalRadius)) {
+        if (ship.isInvulnerable(nowMs)) return;
+        if (ship.hasShield) {
+          ship.consumeShield();
+          this.ejectShipFromBlackHole(ship, hole.position, nowMs);
+        } else if (!this.pendingShipHits.includes(ship)) {
+          this.pendingShipHits.push(ship);
+        }
+        return;
+      }
+      captureIfNeeded(ship.visual, ship.position);
+    });
+
+    this.asteroids.forEach((asteroid) => {
+      if (!asteroid.isAlive) return;
+      if (isLethal(asteroid.position, hole.position, BLACK_HOLE.lethalRadius)) {
+        // No split, unlike a shot destroying it - consumed whole, not shattered.
+        this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
+        asteroid.destroy();
+        return;
+      }
+      captureIfNeeded(asteroid.visual, asteroid.position);
+    });
+
+    this.ufos.forEach((ufo) => {
+      if (!ufo.isAlive) return;
+      if (isLethal(ufo.position, hole.position, BLACK_HOLE.lethalRadius)) {
+        // Same "hazard-killed, not shot" no-score rule as an asteroid/ship ram.
+        if (!this.pendingUfoHits.some((hit) => hit.ufo === ufo)) {
+          this.pendingUfoHits.push({ ufo, projectile: undefined, awardScore: false });
+        }
+        return;
+      }
+      captureIfNeeded(ufo.visual, ufo.position);
+    });
+
+    this.shields.forEach((shield) => {
+      if (!shield.isAlive) return;
+      if (isLethal(shield.position, hole.position, BLACK_HOLE.lethalRadius)) {
+        shield.destroy();
+        return;
+      }
+      captureIfNeeded(shield.visual, shield.position);
+    });
+
+    this.commanders.forEach((commander) => {
+      if (!commander.isAlive || !commander.isAdrift) return;
+      if (isLethal(commander.position, hole.position, BLACK_HOLE.lethalRadius)) {
+        if (!this.pendingCommanderHazardHits.includes(commander)) {
+          this.pendingCommanderHazardHits.push(commander);
+        }
+        return;
+      }
+      captureIfNeeded(commander.visual, commander.position);
+    });
+  }
+
+  /** A shield absorbing the lethal center doesn't just "not die" - "the shield's energy discharge blows you back out," a judgment call (not asked about explicitly): teleported just past the event horizon along the same line it was pulled in on, with an outward velocity burst and a brief invulnerability window so it can't be immediately recaptured before the player reacts. */
+  private ejectShipFromBlackHole(ship: Ship, holeCenter: Vector2, nowMs: number): void {
+    const away = normalize({ x: ship.position.x - holeCenter.x, y: ship.position.y - holeCenter.y });
+    const direction = away.x === 0 && away.y === 0 ? { x: 1, y: 0 } : away;
+    const ejectDistance = BLACK_HOLE.eventHorizonRadius + 20;
+
+    ship.visual.setPosition(holeCenter.x + direction.x * ejectDistance, holeCenter.y + direction.y * ejectDistance);
+    ship.visual.setVelocity(direction.x * BLACK_HOLE.shieldEjectSpeed, direction.y * BLACK_HOLE.shieldEjectSpeed);
+    ship.grantInvulnerability(nowMs, BLACK_HOLE.shieldEjectInvulnerabilityMs);
+    this.spawnBurst(ship.position, COLORS.shield, EFFECTS.shipBurst);
+  }
+
   private handleCollision(pair: Phaser.Types.Physics.Matter.MatterCollisionPair): void {
     const nowMs = this.time.now;
     const entityA = this.entityOf(pair.bodyA);
@@ -573,6 +1290,72 @@ export class GameScene extends Phaser.Scene {
     const ufo = entityA instanceof Ufo ? entityA : entityB instanceof Ufo ? entityB : undefined;
     const ufoShot = entityA instanceof UfoShot ? entityA : entityB instanceof UfoShot ? entityB : undefined;
     const commander = entityA instanceof Commander ? entityA : entityB instanceof Commander ? entityB : undefined;
+    const fracture = entityA instanceof Fracture ? entityA : entityB instanceof Fracture ? entityB : undefined;
+    const fractureFragment =
+      entityA instanceof FractureFragment ? entityA : entityB instanceof FractureFragment ? entityB : undefined;
+    const fractureSwarmBit =
+      entityA instanceof FractureSwarmBit ? entityA : entityB instanceof FractureSwarmBit ? entityB : undefined;
+    const fractureShard =
+      entityA instanceof FractureShard ? entityA : entityB instanceof FractureShard ? entityB : undefined;
+    const cardinalPlasma =
+      entityA instanceof CardinalPlasmaBall ? entityA : entityB instanceof CardinalPlasmaBall ? entityB : undefined;
+
+    // Core and Fragment: shootable (CATEGORY.PROJECTILE) and now also
+    // "behave like rocks," decided - CATEGORY.SHIP too, resolved via the
+    // exact same pendingShipHits path an asteroid ram already uses (see
+    // that branch further below) - takes no damage from the contact
+    // itself, same as an asteroid doesn't from ramming a ship.
+    if (projectile?.isAlive && fracture?.isAlive) {
+      if (!this.pendingFractureCoreHits.some((hit) => hit.projectile === projectile)) {
+        this.pendingFractureCoreHits.push({ projectile });
+      }
+      return;
+    }
+
+    if (projectile?.isAlive && fractureFragment?.isAlive) {
+      if (!this.pendingFractureFragmentHits.some((hit) => hit.projectile === projectile)) {
+        this.pendingFractureFragmentHits.push({ fragment: fractureFragment, projectile });
+      }
+      return;
+    }
+
+    if (ship?.isAlive && (fracture?.isAlive || fractureFragment?.isAlive)) {
+      if (!ship.isInvulnerable(nowMs) && !this.pendingShipHits.includes(ship)) {
+        this.pendingShipHits.push(ship);
+      }
+      return;
+    }
+
+    // Swarm: always safe, decided - a pickup (pendingScrapPickups), never a pendingShipHits entry. Its own mask no longer includes CATEGORY.PROJECTILE at all (see FractureSwarmBit's doc comment), so this is the only pair it can appear in.
+    if (ship?.isAlive && fractureSwarmBit?.isAlive) {
+      if (!this.pendingScrapPickups.some((pickup) => pickup.swarmBit === fractureSwarmBit)) {
+        this.pendingScrapPickups.push({ ship, swarmBit: fractureSwarmBit });
+      }
+      return;
+    }
+
+    if (ship?.isAlive && fractureShard?.isAlive) {
+      // Unconditionally queued (unlike the ship-contact branch above) -
+      // the shard is always consumed on contact, same as a UfoShot is;
+      // only whether it actually *hurts* the ship depends on
+      // invulnerability, checked at resolve time below.
+      if (!this.pendingFractureShardHits.some((hit) => hit.shard === fractureShard)) {
+        this.pendingFractureShardHits.push({ ship, shard: fractureShard });
+      }
+      return;
+    }
+
+    // The Cardinal's own Phase 2 attack - same "always consumed on
+    // contact, invulnerability checked at resolve time" shape as
+    // FractureShard just above. The rest of The Cardinal (arms, core,
+    // ram) isn't Matter-backed at all, so this is the only Cardinal-
+    // related pair that can ever reach handleCollision().
+    if (ship?.isAlive && cardinalPlasma?.isAlive) {
+      if (!this.pendingCardinalPlasmaHits.some((hit) => hit.plasma === cardinalPlasma)) {
+        this.pendingCardinalPlasmaHits.push({ ship, plasma: cardinalPlasma });
+      }
+      return;
+    }
 
     if (projectile?.isAlive && asteroid?.isAlive) {
       // A projectile can touch two asteroids in the same physics step
@@ -708,7 +1491,20 @@ export class GameScene extends Phaser.Scene {
 
   private entityOf(
     body: MatterJS.BodyType,
-  ): Asteroid | Projectile | Ship | Shield | Ufo | UfoShot | Commander | undefined {
+  ):
+    | Asteroid
+    | Projectile
+    | Ship
+    | Shield
+    | Ufo
+    | UfoShot
+    | Commander
+    | Fracture
+    | FractureFragment
+    | FractureSwarmBit
+    | FractureShard
+    | CardinalPlasmaBall
+    | undefined {
     const gameObject = body.gameObject as Phaser.GameObjects.GameObject | undefined;
     return gameObject?.getData('entity') as
       | Asteroid
@@ -718,6 +1514,11 @@ export class GameScene extends Phaser.Scene {
       | Ufo
       | UfoShot
       | Commander
+      | Fracture
+      | FractureFragment
+      | FractureSwarmBit
+      | FractureShard
+      | CardinalPlasmaBall
       | undefined;
   }
 
@@ -848,45 +1649,105 @@ export class GameScene extends Phaser.Scene {
     stopSound(this, THRUST_SFX_KEY);
     this.wasAnyThrusting = false;
     if (outcome.status === 'win') {
-      this.enterGameOver([`PLAYER ${outcome.winnerIndex + 1} WINS`, 'PRESS ANY KEY TO RESTART']);
+      // Competitive's own leaderboard, decided - "behave like the one
+      // for single player": the winner's own score is the one number a
+      // Competitive round actually produces, checked the same way
+      // Single Player's own score already is. Pausing here (not
+      // waiting for the fetch) freezes the round immediately either way.
+      this.matter.world.pause();
+      const winner = this.players.find((p) => p.slotIndex === outcome.winnerIndex);
+      void this.finishCompetitiveRound(outcome.winnerIndex, this.scores[outcome.winnerIndex] ?? 0, winner);
     } else if (outcome.status === 'draw') {
-      this.enterGameOver(['DRAW', 'PRESS ANY KEY TO RESTART']);
+      // No single score a draw could attribute to a leaderboard entry -
+      // straight to the normal overlay, same as before this feature.
+      this.enterGameOver(['DRAW', 'PRESS ANY KEY FOR MAIN MENU']);
     } else if (this.mode === 'singlePlayer') {
-      // The one place a loss also does something besides end the round:
-      // check the run's score against the global top-10 leaderboard
-      // (systems/HighScoreApi.ts - a real backend now, not localStorage)
-      // and, if it qualifies, let the player enter 3-letter initials
-      // before the usual GAME OVER overlay. Pausing here (not waiting for
-      // the fetch) freezes the round immediately either way.
       this.matter.world.pause();
       void this.finishSinglePlayerRound(this.scores[0] ?? 0);
     } else {
-      this.enterGameOver(['GAME OVER', 'PRESS ANY KEY TO RESTART']);
+      // Cooperative loss (see RoundOutcome.ts - Competitive never
+      // reaches this branch, Single Player is handled above). The
+      // pooled team score is the one number the whole team already
+      // sees (refreshAllPlayerHud's own pooledScore) - "behave like the
+      // one for single player" applied to a shared result instead of an
+      // individual one.
+      this.matter.world.pause();
+      void this.finishCooperativeRound(this.scores.reduce((sum, score) => sum + score, 0));
     }
   }
 
-  /** Fetches the current leaderboard, decides whether `finalScore` qualifies (the same check the server itself re-verifies as the actual authority - see HighScoreApi.ts), and either starts initials entry or goes straight to the normal GAME OVER overlay. */
+  /** Fetches the current leaderboard, decides whether `finalScore` qualifies (the same check the server itself re-verifies as the actual authority - see HighScoreApi.ts), and either starts initials entry or goes straight to the normal GAME OVER overlay. Shared by all three modes - only which leaderboard, whose input enters initials, and the base overlay lines differ. */
   private async finishSinglePlayerRound(finalScore: number): Promise<void> {
-    const leaderboard = await fetchLeaderboard();
+    const leaderboard = await fetchLeaderboard('singlePlayer');
     if (qualifiesForLeaderboard(leaderboard, finalScore)) {
-      this.enterInitialsEntry(finalScore);
+      this.enterInitialsEntry(finalScore, 'singlePlayer', this.players[0]!.input, ['GAME OVER', `SCORE ${finalScore}`]);
       return;
     }
 
     const topLine = leaderboard[0] ? `TOP SCORE ${leaderboard[0].score}` : 'NO SCORES YET';
-    this.enterGameOver(['GAME OVER', `SCORE ${finalScore}`, topLine, 'PRESS ANY KEY TO RESTART']);
+    this.enterGameOver(['GAME OVER', `SCORE ${finalScore}`, topLine, 'PRESS ANY KEY FOR MAIN MENU']);
+  }
+
+  /** Competitive's own leaderboard check - the winning player's own score, entered with their own input if it qualifies. No winner slot found (shouldn't happen - RoundOutcome.ts only reports a winnerIndex that was alive) degrades to the plain win overlay rather than throwing. */
+  private async finishCompetitiveRound(
+    winnerIndex: number,
+    finalScore: number,
+    winner: PlayerSlot | undefined,
+  ): Promise<void> {
+    const winLine = `PLAYER ${winnerIndex + 1} WINS`;
+    if (!winner) {
+      this.enterGameOver([winLine, 'PRESS ANY KEY FOR MAIN MENU']);
+      return;
+    }
+
+    const leaderboard = await fetchLeaderboard('competitive');
+    if (qualifiesForLeaderboard(leaderboard, finalScore)) {
+      this.enterInitialsEntry(finalScore, 'competitive', winner.input, [winLine, `SCORE ${finalScore}`]);
+      return;
+    }
+    this.enterGameOver([winLine, `SCORE ${finalScore}`, 'PRESS ANY KEY FOR MAIN MENU']);
   }
 
   /**
-   * Classic-arcade 3-letter initials entry (Single Player, on a
-   * qualifying score). Reuses whatever input the player was already
-   * using to fly - `this.players[0].input` is still live (not destroyed
-   * until scene shutdown) - `turnDirection` (edge-triggered) cycles the
-   * active slot's letter A-Z, `isFiring` (edge-triggered) confirms and
-   * advances; confirming the third slot submits and proceeds to the
-   * normal GAME OVER overlay. Driven by `updateInitialsEntry()`, called
-   * from `update()` while `this.state === 'enteringInitials'` - a
-   * different per-frame path than every other overlay in this file
+   * Cooperative's own leaderboard check - the pooled team score, entered
+   * by "whichever player is still alive/last standing," decided
+   * (`this.lastEliminatedSlotIndex`, tracked wherever a Cooperative
+   * player is actually eliminated - `processCommanderExpiry`,
+   * `processPendingCommanderHazardHits`). Cooperative's round only ever
+   * ends once *everyone* is eliminated (RoundOutcome.ts has no "win" for
+   * this mode), so there's never a truly-still-alive survivor at the
+   * exact moment this runs - "last standing" here means the last one to
+   * fall, not whoever's currently alive. No tracked slot (shouldn't
+   * happen once any player has been eliminated at all) degrades to the
+   * plain loss overlay rather than throwing.
+   */
+  private async finishCooperativeRound(finalScore: number): Promise<void> {
+    const enterer = this.players.find((p) => p.slotIndex === this.lastEliminatedSlotIndex);
+    if (!enterer) {
+      this.enterGameOver(['GAME OVER', `SCORE ${finalScore}`, 'PRESS ANY KEY FOR MAIN MENU']);
+      return;
+    }
+
+    const leaderboard = await fetchLeaderboard('cooperative');
+    if (qualifiesForLeaderboard(leaderboard, finalScore)) {
+      this.enterInitialsEntry(finalScore, 'cooperative', enterer.input, ['GAME OVER', `SCORE ${finalScore}`]);
+      return;
+    }
+    this.enterGameOver(['GAME OVER', `SCORE ${finalScore}`, 'PRESS ANY KEY FOR MAIN MENU']);
+  }
+
+  /**
+   * Classic-arcade 3-letter initials entry, on a qualifying score in any
+   * of the three modes now. Reuses whichever player's input the caller
+   * hands in (`this.players[0].input` for Single Player, the winner's
+   * for Competitive, whoever was last eliminated for Cooperative - see
+   * each `finishXRound` method) - `turnDirection` (edge-triggered)
+   * cycles the active slot's letter A-Z, `isFiring` (edge-triggered)
+   * confirms and advances; confirming the third slot submits (to that
+   * mode's own leaderboard, `systems/HighScoreApi.ts`) and proceeds to
+   * the normal GAME OVER overlay. Driven by `updateInitialsEntry()`,
+   * called from `update()` while `this.state === 'enteringInitials'` -
+   * a different per-frame path than every other overlay in this file
    * (`waitForKeyPress`'s one-shot "any key" listeners), since this one
    * needs to read direction/fire every frame, not just detect a single
    * press.
@@ -901,9 +1762,17 @@ export class GameScene extends Phaser.Scene {
     prevTurnDirection: -1 | 0 | 1;
     prevFiring: boolean;
     finalScore: number;
+    mode: GameMode;
+    input: PlayerInput;
+    baseOverlayLines: string[];
   } | null = null;
 
-  private enterInitialsEntry(finalScore: number): void {
+  private enterInitialsEntry(
+    finalScore: number,
+    mode: GameMode,
+    input: PlayerInput,
+    baseOverlayLines: string[],
+  ): void {
     this.state = 'enteringInitials';
     const centerX = ARENA_WIDTH / 2;
     const centerY = ARENA_HEIGHT / 2;
@@ -954,6 +1823,9 @@ export class GameScene extends Phaser.Scene {
       prevTurnDirection: 0,
       prevFiring: false,
       finalScore,
+      mode,
+      input,
+      baseOverlayLines,
     };
     this.refreshInitialsEntryDisplay();
   }
@@ -971,8 +1843,8 @@ export class GameScene extends Phaser.Scene {
 
   private updateInitialsEntry(): void {
     const entry = this.initialsEntry;
-    const input = this.players[0]?.input;
-    if (!entry || !input) return;
+    if (!entry) return;
+    const input = entry.input;
 
     const turn = input.turnDirection;
     if (turn !== 0 && entry.prevTurnDirection === 0) {
@@ -999,18 +1871,20 @@ export class GameScene extends Phaser.Scene {
     if (!entry) return;
     const initials = entry.letters.join('');
     const finalScore = entry.finalScore;
+    const mode = entry.mode;
+    const baseLines = entry.baseOverlayLines;
 
     [entry.titleText, entry.scoreText, entry.instructionText, ...entry.letterTexts].forEach((text) =>
       text.destroy(),
     );
     this.initialsEntry = null;
 
-    void submitHighScore(initials, finalScore).then((result) => {
-      this.enterGameOver(
-        result.accepted
-          ? ['GAME OVER', `SCORE ${finalScore}`, 'NEW HIGH SCORE!', 'PRESS ANY KEY TO RESTART']
-          : ['GAME OVER', `SCORE ${finalScore}`, 'PRESS ANY KEY TO RESTART'],
-      );
+    void submitHighScore(initials, finalScore, mode).then((result) => {
+      this.enterGameOver([
+        ...baseLines,
+        ...(result.accepted ? ['NEW HIGH SCORE!'] : []),
+        'PRESS ANY KEY FOR MAIN MENU',
+      ]);
     });
   }
 
@@ -1024,7 +1898,10 @@ export class GameScene extends Phaser.Scene {
       if (!hasRescueWindowExpired(commander.ejectedAtMs, nowMs, COMMANDER.rescueWindowMs)) continue;
 
       const player = this.players.find((p) => p.slotIndex === commander.slotIndex);
-      if (player) player.eliminated = true;
+      if (player) {
+        player.eliminated = true;
+        this.lastEliminatedSlotIndex = player.slotIndex;
+      }
       this.spawnBurst(commander.position, commander.color, EFFECTS.shipBurst);
       commander.destroy();
       anyExpired = true;
@@ -1131,7 +2008,10 @@ export class GameScene extends Phaser.Scene {
       if (!commander.isAlive || !commander.isAdrift) continue;
 
       const player = this.players.find((p) => p.slotIndex === commander.slotIndex);
-      if (player) player.eliminated = true;
+      if (player) {
+        player.eliminated = true;
+        this.lastEliminatedSlotIndex = player.slotIndex;
+      }
       this.spawnBurst(commander.position, commander.color, EFFECTS.shipBurst);
       this.shakeCamera(EFFECTS.majorShake);
       commander.destroy();
@@ -1169,7 +2049,7 @@ export class GameScene extends Phaser.Scene {
       this.spawnBurst(position, COLORS.ufo, EFFECTS.ufoBurst);
       this.shakeCamera(EFFECTS.majorShake);
       if (awardScore && projectile) {
-        this.awardScore(projectile.ownerIndex, UFO.score);
+        this.awardScore(projectile.ownerIndex, UFO.score, position);
       }
     }
   }
@@ -1183,6 +2063,287 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Phase 1 (Core): a hit decrements hitsRemaining and, once that
+   * reaches zero, spawns Phase 2's three Fragments in its place rather
+   * than ending the encounter outright. Hits landed while it's still
+   * materializing are no-ops (Fracture.takeHit already guards this) -
+   * the shot is still consumed either way, it just doesn't count.
+   */
+  private processPendingFractureCoreHits(nowMs: number): void {
+    if (this.pendingFractureCoreHits.length === 0) return;
+    const hits = this.pendingFractureCoreHits;
+    this.pendingFractureCoreHits = [];
+    const fracture = this.fracture;
+    for (const { projectile } of hits) {
+      projectile.destroy();
+      if (!fracture?.isAlive) continue;
+
+      const destroyed = fracture.takeHit(nowMs);
+      if (!destroyed) {
+        this.spawnBurst(fracture.position, COLORS.fracture, EFFECTS.asteroidBurst);
+        continue;
+      }
+
+      const position = fracture.position;
+      fracture.destroy();
+      this.fracture = undefined;
+      this.spawnBurst(position, COLORS.fracture, EFFECTS.ufoBurst);
+      this.sound.play(SHIP_DESTROYED_SFX_KEY, { volume: getSfxVolume() });
+      this.shakeCamera(EFFECTS.majorShake);
+      this.awardScore(projectile.ownerIndex, FRACTURE.score, position);
+      this.spawnFractureFragments(position, nowMs);
+    }
+  }
+
+  /** One of each role, decided - not three random ones, so every Phase 2 always has all three flavors present rather than possibly rolling three of the same. Spawned at the Core's own death position, same convention as an asteroid's children. */
+  private spawnFractureFragments(position: Vector2, nowMs: number): void {
+    const roles: FractureFragmentRole[] = ['aggressive', 'gravity', 'launcher'];
+    roles.forEach((role, i) => {
+      const heading = (i / roles.length) * Math.PI * 2 + Math.random() * 0.5;
+      this.fractureFragments.push(new FractureFragment(this, position, role, heading, nowMs));
+    });
+  }
+
+  /** Phase 2 (Fragment): a hit decrements hitsRemaining and, once that reaches zero, spawns FRACTURE.swarmCountPerFragment Phase 3 Swarm bits scattering outward from where it died. */
+  private processPendingFractureFragmentHits(nowMs: number): void {
+    if (this.pendingFractureFragmentHits.length === 0) return;
+    const hits = this.pendingFractureFragmentHits;
+    this.pendingFractureFragmentHits = [];
+    for (const { fragment, projectile } of hits) {
+      projectile.destroy();
+      if (!fragment.isAlive) continue;
+
+      const destroyed = fragment.takeHit(nowMs);
+      if (!destroyed) {
+        this.spawnBurst(fragment.position, COLORS.fracture, EFFECTS.asteroidBurst);
+        continue;
+      }
+
+      const position = fragment.position;
+      fragment.destroy();
+      this.spawnBurst(position, COLORS.fracture, EFFECTS.asteroidBurst);
+      this.shakeCamera(EFFECTS.minorShake);
+      this.awardScore(projectile.ownerIndex, FRACTURE.fragmentScore, position);
+      this.spawnFractureSwarm(position, nowMs);
+
+      // "Once last Fragment is dead, launch a 10 sec countdown," decided
+      // - checked here (not after the later array-filter step) since
+      // this fragment is still physically in fractureFragments until
+      // update()'s cleanup runs later this same frame.
+      if (this.fractureFragments.every((f) => !f.isAlive)) {
+        this.beginScrapCountdown(nowMs);
+      }
+    }
+  }
+
+  private spawnFractureSwarm(position: Vector2, nowMs: number): void {
+    for (let i = 0; i < FRACTURE.swarmCountPerFragment; i += 1) {
+      const heading = (i / FRACTURE.swarmCountPerFragment) * Math.PI * 2 + Math.random() * 0.5;
+      this.fractureSwarm.push(new FractureSwarmBit(this, position, heading, nowMs));
+    }
+  }
+
+  private beginScrapCountdown(nowMs: number): void {
+    this.scrapCountdownEndsAtMs = nowMs + FRACTURE.scrapCollectionMs;
+    this.scrapCountdownText = this.add
+      .text(ARENA_WIDTH / 2, 40, '', { fontFamily: 'monospace', fontSize: '20px', color: toCssHex(COLORS.fracture) })
+      .setOrigin(0.5, 0);
+  }
+
+  /** Ticks the on-screen countdown every frame; once it runs out, whatever scrap is left just goes with it - "optional bonus, not required for stage clear" (the whole reason this is a countdown and not a hard collect-everything gate). */
+  private updateScrapCountdown(nowMs: number): void {
+    if (this.scrapCountdownEndsAtMs === undefined) return;
+
+    const remainingMs = this.scrapCountdownEndsAtMs - nowMs;
+    if (remainingMs <= 0) {
+      this.fractureSwarm.forEach((swarmBit) => swarmBit.destroy());
+      this.fractureSwarm = [];
+      this.scrapCountdownText?.destroy();
+      this.scrapCountdownText = undefined;
+      this.scrapCountdownEndsAtMs = undefined;
+      return;
+    }
+
+    this.scrapCountdownText?.setText(`COLLECT SCRAP: ${Math.ceil(remainingMs / 1000)}s`);
+  }
+
+  /** Always safe (decided) - never lethal, just +1 scrap for whichever player touched it. Mirrors processPendingShieldPickups's shape exactly. */
+  private processPendingScrapPickups(nowMs: number): void {
+    if (this.pendingScrapPickups.length === 0) return;
+    const pickups = this.pendingScrapPickups;
+    this.pendingScrapPickups = [];
+    for (const { ship, swarmBit } of pickups) {
+      if (!swarmBit.isAlive || swarmBit.isMaterializing(nowMs)) continue;
+      const player = this.players.find((p) => p.ship === ship);
+      if (!player) continue;
+
+      const position = swarmBit.position;
+      swarmBit.destroy();
+      player.scrap += 1;
+      this.refreshAllPlayerHud();
+      this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume: getSfxVolume() }); // no dedicated scrap pickup SFX yet - reusing the closest existing "pickup" sound
+      this.spawnBurst(position, COLORS.fracture, EFFECTS.asteroidBurst);
+    }
+  }
+
+  /** The launcher Fragment's shot - kills an unshielded ship on contact, same generic pendingShipHits path every other hazard already uses. The shard itself is always destroyed on contact, invulnerable ship or not - same as a UfoShot. */
+  private processPendingFractureShardHits(nowMs: number): void {
+    if (this.pendingFractureShardHits.length === 0) return;
+    const hits = this.pendingFractureShardHits;
+    this.pendingFractureShardHits = [];
+    for (const { ship, shard } of hits) {
+      if (shard.isAlive) shard.destroy();
+      if (ship.isAlive && !ship.isInvulnerable(nowMs) && !this.pendingShipHits.includes(ship)) {
+        this.pendingShipHits.push(ship);
+      }
+    }
+  }
+
+  /** A hit decrements that specific arm's own 20 HP; once it reaches zero the arm explodes into scrap (reusing FractureSwarmBit - see this.fractureSwarm's own doc comment for why) and goes dark, but the fight continues - The Cardinal itself is never destroyed by this alone. */
+  private processPendingCardinalArmHits(nowMs: number): void {
+    if (this.pendingCardinalArmHits.length === 0) return;
+    const hits = this.pendingCardinalArmHits;
+    this.pendingCardinalArmHits = [];
+    const cardinal = this.cardinal;
+    for (const { armIndex, projectile } of hits) {
+      projectile.destroy();
+      if (!cardinal?.isAlive || !cardinal.isArmAlive(armIndex)) continue;
+
+      const destroyed = cardinal.takeArmHit(armIndex, nowMs);
+      const armPosition = cardinal.armWorldPosition(armIndex);
+      if (!destroyed) {
+        this.spawnBurst(armPosition, COLORS.cardinal, EFFECTS.asteroidBurst);
+        continue;
+      }
+
+      this.spawnBurst(armPosition, COLORS.cardinal, EFFECTS.ufoBurst);
+      this.shakeCamera(EFFECTS.minorShake);
+      this.awardScore(projectile.ownerIndex, CARDINAL.armScore, armPosition);
+      // "Collectible until the boss finally exploded," decided - no
+      // countdown, unlike beginScrapCountdown()'s 10s window below.
+      this.fractureSwarm.push(new FractureSwarmBit(this, armPosition, Math.random() * Math.PI * 2, nowMs));
+      this.fractureSwarm.push(new FractureSwarmBit(this, armPosition, Math.random() * Math.PI * 2, nowMs));
+    }
+  }
+
+  /** Only reachable once every arm is down (Phase 2) - a hit decrements the core's own 20 HP; once it reaches zero the fight enters Phase 3 (Cardinal.update() picks up the phase transition and starts the detonation countdown on its own - see resolveCardinalDetonation for what happens once that timer runs out). */
+  private processPendingCardinalCoreHits(nowMs: number): void {
+    if (this.pendingCardinalCoreHits.length === 0) return;
+    const hits = this.pendingCardinalCoreHits;
+    this.pendingCardinalCoreHits = [];
+    const cardinal = this.cardinal;
+    for (const { projectile } of hits) {
+      projectile.destroy();
+      if (!cardinal?.isAlive) continue;
+
+      const destroyed = cardinal.takeCoreHit(nowMs);
+      if (!destroyed) {
+        this.spawnBurst(cardinal.position, COLORS.cardinal, EFFECTS.asteroidBurst);
+        continue;
+      }
+
+      this.spawnBurst(cardinal.position, COLORS.ufo, EFFECTS.ufoBurst);
+      this.shakeCamera(EFFECTS.majorShake);
+      this.awardScore(projectile.ownerIndex, CARDINAL.coreScore, cardinal.position);
+    }
+  }
+
+  /** The plasma ball always destroys itself on contact, same as a UfoShot/FractureShard - only whether it actually hurts the ship depends on invulnerability, checked here. */
+  private processPendingCardinalPlasmaHits(nowMs: number): void {
+    if (this.pendingCardinalPlasmaHits.length === 0) return;
+    const hits = this.pendingCardinalPlasmaHits;
+    this.pendingCardinalPlasmaHits = [];
+    for (const { ship, plasma } of hits) {
+      if (plasma.isAlive) plasma.destroy();
+      if (ship.isAlive && !ship.isInvulnerable(nowMs) && !this.pendingShipHits.includes(ship)) {
+        this.pendingShipHits.push(ship);
+      }
+    }
+  }
+
+  /**
+   * The Phase 3 countdown's own payoff - a timed detonation, not a hit
+   * that kills it (score for actually defeating it was already awarded
+   * the moment the core died, processPendingCardinalCoreHits above).
+   * "Large lethal radius... players need to take distance," decided -
+   * any ship still inside CARDINAL.detonationMaxRadius dies outright,
+   * same pendingShipHits path every other hazard uses. Any uncollected
+   * arm-scrap goes with it - "collectible until the boss finally
+   * exploded," decided.
+   */
+  private resolveCardinalDetonation(nowMs: number): void {
+    const cardinal = this.cardinal;
+    if (!cardinal) return;
+    const position = cardinal.position;
+
+    this.players.forEach((player) => {
+      if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
+      const distance = Math.hypot(player.ship.position.x - position.x, player.ship.position.y - position.y);
+      if (distance <= CARDINAL.detonationMaxRadius && !this.pendingShipHits.includes(player.ship)) {
+        this.pendingShipHits.push(player.ship);
+      }
+    });
+
+    this.fractureSwarm.forEach((swarmBit) => swarmBit.destroy());
+    this.fractureSwarm = [];
+    cardinal.destroy();
+    this.cardinal = undefined;
+    this.hideCardinalHealthBar();
+
+    this.spawnBurst(position, COLORS.ufo, EFFECTS.ufoBurst);
+    this.sound.play(SHIP_DESTROYED_SFX_KEY, { volume: getSfxVolume() });
+    this.shakeCamera(EFFECTS.majorShake);
+  }
+
+  /** "One consolidated bar below the boss," decided - a single Rectangle fill + border + label, created lazily on first use (materializeCardinal()) and torn down once the fight resolves, same lazy-creation shape scrapCountdownText already uses. Relabels itself Phase 1 "ARMS" -> Phase 2/3 "CORE" as the fight progresses. */
+  private updateCardinalHealthBar(): void {
+    const cardinal = this.cardinal;
+    const border = this.cardinalHealthBarBorder;
+    const fill = this.cardinalHealthBarFill;
+    const label = this.cardinalHealthBarLabel;
+    if (!cardinal || !border || !fill || !label) return;
+
+    const fraction = cardinal.phase === 'armed' ? cardinal.armHpFraction() : cardinal.coreHpFraction();
+    // Left-anchored (setOrigin(0, 0.5) at creation) - same "just mutate
+    // .width, never reposition" pattern MenuScene's own volume sliders
+    // already use, rather than recomputing .x every frame to fake it.
+    fill.width = Math.max(0, CARDINAL_HEALTH_BAR.width * fraction);
+
+    const labelText = cardinal.phase === 'armed' ? 'ARMS' : cardinal.phase === 'coreExposed' ? 'CORE' : 'CRITICAL';
+    label.setText(labelText);
+  }
+
+  /** Positioned below the fixed arena-center boss, since The Cardinal (unlike The Fracture) never moves - a hardcoded offset is safe here in a way it wouldn't be for a drifting boss. */
+  private createCardinalHealthBar(): void {
+    const centerX = ARENA_WIDTH / 2;
+    const barY = ARENA_HEIGHT / 2 + CARDINAL.coreRadius + CARDINAL_HEALTH_BAR.marginTop;
+    const barLeft = centerX - CARDINAL_HEALTH_BAR.width / 2;
+
+    this.cardinalHealthBarLabel = this.add
+      .text(centerX, barY - 18, 'ARMS', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: toCssHex(COLORS.cardinal),
+      })
+      .setOrigin(0.5);
+    this.cardinalHealthBarBorder = this.add
+      .rectangle(centerX, barY, CARDINAL_HEALTH_BAR.width, CARDINAL_HEALTH_BAR.height)
+      .setStrokeStyle(2, COLORS.cardinal);
+    this.cardinalHealthBarFill = this.add
+      .rectangle(barLeft, barY, CARDINAL_HEALTH_BAR.width, CARDINAL_HEALTH_BAR.height - 4, COLORS.cardinal)
+      .setOrigin(0, 0.5);
+  }
+
+  private hideCardinalHealthBar(): void {
+    this.cardinalHealthBarBorder?.destroy();
+    this.cardinalHealthBarFill?.destroy();
+    this.cardinalHealthBarLabel?.destroy();
+    this.cardinalHealthBarBorder = undefined;
+    this.cardinalHealthBarFill = undefined;
+    this.cardinalHealthBarLabel = undefined;
+  }
+
   private destroyAsteroid(asteroid: Asteroid, projectile: Projectile): void {
     this.sound.play(ASTEROID_HIT_SFX_KEY, { volume: getSfxVolume() });
     projectile.destroy();
@@ -1194,7 +2355,7 @@ export class GameScene extends Phaser.Scene {
     this.spawnBurst(position, COLORS.asteroid, EFFECTS.asteroidBurst);
     this.shakeCamera(EFFECTS.minorShake);
 
-    this.awardScore(projectile.ownerIndex, ASTEROID[size].score);
+    this.awardScore(projectile.ownerIndex, ASTEROID[size].score, position);
 
     const childSize: AsteroidSize | null = nextAsteroidSize(size);
     if (childSize) {
@@ -1221,9 +2382,12 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.shake(config.durationMs, config.intensity);
   }
 
-  private awardScore(ownerIndex: number, amount: number): void {
+  /** `position` is where the hit landed - the score popup spawns there, in the scoring player's own HUD color. */
+  private awardScore(ownerIndex: number, amount: number, position: Vector2): void {
     this.scores[ownerIndex] = (this.scores[ownerIndex] ?? 0) + amount;
     this.refreshAllPlayerHud();
+    const color = COLORS.players[ownerIndex] ?? COLORS.players[0];
+    this.scorePopups.push(new ScorePopup(this, position, color, amount, this.time.now));
   }
 
   /**
@@ -1258,6 +2422,11 @@ export class GameScene extends Phaser.Scene {
         lines.push(`${filled}${hollow}`);
       }
 
+      // "Next to their life status," decided - appended after the
+      // lives/cooperative-status line, only once nonzero so the HUD
+      // stays clean before The Fracture's Phase 3 is ever reached.
+      if (player.scrap > 0) lines.push(`SCRAP ${player.scrap}`);
+
       player.hudText.setText(lines.join('\n'));
     });
   }
@@ -1281,23 +2450,182 @@ export class GameScene extends Phaser.Scene {
     this.matter.world.pause();
     this.showOverlay(['STAGE CLEARED', 'PRESS ANY KEY FOR NEXT LEVEL']);
     this.waitForKeyPress(() => this.beginNextLevel());
+    // "Moves back after [the boss fight]," decided - only actually away
+    // if a boss fight just ended (spaceStationRelocated), so this is a
+    // safe no-op on every other stage-clear.
+    if (this.spaceStation && this.spaceStationRelocated) {
+      this.spaceStation.travelTo({ x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }, this.time.now, SPACE_STATION.relocateTravelMs);
+      this.spaceStationRelocated = false;
+    }
   }
 
+  /**
+   * "Every normal stage clear is followed by a boss stage, not just the
+   * first one," decided - replaces the old `fractureIntroduced` one-time
+   * latch with a strict alternation, tracked via `lastStageWasBoss`: a
+   * normal stage's own clear triggers a boss next; a boss's own clear
+   * (once its fight is fully over - isBossEncounterActive() already
+   * gates that) triggers a normal wave next. Starts false, so the very
+   * first stage-clear of the round still triggers a boss first, matching
+   * the original "after ending stage one" behavior.
+   */
   private beginNextLevel(): void {
+    this.hideOverlay();
+    if (!this.lastStageWasBoss) {
+      this.lastStageWasBoss = true;
+      this.beginBossAnnouncement(this.pickRandomBoss());
+      return;
+    }
+    this.lastStageWasBoss = false;
+    this.state = 'playing';
+    this.matter.world.resume();
+    this.stageElapsedMs = 0;
+    this.playStageMusic(GAMEPLAY_MUSIC_KEY);
+    this.resetStageHazards(this.time.now);
+    this.spawnWave(ASTEROID.spawnCountPerWave + ASTEROID.waveGrowthPerLevel);
+  }
+
+  /**
+   * "After every stage and bossfight, start the stage fresh - remove all
+   * Black Holes and reset rock count," decided - scoped to a *stage*
+   * transition specifically, not a whole-round reset (create() already
+   * has its own separate reset block for that). Called from every
+   * stage-begin point (this method's own normal-wave branch,
+   * materializeFracture(), materializeCardinal()) right before that
+   * stage's own spawnWave() call. Clearing `asteroids` here is mostly
+   * belt-and-suspenders - stage-clear already requires it to be empty -
+   * but guarantees a genuinely fresh count regardless, and the Black
+   * Hole despawn matters for real: one can still be actively alive at
+   * the exact moment the last asteroid of a stage dies (its own timer is
+   * independent of the asteroid count), and would otherwise carry over
+   * ticking into the next stage untouched.
+   */
+  private resetStageHazards(nowMs: number): void {
+    this.asteroids = [];
+    if (this.blackHole) this.despawnBlackHole(nowMs);
+    // "Not before 2 min into any stage," decided - stageElapsedMs resets
+    // to 0 right after this call (beginNextLevel()/materializeFracture()/
+    // materializeCardinal()), so gating the spawn check on it (below)
+    // already gives every stage its own fresh grace period with no
+    // extra bookkeeping here. Just needs its own warning-sound flag reset.
+    this.blackHoleWarningPlayed = false;
+  }
+
+  /** "More bosses are added later," decided - a two-entry pool today (The Fracture, The Cardinal), picked with equal odds. Whoever adds a third boss extends this, not the caller. */
+  private pickRandomBoss(): 'fracture' | 'cardinal' {
+    return Math.random() < 0.5 ? 'fracture' : 'cardinal';
+  }
+
+  /**
+   * "A big announcement... 3 seconds," decided - the game's first non-
+   * interactive, timed overlay (every other one waits for a keypress
+   * instead). Physics stays paused throughout, same as every other
+   * overlay state - the player never gets a free hit in before it's
+   * actually there. Shared across every boss (see `showBossAnnouncement`
+   * below) rather than one method per boss - only which boss actually
+   * materializes afterward differs.
+   */
+  private beginBossAnnouncement(boss: 'fracture' | 'cardinal'): void {
+    this.state = 'bossAnnouncement';
+    const announcementDurationMs = boss === 'fracture' ? FRACTURE.announcementDurationMs : CARDINAL.announcementDurationMs;
+    this.showBossAnnouncement(boss === 'fracture' ? 'THE FRACTURE' : 'THE CARDINAL');
+    this.shakeCamera(EFFECTS.majorShake);
+    this.relocateSpaceStationForBoss();
+    this.time.delayedCall(announcementDurationMs, () => {
+      if (boss === 'fracture') this.materializeFracture();
+      else this.materializeCardinal();
+    });
+  }
+
+  /** "The space station moves before the boss fight to a random corner... make the move visible," decided - triggered right as the announcement starts, so the glide (SPACE_STATION.relocateTravelMs) plays out during that same overlay. Cooperative only - other modes have no Space Station to move. */
+  private relocateSpaceStationForBoss(): void {
+    if (!this.spaceStation) return;
+    const corner = BOSS_CORNER_POSITIONS[Math.floor(Math.random() * BOSS_CORNER_POSITIONS.length)]!;
+    this.spaceStation.travelTo(corner, this.time.now, SPACE_STATION.relocateTravelMs);
+    this.spaceStationRelocated = true;
+  }
+
+  /**
+   * Shared by every boss's announcement, not just The Fracture's -
+   * "all bosses, current and future, introduced by name before the
+   * stage," decided. A bigger, boss-colored variant of the plain
+   * showOverlay() text, for the extra weight "a BIG announcement"
+   * originally asked for.
+   */
+  private showBossAnnouncement(name: string): void {
+    this.overlayTexts = [
+      this.add
+        .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2, name, {
+          fontFamily: 'monospace',
+          fontSize: '96px',
+          fontStyle: 'bold',
+          color: toCssHex(COLORS.ufo),
+        })
+        .setOrigin(0.5),
+    ];
+  }
+
+  /**
+   * Spawns "together with 4 big rocks" (decided) via the existing
+   * spawnWave() - no new asteroid-spawn path needed. Fracture.ts owns
+   * its own materialize fade/scale-in and drift-to-center from here.
+   * resetStageHazards() clears any leftover asteroids/Black Hole first,
+   * same "start the stage fresh" treatment every stage-begin point gets.
+   */
+  private materializeFracture(): void {
     this.hideOverlay();
     this.state = 'playing';
     this.matter.world.resume();
-    this.spawnWave(ASTEROID.spawnCountPerWave + ASTEROID.waveGrowthPerLevel);
+    this.stageElapsedMs = 0;
+    this.playStageMusic(FRACTURE_MUSIC_KEY);
+    const nowMs = this.time.now;
+    this.resetStageHazards(nowMs);
+    this.spawnWave(FRACTURE.spawnAsteroidCount);
+    this.fracture = new Fracture(this, { x: ARENA_WIDTH / 2, y: FRACTURE_SPAWN_OFFSCREEN_Y }, nowMs);
+  }
+
+  /**
+   * Unlike The Fracture, The Cardinal never drifts in - it's a permanent
+   * fixture at exact arena-center for the entire fight, so it simply
+   * appears there already materializing (Cardinal's own fade/scale-in
+   * beat) rather than needing a spawn-position + drift-to-center step.
+   */
+  private materializeCardinal(): void {
+    this.hideOverlay();
+    this.state = 'playing';
+    this.matter.world.resume();
+    this.stageElapsedMs = 0;
+    this.playStageMusic(CARDINAL_MUSIC_KEY);
+    const nowMs = this.time.now;
+    this.resetStageHazards(nowMs);
+    this.spawnWave(CARDINAL.spawnAsteroidCount);
+    this.cardinal = new Cardinal(this, { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }, nowMs);
+    this.createCardinalHealthBar();
+  }
+
+  /**
+   * Swaps the currently-looping stage-music track - no-op if it's
+   * already the requested one, so a normal stage-to-stage transition
+   * that doesn't actually change tracks (e.g. two normal stages back to
+   * back) never audibly restarts the same song. "Boss stages get their
+   * own music, looped, swapping back for normal stages," decided.
+   */
+  private playStageMusic(key: string): void {
+    if (this.currentStageMusicKey === key) return;
+    if (this.currentStageMusicKey) stopSound(this, this.currentStageMusicKey);
+    this.currentStageMusicKey = key;
+    playLoopingSound(this, key, getMusicVolume());
   }
 
   private enterGameOver(lines: string[]): void {
     this.state = 'gameOver';
     this.matter.world.pause();
     this.showOverlay(lines);
-    // Explicit { mode } rather than relying on scene.restart() implicitly
-    // carrying the data init() first received - this is the one thing a
-    // restarted round must not silently reset.
-    this.waitForKeyPress(() => this.scene.restart({ mode: this.mode }));
+    // "Don't start a new round, go to main menu," decided - was
+    // scene.restart({ mode: this.mode }); goToMainMenu() is the exact
+    // same cleanup (stops gameplay music/thrust sound) the pause menu's
+    // own "MAIN MENU" button already uses, reused rather than duplicated.
+    this.waitForKeyPress(() => this.goToMainMenu());
   }
 
   /**
@@ -1313,7 +2641,7 @@ export class GameScene extends Phaser.Scene {
     this.matter.world.pause();
     stopSound(this, THRUST_SFX_KEY); // mirrors HyperOut's muteEngines()
     this.wasAnyThrusting = false; // don't resume into a stuck thrust-sound state, mirrors its boostHeld reset
-    pauseSound(this, GAMEPLAY_MUSIC_KEY);
+    pauseSound(this, this.currentStageMusicKey);
     this.showPauseMenu();
   }
 
@@ -1321,11 +2649,11 @@ export class GameScene extends Phaser.Scene {
     this.hidePauseMenu();
     this.state = 'playing';
     this.matter.world.resume();
-    resumeSound(this, GAMEPLAY_MUSIC_KEY);
+    resumeSound(this, this.currentStageMusicKey);
   }
 
   private goToMainMenu(): void {
-    stopSound(this, GAMEPLAY_MUSIC_KEY);
+    stopSound(this, this.currentStageMusicKey);
     stopSound(this, THRUST_SFX_KEY);
     this.scene.start('Menu');
   }

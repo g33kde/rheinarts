@@ -38,7 +38,7 @@ export class Projectile {
       frictionAir: 0,
       collisionFilter: {
         category: CATEGORY.PROJECTILE,
-        mask: CATEGORY.ASTEROID | CATEGORY.UFO | (hitsShips ? CATEGORY.SHIP : 0),
+        mask: CATEGORY.ASTEROID | CATEGORY.UFO | CATEGORY.FRACTURE | (hitsShips ? CATEGORY.SHIP : 0),
       },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Arc>;

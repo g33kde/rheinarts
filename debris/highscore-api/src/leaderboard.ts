@@ -55,3 +55,29 @@ export function insertEntry(
   combined.sort((a, b) => b.score - a.score);
   return combined.slice(0, maxEntries);
 }
+
+/**
+ * Three separately-tracked leaderboards now, one per game mode -
+ * "behave like the one for single player, but are separately tracked,"
+ * decided.
+ */
+export const VALID_MODES = ['singlePlayer', 'cooperative', 'competitive'] as const;
+export type Mode = (typeof VALID_MODES)[number];
+
+export function isValidMode(value: unknown): value is Mode {
+  return typeof value === 'string' && (VALID_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * `singlePlayer` deliberately keeps using `basePath` exactly as
+ * configured (the pre-existing, already-live leaderboard file) rather
+ * than gaining a suffix too - no migration needed for data that already
+ * exists in production. Cooperative/Competitive get sibling files next
+ * to it instead of new env vars/PVC mounts to configure.
+ */
+export function filePathForMode(basePath: string, mode: Mode): string {
+  if (mode === 'singlePlayer') return basePath;
+  const ext = '.json';
+  const base = basePath.endsWith(ext) ? basePath.slice(0, -ext.length) : basePath;
+  return `${base}-${mode}${ext}`;
+}
