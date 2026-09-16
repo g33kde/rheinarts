@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampSpeed, wrapAxis, wrapPosition } from '../src/systems/MovementSystem';
+import { clampSpeed, decayExcessSpeed, wrapAxis, wrapPosition } from '../src/systems/MovementSystem';
 
 describe('wrapAxis', () => {
   it('leaves in-bounds positions untouched', () => {
@@ -46,5 +46,35 @@ describe('clampSpeed', () => {
 
   it('does not divide by zero for a zero velocity', () => {
     expect(clampSpeed({ x: 0, y: 0 }, 6)).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe('decayExcessSpeed', () => {
+  it('leaves velocities at or under baseSpeed untouched', () => {
+    expect(decayExcessSpeed({ x: 0.67, y: 0 }, 0.67, 0.3, 1)).toEqual({ x: 0.67, y: 0 });
+    expect(decayExcessSpeed({ x: 0.3, y: 0 }, 0.67, 0.3, 1)).toEqual({ x: 0.3, y: 0 });
+  });
+
+  it('decays an over-baseSpeed velocity toward baseSpeed at the given rate, preserving direction', () => {
+    const result = decayExcessSpeed({ x: 2, y: 0 }, 0.67, 0.3, 1);
+    expect(result.x).toBeCloseTo(1.7, 10); // 2 - 0.3*1
+    expect(result.y).toBeCloseTo(0, 10);
+  });
+
+  it('never decays past baseSpeed even with a large deltaSeconds/decayPerSecond', () => {
+    const result = decayExcessSpeed({ x: 2, y: 0 }, 0.67, 0.3, 100);
+    expect(result.x).toBeCloseTo(0.67, 10);
+  });
+
+  it('preserves direction for a diagonal over-baseSpeed velocity', () => {
+    const result = decayExcessSpeed({ x: 3, y: 3 }, 1, 0.5, 1);
+    expect(result.x).toBeCloseTo(result.y, 10);
+    expect(Math.hypot(result.x, result.y)).toBeGreaterThan(1);
+    expect(Math.hypot(result.x, result.y)).toBeLessThan(Math.hypot(3, 3));
+  });
+
+  it('scales down toward baseSpeed exactly once it reaches it (no overshoot below)', () => {
+    const result = decayExcessSpeed({ x: 1, y: 0 }, 0.9, 0.5, 0.2); // decays by exactly 0.1
+    expect(result.x).toBeCloseTo(0.9, 10);
   });
 });

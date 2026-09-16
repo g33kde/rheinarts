@@ -120,9 +120,10 @@ export class FractureFragment {
     return nowMs - this.spawnedAtMs < FRACTURE.materializeDurationMs;
   }
 
-  takeHit(nowMs: number): boolean {
+  /** `damage` defaults to 1 (a normal shot) - Heavy Shot passes more, see FractureCombat.applyHit's own doc comment. */
+  takeHit(nowMs: number, damage = 1): boolean {
     if (this.isMaterializing(nowMs)) return false;
-    const result = applyHit(this.hitsRemaining);
+    const result = applyHit(this.hitsRemaining, damage);
     this.hitsRemaining = result.hitsRemaining;
     return result.destroyed;
   }

@@ -174,8 +174,9 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     - **Polish pass on the ship/asteroid/UFO shapes** — explicitly
       **skipped this pass**, per the answer to `AskUserQuestion`: too
       open-ended to scope without a clearer brief (the roadmap's own text
-      never specified more than "any polish pass"). Still open - see
-      "Explicitly deferred past v1" below.
+      never specified more than "any polish pass"). **Landed later, see
+      item 24** - got the real brief this pass was missing, via a
+      live-rendered concept sheet.
 
     All tuning values (shake intensity/duration, particle count/speed/
     lifespan) are starting guesses in `GameConfig.ts`'s new `EFFECTS`
@@ -491,6 +492,111 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     - Pure logic (`applyHit`/`determinePhase`) extracted to
       `systems/CardinalCombat.ts` and unit tested, same convention as
       `FractureCombat.ts`.
+23. [x] Weapon upgrade system + stage-clear shop — not originally
+    scoped; requested directly with a full spec (three upgrades,
+    composable stacking, Scrap-funded purchases, shop interfaces/hooks
+    without a full UI on the first pass), then a follow-up requesting
+    the shop UI itself. Both passes reviewed via live-rendered/drawn
+    mockups before any code was written, and confirmed via several
+    rounds of `AskUserQuestion` on every load-bearing fork - see
+    CHANGELOG for the full build.
+    - **Base weapon vs. upgrades, kept separate, per the brief**: every
+      player starts on the unchanged base weapon (`PROJECTILE`); three
+      purchasable, composable upgrades layer on top via
+      `systems/WeaponUpgrades.ts`'s pure `computeShotSpecs`/
+      `computeFireCooldownMs`/`computeMaxOnScreenShots` -
+      **Splitshot** (3-pellet fan, configurable spread via
+      `WEAPON_UPGRADES.splitshot.spreadRad`, also scales a player's own
+      on-screen-shot cap so the volley isn't silently throttled by v1
+      tuning picked before upgrades existed), **Rapid Fire** (reduced
+      cooldown plus an optional, on-by-default heat/overheat system,
+      `systems/WeaponHeat.ts`, one config flag to disable), and
+      **Heavy Shot** (bigger/slower/higher-damage projectile with a
+      real kinetic push - `computeImpulseVelocity`, confirmed via
+      `AskUserQuestion` to reach nearby debris as an area effect, not
+      just the asteroid directly destroyed). All three stack in every
+      combination, including all three at once, exactly per the
+      brief's own SPLITSHOT+RAPIDFIRE+HEAVYSHOT example.
+    - **Damage only matters against Fracture/Cardinal's HP** (confirmed
+      via `AskUserQuestion`) - asteroids/UFO still die in one hit
+      regardless of damage, same as always. `FractureCombat.applyHit`/
+      `CardinalCombat.applyHit` gained an optional `damage` parameter
+      (default 1, fully backward compatible with every existing call
+      site/test) to carry Heavy Shot's bonus through.
+    - **The shop** (`GameScene`'s new `'shop'` session state,
+      `enterShop()`/`updateShop()`/`exitShop()`): appears at every stage
+      clear, replacing the old "PRESS ANY KEY FOR NEXT LEVEL" prompt.
+      One shared screen, a panel per active player (not always 4, only
+      players actually in the round), each navigated with that player's
+      own existing controls - turn cycles a per-panel cursor through
+      their 3 upgrades then a trailing READY row, fire confirms (an
+      immediate purchase via `purchaseWeaponUpgrade()`, or a ready-state
+      toggle) - no new input bindings. No timer; the stage only advances
+      once every non-eliminated player is ready. An eliminated player
+      gets a permanently-ready, non-interactive "OUT" panel so they can
+      never block the others.
+    - **Scrap costs**: 5 each (`WEAPON_UPGRADES.costs`), spent from the
+      same per-player `PlayerSlot.scrap` balance Fracture/Cardinal scrap
+      pickups already fund. Available in all three modes.
+    - Implements the "Weapons" half of the "Salvage" future idea below
+      in scoped-down form (3 fixed upgrades, not the original 5-weapon
+      swap/stack-loadout pitch) - see that section's own updated note;
+      the "Engines" half remains fully open.
+24. [x] Ship/asteroid/UFO shape polish pass — item 12's one remaining
+    piece, explicitly skipped at the time for lacking a real brief (see
+    that item's own note above). Got one this time: a live-rendered
+    concept sheet comparing two axes per entity (glow/bloom vs.
+    geometry detail, neither changing the confirmed silhouettes from
+    `docs/art_direction.md`), reviewed via `AskUserQuestion` before any
+    of it was built - see that doc's own "Polish pass, landed" notes on
+    the Ship/Asteroid/UFO sections for the full per-entity detail this
+    entry summarizes.
+    - **Different treatment per entity, decided** - not the same
+      recipe applied uniformly. Ship: glow (layered strokes + a bright
+      inner core line, the same "neon tube" technique The Fracture's
+      laser already uses) **and** geometry detail (canopy, wing panel
+      lines, engine notch) - safe to combine, since at most 4 ships
+      exist at once. UFO: **glow only** - the geometry-detail concept
+      (rivet dots, a dome rim highlight) was reviewed but not landed,
+      judged too subtle to earn its tuning cost at the UFO's actual
+      on-screen size. Asteroid: **no glow at all** - explicitly kept
+      off asteroids specifically, the one entity where a dozen-plus can
+      be on screen at once and a glow that reads well on one rock in
+      isolation risks becoming visual noise at that density: an open
+      risk flagged during scoping, not run to ground with a live
+      density test, so the decision to skip glow there was the
+      conservative one, not a measured one.
+    - **Asteroid geometry pass, two parts** - per-rock surface detail
+      (procedural craters + crack lines, `systems/AsteroidShape.ts`'s
+      new `generateCraters`/`pickCrackTargets`, both pure/tested) scaled
+      down by size tier (small rocks get none - too tiny to read, and
+      the numerous-after-splits tier the density concern above was
+      really about), and **shape families**
+      (`ASTEROID.shapeFamilies` - rounded/jagged/spiky, one picked at
+      random per rock via the new `pickShapeFamily`, replacing the
+      single fixed vertexCountRange/jaggedness pair every rock used to
+      share) - a separate, cheap idea folded into the same pass on
+      request, addressing "more varied asteroid silhouettes" from item
+      12's own original framing directly.
+    - Verified live against the running dev server at real gameplay
+      scale, not just the enlarged concept sheet - caught and worked
+      around a headless-Chromium-specific rendering quirk affecting
+      `Ship`'s Matter-wrapped Graphics object in this test environment
+      specifically (confirmed unrelated to this change by reproducing
+      it against the pristine pre-polish `Ship.ts` too) by rendering
+      the identical draw code through a plain `Graphics` object instead
+      - not a real bug, but flagged honestly rather than skipped past.
+    - **Follow-up, requested directly: Ship and UFO glow both
+      reverted.** The outer-glow layers + (on the ship) the bright
+      inner core line are gone from both `entities/Ship.ts` and
+      `entities/Ufo.ts` - confirmed live (real gameplay scale and
+      enlarged) that both are back to their plain outlined look. Ship's
+      **geometry detail stays** (canopy, wing panel lines, engine
+      notch) - only the glow half of the ship's own two-part pass was
+      pulled. Asteroid's shape families + per-rock craters/cracks are
+      untouched by this - they never had glow to begin with. See
+      `docs/art_direction.md`'s Ship/UFO sections for the corresponding
+      "landed, then reverted" notes.
 
 ## Future ideas
 
@@ -1008,6 +1114,16 @@ different bosses rather than only ever having had one to apply to.
 
 ### Salvage (progression system / cooperative mode)
 
+**The "Weapons" half is landed, see item 23** - Splitshot/Rapid Fire/
+Heavy Shot, funded by the same per-player Scrap this section describes,
+purchased via a stage-clear shop. Scoped down from the original pitch
+below (3 fixed, composable upgrades rather than 5 swap-or-stack weapon
+types - "swap or stack?" was one of this section's own open questions,
+resolved as "stack, and only 3 of the 5 originally pitched"). **The
+"Engines" half remains fully open** - none of faster acceleration/
+turning, a boost mechanic, or braking exist yet, and this section's own
+open questions about them (below) are all still unresolved.
+
 Destroying the **smallest** asteroid tier (the one that doesn't split
 further) leaves behind salvage to pick up - a third pickup type alongside
 the Shield, presumably collected the same way (fly over it). Salvage is
@@ -1045,15 +1161,18 @@ a future idea, not v1 scope):
   layered onto existing Cooperative?** The prompt called it a
   "cooperative game mode," which reads as its own selectable thing, not
   a modifier - but that's inferred, not stated outright.
-- **Weapons — swap or stack?** Rapid fire, heavy cannon, ricochet
-  bullets, mines, and plasma balls read like distinct weapon *types*,
-  not stacking modifiers on the one shot type v1 has. Is Weapons an
-  equip-one-loadout choice, or do unlocks stack (e.g. ricochet + rapid
-  fire together)? Very different scope either way.
-- **Salvage drop rate and spend UI** aren't specified - how much per
-  kill, and where/when players actually spend it (mid-round on the fly,
-  or between rounds/stages at the "STAGE CLEARED" pause that already
-  exists) is open.
+- **Weapons — swap or stack? Resolved for the 3 that landed, see item
+  23**: they stack (all 3 at once is a real, working combination), not
+  an equip-one-loadout choice. Heavy cannon/ricochet/mines never got
+  built - only Splitshot/Rapid Fire/Heavy Shot did - so this answer
+  doesn't necessarily extend to a future Engines-tree upgrade or any
+  additional weapon type someone adds later.
+- **Salvage drop rate and spend UI - resolved for Weapons, see item
+  23**: 5 Scrap flat per upgrade (not per-kill-scaled), spent at the
+  stage-clear shop - exactly the second option this bullet already
+  named as open. Still genuinely open for any future Engines-tree
+  currency/spend point, if that ends up using Scrap too or a different
+  resource entirely.
 
 ### Debris Delivery (a third mode)
 
@@ -1106,13 +1225,6 @@ extraction zone, under real pressure the whole way there.
 
 ## Explicitly deferred past v1
 
-- **Polish pass on the ship/asteroid/UFO shapes** (item 12's last
-  remaining piece) — explicitly skipped when the rest of item 12 landed,
-  since `docs/art_direction.md` never specified more than "any polish
-  pass." Needs a real brief before picking up: a rendering-only pass (a
-  soft outer glow/bloom on the existing outlined shapes) and an actual
-  geometry pass (more detail on the ship hull, more varied asteroid
-  silhouettes) are very different scopes, not decided which.
 - **Power-ups beyond Shield** (rapid-fire, multi-shot, stacking shield
   charges, etc.) — Shield alone is v1 scope (see above); everything else
   in this space waits until v1 is proven fun without it.
@@ -1126,17 +1238,26 @@ extraction zone, under real pressure the whole way there.
   ship-destruction explosion rather than staying silent or getting its
   own placeholder.
 - **Difficulty options / tunable wave scaling** beyond the built-in ramp.
+- **Stage-scaled asteroid/UFO counts** — requested directly. Today's
+  asteroid count is a flat step, not a curve: `ASTEROID.spawnCountPerWave`
+  (5) on the very first stage, then a fixed `+ ASTEROID.waveGrowthPerLevel`
+  (2) on every stage after that, forever (7, never climbing any further) -
+  see `beginNextLevel()`. UFO spawn frequency doesn't scale by stage at
+  all - `UFO.spawnIntervalMs` (12000ms) is a flat constant regardless of
+  how far into a round the player already is. The idea: fewer of both on
+  early stages, climbing per stage instead of jumping once and
+  flattening out - gives a round its own difficulty ramp rather than
+  hitting "full difficulty" after the very first stage. Not scoped: the
+  actual growth curve (linear vs. something that tapers off), whether it
+  has a ceiling, and whether it replaces the existing
+  `spawnCountPerWave + waveGrowthPerLevel` formula outright or layers on
+  top of it.
 - **Touch/mobile controls.**
 - **Online multiplayer.** Local input only for the foreseeable future —
   a real netcode project, not a natural extension of this one.
 
 ## Not yet started
 
-- Actual project scaffolding — `docs/technical_design.md` now exists
-  (stack, physics/input/testing architecture, v1 tuning defaults all
-  decided), so nothing's blocking a first `npm create vite` pass anymore.
-- Deployment wiring in the shared `Dockerfile`/`nginx.conf` for Debris
-  specifically (see `docs/technical_design.md`'s last note).
 - **Remove the dev stage timer before the final version** — explicit
   instruction from whoever requested item 21 above. The top-center
   `MM:SS.mmm` display is a dev aid only, never intended to ship;

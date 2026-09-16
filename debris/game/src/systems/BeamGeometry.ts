@@ -26,14 +26,32 @@ export function distanceToSegment(point: Vector2, segmentStart: Vector2, segment
   return Math.hypot(point.x - closestX, point.y - closestY);
 }
 
+/**
+ * `pointRadius` (default 0, fully backward compatible) - the target's own
+ * physical size, not just its center coordinate. Without it, a target is
+ * treated as a dimensionless point, which barely matters for a *static*
+ * beam (a target sitting inside a lingering line has the whole active
+ * window to register) but is a real bug for a *moving* one: The
+ * Cardinal's laser keeps rotating throughout its firing window ("the
+ * danger zone is a rotating cross, not a fixed one," per its own design
+ * spec) rather than holding still like The Fracture's laser does, so the
+ * lethal corridor sweeps past a ship-sized target in a fraction of a
+ * frame unless the ship's own radius widens the check - point-only
+ * hit-testing made it functionally impossible to hit a moving ship in
+ * practice (a real bug found live: forcing the laser active against a
+ * correctly-positioned, stationary ship in a controlled test did
+ * register a hit, but normal play - a moving beam vs. a ship the player
+ * is actively trying to keep moving too - essentially never did).
+ */
 export function isPointOnBeam(
   point: Vector2,
   origin: Vector2,
   angleRad: number,
   length: number,
   width: number,
+  pointRadius = 0,
 ): boolean {
   const direction = fromAngle(angleRad);
   const end = { x: origin.x + direction.x * length, y: origin.y + direction.y * length };
-  return distanceToSegment(point, origin, end) <= width / 2;
+  return distanceToSegment(point, origin, end) <= width / 2 + pointRadius;
 }

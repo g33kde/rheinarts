@@ -94,15 +94,29 @@ export class Ufo {
     const bodyRx = 0.85 * scale;
     const bodyRy = 0.24 * scale;
     const bodyY = 0.05 * scale;
+    const domeRx = 0.4 * scale;
+    const domeRy = 0.3 * scale;
+    const domeY = -0.15 * scale;
 
     g.fillStyle(COLORS.ufoFill, 1);
     g.lineStyle(2, COLORS.ufo, 1);
     g.fillEllipse(0, bodyY, bodyRx * 2, bodyRy * 2);
     g.strokeEllipse(0, bodyY, bodyRx * 2, bodyRy * 2);
 
-    const domeRx = 0.4 * scale;
-    const domeRy = 0.3 * scale;
-    const domeY = -0.15 * scale;
+    this.drawDomePath(g, domeRx, domeRy, domeY);
+    g.fillPath();
+    g.strokePath();
+
+    UNDER_LIGHT_X_OFFSETS.forEach((nx, i) => {
+      const phase = this.elapsedSec * UNDER_LIGHT_PULSE_PER_SEC + i * ((Math.PI * 2) / UNDER_LIGHT_X_OFFSETS.length);
+      const brightness = 0.4 + (Math.sin(phase) * 0.5 + 0.5) * 0.6;
+      g.fillStyle(COLORS.ufo, brightness);
+      g.fillCircle(nx * scale, UNDER_LIGHT_Y_OFFSET * scale, scale * 0.06);
+    });
+  }
+
+  /** The dome's own top-half-ellipse path (see the class doc comment for why only the top half is traced) - factored out so the glow layers and the final fill/stroke both trace the exact same path. */
+  private drawDomePath(g: Phaser.GameObjects.Graphics, domeRx: number, domeRy: number, domeY: number): void {
     g.beginPath();
     for (let i = 0; i <= DOME_ARC_SEGMENTS; i += 1) {
       // t from PI to 2*PI traces left -> top -> right of the ellipse
@@ -115,15 +129,6 @@ export class Ufo {
       else g.lineTo(px, py);
     }
     g.closePath();
-    g.fillPath();
-    g.strokePath();
-
-    UNDER_LIGHT_X_OFFSETS.forEach((nx, i) => {
-      const phase = this.elapsedSec * UNDER_LIGHT_PULSE_PER_SEC + i * ((Math.PI * 2) / UNDER_LIGHT_X_OFFSETS.length);
-      const brightness = 0.4 + (Math.sin(phase) * 0.5 + 0.5) * 0.6;
-      g.fillStyle(COLORS.ufo, brightness);
-      g.fillCircle(nx * scale, UNDER_LIGHT_Y_OFFSET * scale, scale * 0.06);
-    });
   }
 
   destroy(): void {

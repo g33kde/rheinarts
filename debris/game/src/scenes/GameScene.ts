@@ -5,16 +5,19 @@ import {
   ARENA_WIDTH,
   ASTEROID,
   BLACK_HOLE,
+  BOSS_STAGE_START,
   CARDINAL,
   COLORS,
   COMMANDER,
   EFFECTS,
   FRACTURE,
   LIVES_PER_PLAYER,
+  PROJECTILE,
   SHIELD,
   SHIP,
   SPACE_STATION,
   UFO,
+  WEAPON_UPGRADES,
 } from '../config/GameConfig';
 import { PlayfieldBackground } from '../entities/Background';
 import { Asteroid } from '../entities/Asteroid';
@@ -68,12 +71,28 @@ import {
   THRUST_SFX_KEY,
 } from '../systems/Sfx';
 import { applyAimSpread, computeLeadAimHeading } from '../systems/UfoTargeting';
+import {
+  ALL_WEAPON_UPGRADE_IDS,
+  computeFireCooldownMs,
+  computeImpulseVelocity,
+  computeMaxOnScreenShots,
+  computeShotSpecs,
+  hasUpgrade,
+  nextShopCursor,
+  WEAPON_UPGRADE_LABELS,
+  type ShopCursor,
+  type ShotSpec,
+  type WeaponUpgradeConfig,
+  type WeaponUpgradeId,
+} from '../systems/WeaponUpgrades';
+import { applyShotHeat, decayHeat, INITIAL_HEAT_STATE, isOverheated, type HeatState } from '../systems/WeaponHeat';
+import { purchaseUpgrade } from '../systems/WeaponShop';
 import { toCssHex } from '../utilities/Color';
 import { formatStageTimer } from '../utilities/StageTimer';
 import { fromAngle, normalize, type Vector2 } from '../utilities/Vector2';
 import type { MatterGameObject } from '../entities/MatterGameObject';
 
-type SessionState = 'playing' | 'stageClear' | 'gameOver' | 'paused' | 'enteringInitials' | 'bossAnnouncement';
+type SessionState = 'playing' | 'stageClear' | 'shop' | 'gameOver' | 'paused' | 'enteringInitials' | 'bossAnnouncement';
 
 interface PlayerSlot {
   /** The original P1-P4 slot number (0-3) - NOT this player's position in the (possibly sparse, inactive-slots-skipped) `players` array. Everything that needs a stable "which player" identity (scoring, ship color, self-hit immunity) keys off this, never array position. */
@@ -87,8 +106,20 @@ interface PlayerSlot {
   eliminated: boolean;
   /** The Commander this player is currently towing toward the space station, if any (Cooperative only) - null otherwise, including while this player has no Commander to carry. */
   towedCommander: Commander | null;
-  /** The Fracture's Phase 3 currency (docs/roadmap.md) - starts at 0, +1 per Swarm piece collected by touch. Shown in the HUD only once nonzero, same "no line at all until it matters" convention `cooperativeStatusLine` already uses. */
+  /** The Fracture's Phase 3 currency (docs/roadmap.md) - starts at 0, +1 per Swarm piece collected by touch. Shown in the HUD only once nonzero, same "no line at all until it matters" convention `cooperativeStatusLine` already uses. Spent via `purchaseWeaponUpgrade()` below. */
   scrap: number;
+  /**
+   * This player's own weapon upgrade state (docs from the brief's weapon
+   * upgrade system) - lives on the slot, not the `Ship`, deliberately:
+   * `ship` gets destroyed/replaced on every respawn and every stage
+   * transition (`resetStageHazards()`), but `weapon` must survive both,
+   * same "for the remainder of the current game/session" requirement
+   * Scrap itself already gets by living here. `active` is mutated by
+   * wholesale replacement (a fresh `Set` per purchase), matching
+   * `systems/WeaponShop.ts`'s pure functional-update return shape rather
+   * than being mutated in place.
+   */
+  weapon: { active: Set<WeaponUpgradeId>; heat: HeatState };
   /** This player's own corner HUD (see PLAYER_HUD_CORNERS) - one Text object per active player, refreshed by refreshAllPlayerHud() whenever score, lives, or Cooperative rescue status change. */
   hudText: Phaser.GameObjects.Text;
 }
@@ -160,6 +191,35 @@ const PLAYER_HUD_CORNERS: readonly {
   { x: HUD_MARGIN, y: ARENA_HEIGHT - HUD_MARGIN, origin: [0, 1], align: 'left' },
   { x: ARENA_WIDTH - HUD_MARGIN, y: ARENA_HEIGHT - HUD_MARGIN, origin: [1, 1], align: 'right' },
 ];
+
+// The weapon shop's per-player panel layout (GameScene.enterShop) - sized
+// to fit a header + 3 upgrade rows + a READY row comfortably, with room
+// for up to 4 panels side by side across the 1920px arena (4*380 +
+// 3*30 = 1610px, well clear of the edges).
+const SHOP_PANEL_WIDTH = 380;
+const SHOP_PANEL_HEIGHT = 240;
+const SHOP_PANEL_GAP = 30;
+const SHOP_ROW_HEIGHT = 32;
+
+/**
+ * One player's own shop panel state + visuals. `eliminated` panels are
+ * permanently `ready: true` (excludes them from `updateShop`'s all-ready
+ * gate without special-casing that check) and never get row/ready text
+ * objects at all - `refreshShopPanel` short-circuits on `eliminated`
+ * before touching them.
+ */
+interface ShopPanel {
+  slotIndex: number;
+  eliminated: boolean;
+  cursor: ShopCursor;
+  ready: boolean;
+  prevTurnDirection: -1 | 0 | 1;
+  prevFiring: boolean;
+  bg: Phaser.GameObjects.Rectangle;
+  headerText: Phaser.GameObjects.Text;
+  rowTexts: Phaser.GameObjects.Text[];
+  readyText: Phaser.GameObjects.Text | undefined;
+}
 
 /**
  * Up to 4 ships (P1-P4 - see docs/controls.md), keyboard for P1/P2 by
@@ -547,6 +607,7 @@ export class GameScene extends Phaser.Scene {
         eliminated: false,
         towedCommander: null,
         scrap: 0,
+        weapon: { active: new Set(), heat: INITIAL_HEAT_STATE },
         hudText,
       });
     });
@@ -628,6 +689,11 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (this.state === 'shop') {
+      this.updateShop();
+      return;
+    }
+
     if (this.state !== 'playing') return;
 
     this.stageElapsedMs += deltaMs;
@@ -640,8 +706,13 @@ export class GameScene extends Phaser.Scene {
     // it first means gravity accumulates into the same Matter step as
     // thrust, exactly like the escapable outer band is supposed to work
     // (docs/gameplay.md's Gravity Well - fight it with sustained thrust).
-    this.applyBlackHoleGravityForces();
-    this.applyFractureGravityForces();
+    // Tracks which asteroids get pulled by anything this frame, so the
+    // per-asteroid update() pass below knows not to decay their speed
+    // back down while they're still actively being accelerated - see
+    // Asteroid.update()'s own doc comment on the Gravity Well bug fix.
+    const pulledAsteroids = new Set<Asteroid>();
+    this.applyBlackHoleGravityForces(pulledAsteroids);
+    this.applyFractureGravityForces(pulledAsteroids);
 
     this.players.forEach((player) => {
       if (!player.ship.isAlive) return;
@@ -652,15 +723,32 @@ export class GameScene extends Phaser.Scene {
       }
       player.ship.setThrusting(player.input.isThrusting);
 
+      // Passive heat decay runs every frame regardless of firing - "slowly
+      // decreases while not firing," decided. No-ops if the heat system is
+      // disabled (WEAPON_UPGRADES.rapidFire.heat.enabled).
+      player.weapon.heat = decayHeat(player.weapon.heat, deltaSeconds, WEAPON_UPGRADES.rapidFire.heat);
+
+      const weaponConfig = this.weaponUpgradeConfig();
+      const cooldownMs = computeFireCooldownMs(player.weapon, SHIP.fireCooldownMs, weaponConfig);
+      const maxOnScreenShots = computeMaxOnScreenShots(player.weapon, SHIP.maxOnScreenShots);
       const ownProjectileCount = this.projectiles.filter((p) => p.ownerIndex === player.slotIndex).length;
+
       if (
         player.input.isFiring &&
         !player.ship.isInvulnerable(nowMs) && // respawn grace period: can move, can't shoot (decided)
-        ownProjectileCount < SHIP.maxOnScreenShots &&
-        canFire(player.lastFiredAtMs, nowMs, SHIP.fireCooldownMs)
+        !isOverheated(player.weapon.heat, nowMs) &&
+        canFire(player.lastFiredAtMs, nowMs, cooldownMs)
       ) {
-        this.fireProjectile(player, nowMs);
-        player.lastFiredAtMs = nowMs;
+        // Splitshot fires up to 3 projectiles per trigger-pull - only fire
+        // if the *whole* volley fits under this player's own (possibly
+        // upgrade-scaled) cap, rather than letting a volley get silently
+        // truncated to 1-2 pellets when the budget is nearly full.
+        const shots = computeShotSpecs(player.weapon, player.ship.heading, weaponConfig);
+        if (ownProjectileCount + shots.length <= maxOnScreenShots) {
+          this.fireProjectile(player, nowMs, shots);
+          player.lastFiredAtMs = nowMs;
+          player.weapon.heat = applyShotHeat(player.weapon.heat, nowMs, WEAPON_UPGRADES.rapidFire.heat);
+        }
       }
 
       player.ship.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
@@ -681,7 +769,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.wasAnyThrusting = isAnyThrusting;
 
-    this.asteroids.forEach((asteroid) => asteroid.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
+    this.asteroids.forEach((asteroid) =>
+      asteroid.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT, pulledAsteroids.has(asteroid)),
+    );
     this.projectiles.forEach((projectile) => projectile.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
     this.shields.forEach((shield) => shield.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
     this.updateUfos(deltaSeconds, nowMs);
@@ -833,19 +923,62 @@ export class GameScene extends Phaser.Scene {
     return nearest;
   }
 
-  private fireProjectile(player: PlayerSlot, nowMs: number): void {
+  /** One weapon discharge - one shot for the base weapon, up to 3 for Splitshot (see WeaponUpgrades.computeShotSpecs), all spawned from the same ship position/frame. One SHOT_SFX_KEY play per discharge, not per pellet - a Splitshot volley is one weapon firing, not three. */
+  private fireProjectile(player: PlayerSlot, nowMs: number, shots: ShotSpec[]): void {
     this.sound.play(SHOT_SFX_KEY, { volume: getSfxVolume() });
-    this.projectiles.push(
-      new Projectile(
-        this,
-        player.ship.position,
-        player.ship.heading,
-        nowMs,
-        player.ship.color,
-        player.slotIndex,
-        this.mode === 'competitive',
-      ),
-    );
+    for (const shot of shots) {
+      this.projectiles.push(
+        new Projectile(
+          this,
+          player.ship.position,
+          shot.headingRad,
+          nowMs,
+          player.ship.color,
+          player.slotIndex,
+          this.mode === 'competitive',
+          shot.radius,
+          shot.speed,
+          shot.damage,
+          shot.kineticImpulse,
+        ),
+      );
+    }
+  }
+
+  /** Assembles the plain-object config `systems/WeaponUpgrades.ts`'s pure functions take - the base weapon's own stats (from `PROJECTILE`, damage 1/no impulse, matching every hit before this system existed) plus `WEAPON_UPGRADES`'s per-upgrade tuning. Cheap to rebuild per call (plain object, no allocHeavy work) - not cached, since GameConfig values never change at runtime anyway. */
+  private weaponUpgradeConfig(): WeaponUpgradeConfig {
+    return {
+      base: { radius: PROJECTILE.radius, speed: PROJECTILE.speed, damage: 1, kineticImpulse: 0 },
+      splitshot: WEAPON_UPGRADES.splitshot,
+      rapidFire: WEAPON_UPGRADES.rapidFire,
+      heavyShot: WEAPON_UPGRADES.heavyShot,
+    };
+  }
+
+  /**
+   * The shop's required hook (per the brief: "implement... the required
+   * interfaces/hooks for the shop... do not build a complete shop UI
+   * unless necessary") - a future ShopScene calls this against the live
+   * `GameScene`, and this method owns applying `WeaponShop.
+   * purchaseUpgrade`'s pure result back onto the player's actual Scrap
+   * balance/upgrade set and refreshing the HUD. Returns whether the
+   * purchase actually went through (`false`: no such player, already
+   * owns the upgrade, or not enough Scrap) - a shop UI can use that
+   * directly to decide whether to play a success/failure sound, no
+   * separate `canAfford` pre-check required (though `WeaponShop.
+   * canAfford` is exported for one anyway, e.g. to grey out a button).
+   */
+  purchaseWeaponUpgrade(slotIndex: number, upgradeId: WeaponUpgradeId): boolean {
+    const player = this.players.find((p) => p.slotIndex === slotIndex);
+    if (!player) return false;
+
+    const result = purchaseUpgrade(player.scrap, player.weapon.active, upgradeId, WEAPON_UPGRADES.costs);
+    if (!result.success) return false;
+
+    player.scrap = result.scrap;
+    player.weapon.active = new Set(result.activeUpgrades);
+    this.refreshAllPlayerHud();
+    return true;
   }
 
   private spawnWave(count: number): void {
@@ -946,11 +1079,18 @@ export class GameScene extends Phaser.Scene {
    * importantly). Must run before this frame's per-entity update() calls
    * - see the call site's own comment for why that ordering matters.
    */
-  private applyBlackHoleGravityForces(): void {
+  /**
+   * `pulledAsteroids` (docs from the reported Gravity Well bug fix) -
+   * every asteroid this method actually applies a nonzero pull force to
+   * gets added, so `update()`'s later per-asteroid pass knows not to
+   * decay it back down this frame - see `Asteroid.update()`'s own doc
+   * comment and `systems/MovementSystem.ts`'s `decayExcessSpeed`.
+   */
+  private applyBlackHoleGravityForces(pulledAsteroids: Set<Asteroid>): void {
     const hole = this.blackHole;
     if (!hole) return;
 
-    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): void => {
+    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): boolean => {
       const force = computeGravityForce(
         position,
         hole.position,
@@ -960,14 +1100,18 @@ export class GameScene extends Phaser.Scene {
       );
       if (force.x !== 0 || force.y !== 0) {
         visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
+        return true;
       }
+      return false;
     };
 
     this.players.forEach((player) => {
       if (player.ship.isAlive) applyGravity(player.ship.visual, player.ship.position);
     });
     this.asteroids.forEach((asteroid) => {
-      if (asteroid.isAlive) applyGravity(asteroid.visual, asteroid.position);
+      if (asteroid.isAlive && applyGravity(asteroid.visual, asteroid.position)) {
+        pulledAsteroids.add(asteroid);
+      }
     });
     this.ufos.forEach((ufo) => {
       if (ufo.isAlive) applyGravity(ufo.visual, ufo.position);
@@ -988,14 +1132,16 @@ export class GameScene extends Phaser.Scene {
    * (ships/asteroids/UFOs/shields/adrift Commanders) for "everything";
    * other Fracture pieces don't pull each other. Must run here, before
    * this frame's per-entity update() calls, same ordering reason as
-   * applyBlackHoleGravityForces() above.
+   * applyBlackHoleGravityForces() above. `pulledAsteroids` - same
+   * doc/purpose as that method's own parameter.
    */
-  private applyFractureGravityForces(): void {
+  private applyFractureGravityForces(pulledAsteroids: Set<Asteroid>): void {
     const gravityFragments = this.fractureFragments.filter((f) => f.role === 'gravity' && f.isAlive);
     if (gravityFragments.length === 0) return;
 
     const pullRadius = FRACTURE.fragmentRadius * FRACTURE.gravityPullRadiusMultiplier;
-    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): void => {
+    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): boolean => {
+      let pulled = false;
       gravityFragments.forEach((fragment) => {
         const force = computeGravityForce(
           position,
@@ -1006,15 +1152,19 @@ export class GameScene extends Phaser.Scene {
         );
         if (force.x !== 0 || force.y !== 0) {
           visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
+          pulled = true;
         }
       });
+      return pulled;
     };
 
     this.players.forEach((player) => {
       if (player.ship.isAlive) applyGravity(player.ship.visual, player.ship.position);
     });
     this.asteroids.forEach((asteroid) => {
-      if (asteroid.isAlive) applyGravity(asteroid.visual, asteroid.position);
+      if (asteroid.isAlive && applyGravity(asteroid.visual, asteroid.position)) {
+        pulledAsteroids.add(asteroid);
+      }
     });
     this.ufos.forEach((ufo) => {
       if (ufo.isAlive) applyGravity(ufo.visual, ufo.position);
@@ -1048,7 +1198,7 @@ export class GameScene extends Phaser.Scene {
       this.players.forEach((player) => {
         if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
         if (
-          isPointOnBeam(player.ship.position, laser.origin, laser.angleRad, FRACTURE.laserLength, FRACTURE.laserWidth) &&
+          isPointOnBeam(player.ship.position, laser.origin, laser.angleRad, FRACTURE.laserLength, FRACTURE.laserWidth, SHIP.radius) &&
           !this.pendingShipHits.includes(player.ship)
         ) {
           this.pendingShipHits.push(player.ship);
@@ -1068,7 +1218,11 @@ export class GameScene extends Phaser.Scene {
               player.ship.position.x - fragment.position.x,
               player.ship.position.y - fragment.position.y,
             );
-            if (distance <= ringRadius && !this.pendingShipHits.includes(player.ship)) {
+            // + SHIP.radius: same "count the ship's real size" consistency
+            // fix as the laser/core-ram checks - the expanding ring is a
+            // solid disk, not a thin corridor, so this was never the
+            // sweeping-beam failure mode, just a few pixels of precision.
+            if (distance <= ringRadius + SHIP.radius && !this.pendingShipHits.includes(player.ship)) {
               this.pendingShipHits.push(player.ship);
             }
           });
@@ -1115,7 +1269,13 @@ export class GameScene extends Phaser.Scene {
     this.players.forEach((player) => {
       if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
       const distance = Math.hypot(player.ship.position.x - cardinal.position.x, player.ship.position.y - cardinal.position.y);
-      if (distance <= CARDINAL.coreRadius && !this.pendingShipHits.includes(player.ship)) {
+      // + SHIP.radius: a ship's edge touches the core before its exact
+      // center coordinate does - same "count the ship's real size, not
+      // just its center point" fix as the laser hit-test below. Far
+      // milder here (the core doesn't move relative to itself, so this
+      // was never the "essentially unhittable" bug the sweeping laser
+      // was), but the same principle applies for consistency.
+      if (distance <= CARDINAL.coreRadius + SHIP.radius && !this.pendingShipHits.includes(player.ship)) {
         this.pendingShipHits.push(player.ship);
       }
     });
@@ -1131,7 +1291,7 @@ export class GameScene extends Phaser.Scene {
           this.players.forEach((player) => {
             if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
             if (
-              isPointOnBeam(player.ship.position, cardinal.position, angle, CARDINAL.laserLength, CARDINAL.laserWidth) &&
+              isPointOnBeam(player.ship.position, cardinal.position, angle, CARDINAL.laserLength, CARDINAL.laserWidth, SHIP.radius) &&
               !this.pendingShipHits.includes(player.ship)
             ) {
               this.pendingShipHits.push(player.ship);
@@ -2079,7 +2239,7 @@ export class GameScene extends Phaser.Scene {
       projectile.destroy();
       if (!fracture?.isAlive) continue;
 
-      const destroyed = fracture.takeHit(nowMs);
+      const destroyed = fracture.takeHit(nowMs, projectile.damage);
       if (!destroyed) {
         this.spawnBurst(fracture.position, COLORS.fracture, EFFECTS.asteroidBurst);
         continue;
@@ -2114,7 +2274,7 @@ export class GameScene extends Phaser.Scene {
       projectile.destroy();
       if (!fragment.isAlive) continue;
 
-      const destroyed = fragment.takeHit(nowMs);
+      const destroyed = fragment.takeHit(nowMs, projectile.damage);
       if (!destroyed) {
         this.spawnBurst(fragment.position, COLORS.fracture, EFFECTS.asteroidBurst);
         continue;
@@ -2210,7 +2370,7 @@ export class GameScene extends Phaser.Scene {
       projectile.destroy();
       if (!cardinal?.isAlive || !cardinal.isArmAlive(armIndex)) continue;
 
-      const destroyed = cardinal.takeArmHit(armIndex, nowMs);
+      const destroyed = cardinal.takeArmHit(armIndex, nowMs, projectile.damage);
       const armPosition = cardinal.armWorldPosition(armIndex);
       if (!destroyed) {
         this.spawnBurst(armPosition, COLORS.cardinal, EFFECTS.asteroidBurst);
@@ -2237,7 +2397,7 @@ export class GameScene extends Phaser.Scene {
       projectile.destroy();
       if (!cardinal?.isAlive) continue;
 
-      const destroyed = cardinal.takeCoreHit(nowMs);
+      const destroyed = cardinal.takeCoreHit(nowMs, projectile.damage);
       if (!destroyed) {
         this.spawnBurst(cardinal.position, COLORS.cardinal, EFFECTS.asteroidBurst);
         continue;
@@ -2364,6 +2524,47 @@ export class GameScene extends Phaser.Scene {
         this.asteroids.push(new Asteroid(this, position.x, position.y, childSize, heading));
       }
     }
+
+    // Heavy Shot's kinetic push - a no-op for the base weapon and every
+    // other upgrade (kineticImpulse: 0). Runs after this hit's own split
+    // children are already in `this.asteroids`, so applyHeavyShotImpulse's
+    // one loop covers both "the fresh children get shoved along the shot's
+    // heading" and "other nearby asteroids get shoved radially outward" -
+    // see that method's own doc comment.
+    if (projectile.kineticImpulse > 0) {
+      this.applyHeavyShotImpulse(position, projectile.headingRad, projectile.kineticImpulse);
+    }
+  }
+
+  /**
+   * Heavy Shot's area-of-effect push (docs from the brief: "push
+   * asteroids, change direction, add momentum to debris... if supported
+   * by the game," confirmed via `AskUserQuestion` to reach nearby
+   * asteroids/debris, not just the one directly destroyed). Pure vector
+   * math lives in `WeaponUpgrades.computeImpulseVelocity` - this just
+   * applies whatever it returns directly to each candidate's Matter
+   * velocity, same "add to current velocity" pattern used nowhere else
+   * in this codebase yet (every other force in this game is either
+   * continuous, like Black Hole gravity, or a full override, like
+   * capture) - a one-time impulse is exactly what "kinetic force" means
+   * physically, so a direct velocity add (not `applyForce`, which is
+   * tuned for *sustained* per-frame forces - see SHIP's own doc comment
+   * on that gotcha) is the right primitive here.
+   */
+  private applyHeavyShotImpulse(impactPosition: Vector2, shotHeadingRad: number, strength: number): void {
+    for (const asteroid of this.asteroids) {
+      if (!asteroid.isAlive) continue;
+      const push = computeImpulseVelocity(
+        impactPosition,
+        asteroid.position,
+        shotHeadingRad,
+        strength,
+        WEAPON_UPGRADES.heavyShot.impulseRadius,
+      );
+      if (!push) continue;
+      const current = asteroid.visual.getVelocity();
+      asteroid.visual.setVelocity(current.x + push.x, current.y + push.y);
+    }
   }
 
   private spawnBurst(
@@ -2448,8 +2649,6 @@ export class GameScene extends Phaser.Scene {
   private enterStageClear(): void {
     this.state = 'stageClear';
     this.matter.world.pause();
-    this.showOverlay(['STAGE CLEARED', 'PRESS ANY KEY FOR NEXT LEVEL']);
-    this.waitForKeyPress(() => this.beginNextLevel());
     // "Moves back after [the boss fight]," decided - only actually away
     // if a boss fight just ended (spaceStationRelocated), so this is a
     // safe no-op on every other stage-clear.
@@ -2457,6 +2656,231 @@ export class GameScene extends Phaser.Scene {
       this.spaceStation.travelTo({ x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }, this.time.now, SPACE_STATION.relocateTravelMs);
       this.spaceStationRelocated = false;
     }
+    this.enterShop();
+  }
+
+  /**
+   * The weapon shop - requested directly as its own design pass (four
+   * confirmed `AskUserQuestion` rounds: trigger timing, multiplayer
+   * layout, input model, mode scope, then eliminated-player handling and
+   * purchase timing). One shared screen, every stage clear: up to 4
+   * player-colored panels (`this.players.length`, not always 4 - only
+   * players actually in this round get one), each independently
+   * navigated with that player's own existing controls - no new
+   * bindings, per the confirmed design. `matter.world` is already
+   * paused by `enterStageClear()`; this screen owns `update()` entirely
+   * while `this.state === 'shop'` (see the dispatch in `update()`),
+   * same "a different per-frame path than showOverlay's one-shot 'any
+   * key'" shape `updateInitialsEntry()` already established - this one
+   * needs to read every active player's direction/fire every frame, not
+   * just detect a single press, and needs to do it for up to 4 players
+   * independently at once.
+   *
+   * **Eliminated players get a non-interactive "OUT" panel** (confirmed
+   * via `AskUserQuestion`) - still occupies a slot in the layout, but
+   * excluded from the all-ready gate entirely, so a player already out
+   * for the round can never stall the other three.
+   *
+   * **Purchases are immediate** (confirmed via `AskUserQuestion`): each
+   * row's confirm press calls `purchaseWeaponUpgrade()` - the exact same
+   * hook the round/shop integration was already built around - right
+   * then, not staged for later. A player sees their own Scrap count and
+   * OWNED state update live as they buy.
+   */
+  private shop:
+    | {
+        panels: ShopPanel[];
+        headlineText: Phaser.GameObjects.Text;
+        subheadlineText: Phaser.GameObjects.Text;
+        hintText: Phaser.GameObjects.Text;
+      }
+    | undefined;
+
+  private enterShop(): void {
+    this.state = 'shop';
+
+    const headlineText = this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 220, 'STAGE CLEARED', {
+        fontFamily: 'monospace',
+        fontSize: '48px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    const subheadlineText = this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 168, 'SHOP - SPEND YOUR SCRAP', {
+        fontFamily: 'monospace',
+        fontSize: '18px',
+        color: '#9a9ab0',
+      })
+      .setOrigin(0.5);
+    const hintText = this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + 230, 'TURN: select   FIRE: buy / toggle ready', {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        color: '#6a6a80',
+      })
+      .setOrigin(0.5);
+
+    const panelCount = this.players.length;
+    const totalWidth = panelCount * SHOP_PANEL_WIDTH + (panelCount - 1) * SHOP_PANEL_GAP;
+    const startX = ARENA_WIDTH / 2 - totalWidth / 2 + SHOP_PANEL_WIDTH / 2;
+    const panelY = ARENA_HEIGHT / 2 + 10;
+
+    const panels = this.players.map((player, i) => this.buildShopPanel(player, startX + i * (SHOP_PANEL_WIDTH + SHOP_PANEL_GAP), panelY));
+
+    this.shop = { panels, headlineText, subheadlineText, hintText };
+  }
+
+  private buildShopPanel(player: PlayerSlot, x: number, y: number): ShopPanel {
+    const color = COLORS.players[player.slotIndex]!;
+    const bg = this.add
+      .rectangle(x, y, SHOP_PANEL_WIDTH, SHOP_PANEL_HEIGHT, 0x0a0a12, 1)
+      .setStrokeStyle(2, color, player.eliminated ? 0.35 : 1);
+
+    const headerY = y - SHOP_PANEL_HEIGHT / 2 + 26;
+    const headerText = this.add
+      .text(x, headerY, '', {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        fontStyle: 'bold',
+        color: toCssHex(color),
+        align: 'center', // eliminated panels render 2 lines ("P2\nOUT") - without this, Phaser left-aligns the narrower line relative to the wider one within the block
+      })
+      .setOrigin(0.5);
+
+    if (player.eliminated) {
+      const eliminatedPanel: ShopPanel = {
+        slotIndex: player.slotIndex,
+        eliminated: true,
+        cursor: 'ready',
+        ready: true,
+        prevTurnDirection: 0,
+        prevFiring: false,
+        bg,
+        headerText,
+        rowTexts: [],
+        readyText: undefined,
+      };
+      this.refreshShopPanel(eliminatedPanel);
+      return eliminatedPanel;
+    }
+
+    const rowStartY = headerY + 40;
+    const rowTexts = ALL_WEAPON_UPGRADE_IDS.map((_, i) =>
+      this.add
+        .text(x - SHOP_PANEL_WIDTH / 2 + 24, rowStartY + i * SHOP_ROW_HEIGHT, '', {
+          fontFamily: 'monospace',
+          fontSize: '16px',
+        })
+        .setOrigin(0, 0.5),
+    );
+    const readyText = this.add
+      .text(x, rowStartY + ALL_WEAPON_UPGRADE_IDS.length * SHOP_ROW_HEIGHT + 14, '', {
+        fontFamily: 'monospace',
+        fontSize: '17px',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5);
+
+    const panel: ShopPanel = {
+      slotIndex: player.slotIndex,
+      eliminated: false,
+      cursor: ALL_WEAPON_UPGRADE_IDS[0]!,
+      ready: false,
+      prevTurnDirection: 0,
+      prevFiring: false,
+      bg,
+      headerText,
+      rowTexts,
+      readyText,
+    };
+    this.refreshShopPanel(panel);
+    return panel;
+  }
+
+  /** Every panel's own turn/fire edge-detection and state transitions - same "read direction/fire every frame, act only on the rising edge" shape `updateInitialsEntry()` established, just run once per non-eliminated player instead of once for a single shared input. Advances the round once every non-eliminated panel is ready. */
+  private updateShop(): void {
+    const shop = this.shop;
+    if (!shop) return;
+
+    for (const panel of shop.panels) {
+      if (panel.eliminated) continue;
+      const player = this.players.find((p) => p.slotIndex === panel.slotIndex);
+      if (!player) continue;
+      const input = player.input;
+
+      const turn = input.turnDirection;
+      if (turn !== 0 && panel.prevTurnDirection === 0) {
+        panel.cursor = nextShopCursor(panel.cursor, turn);
+        this.refreshShopPanel(panel);
+      }
+      panel.prevTurnDirection = turn;
+
+      const firing = input.isFiring;
+      if (firing && !panel.prevFiring) {
+        if (panel.cursor === 'ready') {
+          panel.ready = !panel.ready;
+        } else {
+          this.purchaseWeaponUpgrade(player.slotIndex, panel.cursor);
+        }
+        this.refreshShopPanel(panel);
+      }
+      panel.prevFiring = firing;
+    }
+
+    const allReady = shop.panels.every((panel) => panel.eliminated || panel.ready);
+    if (allReady) this.exitShopAndAdvance();
+  }
+
+  private refreshShopPanel(panel: ShopPanel): void {
+    const player = this.players.find((p) => p.slotIndex === panel.slotIndex);
+    if (!player) return;
+
+    if (panel.eliminated) {
+      panel.headerText.setText(`P${panel.slotIndex + 1}\nOUT`);
+      return;
+    }
+
+    panel.headerText.setText(`P${panel.slotIndex + 1}   SCRAP ${player.scrap}`);
+
+    ALL_WEAPON_UPGRADE_IDS.forEach((id, i) => {
+      const text = panel.rowTexts[i];
+      if (!text) return;
+      const owned = hasUpgrade({ active: player.weapon.active }, id);
+      const affordable = player.scrap >= WEAPON_UPGRADES.costs[id];
+      const selected = panel.cursor === id;
+      const marker = selected ? '> ' : '  ';
+      const state = owned ? 'OWNED' : String(WEAPON_UPGRADES.costs[id]);
+      text.setText(`${marker}${WEAPON_UPGRADE_LABELS[id].padEnd(12)}${state}`);
+      text.setColor(owned ? toCssHex(COLORS.scrap) : affordable ? (selected ? toCssHex(COLORS.players[panel.slotIndex]!) : '#dfe1ef') : '#5a5a6e');
+    });
+
+    if (panel.readyText) {
+      const readySelected = panel.cursor === 'ready';
+      panel.readyText.setText(panel.ready ? 'READY' : readySelected ? '> READY? <' : 'READY?');
+      panel.readyText.setColor(panel.ready ? toCssHex(COLORS.scrap) : readySelected ? toCssHex(COLORS.players[panel.slotIndex]!) : '#6a6a80');
+    }
+  }
+
+  private exitShopAndAdvance(): void {
+    this.exitShop();
+    this.beginNextLevel();
+  }
+
+  private exitShop(): void {
+    const shop = this.shop;
+    if (!shop) return;
+    shop.headlineText.destroy();
+    shop.subheadlineText.destroy();
+    shop.hintText.destroy();
+    shop.panels.forEach((panel) => {
+      panel.bg.destroy();
+      panel.headerText.destroy();
+      panel.rowTexts.forEach((text) => text.destroy());
+      panel.readyText?.destroy();
+    });
+    this.shop = undefined;
   }
 
   /**
@@ -2481,7 +2905,7 @@ export class GameScene extends Phaser.Scene {
     this.matter.world.resume();
     this.stageElapsedMs = 0;
     this.playStageMusic(GAMEPLAY_MUSIC_KEY);
-    this.resetStageHazards(this.time.now);
+    this.resetStageHazards(this.time.now, false);
     this.spawnWave(ASTEROID.spawnCountPerWave + ASTEROID.waveGrowthPerLevel);
   }
 
@@ -2499,8 +2923,42 @@ export class GameScene extends Phaser.Scene {
    * the exact moment the last asteroid of a stage dies (its own timer is
    * independent of the asteroid count), and would otherwise carry over
    * ticking into the next stage untouched.
+   *
+   * Extended, on request: also clears any leftover UFO(s) and their
+   * in-flight shots - "no UFO" on a fresh stage - and teleports every
+   * still-alive player's ship back to their own home spawn point ("ships
+   * of all players at home location"), same corner/dead-center offset
+   * spawnOffsetFor() already uses for round start and death-respawn.
+   * Deliberately skips any player whose ship isn't alive right now
+   * (eliminated, mid-respawn-delay, or - Cooperative - currently a
+   * drifting/being-towed Commander instead of a ship): eliminated stays
+   * eliminated, and the other two cases already have their own place
+   * that positions them correctly (processPendingRespawns, the rescue
+   * flow) without this method's help.
+   *
+   * `isBossStageStart` (requested directly, "for all bosses in all game
+   * modes the spawn point should be safe and the players should be 3
+   * seconds unbreakable"): when true, teleported ships use
+   * `BOSS_RESPAWN_OFFSETS` unconditionally (the same safe corners a
+   * mid-fight respawn already gets via `spawnOffsetFor`'s own
+   * `isBossEncounterActive()` check - including in Single Player, which
+   * that check already exempts from its usual dead-center spawn during
+   * an active boss encounter) instead of the normal home diamond, and
+   * `BOSS_STAGE_START.invulnerabilityMs` (3000ms) instead of the usual
+   * `SHIP.respawnInvulnerabilityMs` (2000ms). Can't just rely on
+   * `spawnOffsetFor()`'s own `isBossEncounterActive()` check here -
+   * this method runs *before* `materializeFracture()`/
+   * `materializeCardinal()` actually create the boss entity, so that
+   * check would still read false at this exact moment; the explicit
+   * flag sidesteps that ordering entirely rather than reordering boss
+   * creation earlier (which would risk other timing assumptions
+   * elsewhere). A normal (non-boss) stage transition keeps exactly the
+   * prior behavior - a fresh wave's rocks can spawn right on top of
+   * arena-center/the home diamond, and this isn't the player's fault the
+   * way flying into a rock mid-stage would be, hence the (shorter) grace
+   * period either way.
    */
-  private resetStageHazards(nowMs: number): void {
+  private resetStageHazards(nowMs: number, isBossStageStart: boolean): void {
     this.asteroids = [];
     if (this.blackHole) this.despawnBlackHole(nowMs);
     // "Not before 2 min into any stage," decided - stageElapsedMs resets
@@ -2509,6 +2967,26 @@ export class GameScene extends Phaser.Scene {
     // already gives every stage its own fresh grace period with no
     // extra bookkeeping here. Just needs its own warning-sound flag reset.
     this.blackHoleWarningPlayed = false;
+
+    this.ufos.forEach((ufo) => ufo.destroy());
+    this.ufos = [];
+    this.ufoShots.forEach((shot) => shot.destroy());
+    this.ufoShots = [];
+
+    for (const player of this.players) {
+      if (!player.ship.isAlive) continue;
+      player.ship.destroy();
+      const offset = isBossStageStart ? BOSS_RESPAWN_OFFSETS[player.slotIndex]! : this.spawnOffsetFor(player.slotIndex);
+      player.ship = new Ship(
+        this,
+        ARENA_WIDTH / 2 + offset.x,
+        ARENA_HEIGHT / 2 + offset.y,
+        COLORS.players[player.slotIndex]!,
+        this.mode === 'competitive',
+      );
+      const invulnerabilityMs = isBossStageStart ? BOSS_STAGE_START.invulnerabilityMs : SHIP.respawnInvulnerabilityMs;
+      player.ship.grantInvulnerability(nowMs, invulnerabilityMs);
+    }
   }
 
   /** "More bosses are added later," decided - a two-entry pool today (The Fracture, The Cardinal), picked with equal odds. Whoever adds a third boss extends this, not the caller. */
@@ -2579,7 +3057,7 @@ export class GameScene extends Phaser.Scene {
     this.stageElapsedMs = 0;
     this.playStageMusic(FRACTURE_MUSIC_KEY);
     const nowMs = this.time.now;
-    this.resetStageHazards(nowMs);
+    this.resetStageHazards(nowMs, true);
     this.spawnWave(FRACTURE.spawnAsteroidCount);
     this.fracture = new Fracture(this, { x: ARENA_WIDTH / 2, y: FRACTURE_SPAWN_OFFSCREEN_Y }, nowMs);
   }
@@ -2597,7 +3075,7 @@ export class GameScene extends Phaser.Scene {
     this.stageElapsedMs = 0;
     this.playStageMusic(CARDINAL_MUSIC_KEY);
     const nowMs = this.time.now;
-    this.resetStageHazards(nowMs);
+    this.resetStageHazards(nowMs, true);
     this.spawnWave(CARDINAL.spawnAsteroidCount);
     this.cardinal = new Cardinal(this, { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }, nowMs);
     this.createCardinalHealthBar();

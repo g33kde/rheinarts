@@ -162,6 +162,19 @@ export class Ship {
 
     g.fillStyle(COLORS.playerFill, 1);
     g.lineStyle(2, this.color, 1);
+    this.drawHullPath(g);
+    g.fillPath();
+    g.strokePath();
+
+    this.drawSurfaceDetail(g);
+
+    if (this.shielded) {
+      g.lineStyle(2, COLORS.shield, 0.8);
+      g.strokeCircle(0, 0, SHIP_HULL_SCALE * 1.6);
+    }
+  }
+
+  private drawHullPath(g: Phaser.GameObjects.Graphics): void {
     g.beginPath();
     SHIP_HULL.forEach(([x, y], i) => {
       const px = x * SHIP_HULL_SCALE;
@@ -170,13 +183,36 @@ export class Ship {
       else g.lineTo(px, py);
     });
     g.closePath();
-    g.fillPath();
+  }
+
+  /**
+   * Additive surface linework only (docs/roadmap.md's polish-pass item,
+   * scoped via a live-rendered concept review + `AskUserQuestion`) - the
+   * confirmed Interceptor silhouette (docs/art_direction.md) itself is
+   * unchanged; this is detail drawn on top of the filled hull, not a new
+   * outline. A canopy lens near the nose, two wing panel lines, and an
+   * engine intake ring near the rear notch.
+   */
+  private drawSurfaceDetail(g: Phaser.GameObjects.Graphics): void {
+    const s = SHIP_HULL_SCALE;
+
+    g.fillStyle(this.color, 0.22);
+    g.lineStyle(1, this.color, 0.6);
+    g.fillEllipse(0.25 * s, 0, 0.32 * s, 0.16 * s);
+    g.strokeEllipse(0.25 * s, 0, 0.32 * s, 0.16 * s);
+
+    g.lineStyle(1, this.color, 0.35);
+    g.beginPath();
+    g.moveTo(-0.1 * s, 0.08 * s);
+    g.lineTo(-0.7 * s, 0.5 * s);
+    g.strokePath();
+    g.beginPath();
+    g.moveTo(-0.1 * s, -0.08 * s);
+    g.lineTo(-0.7 * s, -0.5 * s);
     g.strokePath();
 
-    if (this.shielded) {
-      g.lineStyle(2, COLORS.shield, 0.8);
-      g.strokeCircle(0, 0, SHIP_HULL_SCALE * 1.6);
-    }
+    g.lineStyle(1, this.color, 0.45);
+    g.strokeCircle(-0.32 * s, 0, 0.05 * s);
   }
 
   destroy(): void {

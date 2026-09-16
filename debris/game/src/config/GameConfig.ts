@@ -115,6 +115,72 @@ export const PROJECTILE = {
 } as const;
 
 /**
+ * Weapon upgrade system, requested directly (implements a scoped-down
+ * slice of docs/roadmap.md's unbuilt "Salvage" Weapons tree - just the
+ * three upgrades below, not the full swap/stack-loadout system that
+ * future idea leaves open). Every player starts on the plain base weapon
+ * (`PROJECTILE` above); each upgrade is a one-time per-player unlock,
+ * purchased with that player's own Scrap (`PlayerSlot.scrap`,
+ * `systems/WeaponShop.ts`), and composes with the others rather than
+ * replacing anything - see `systems/WeaponUpgrades.ts` for how a ship's
+ * active upgrade set turns into the actual list of shots fired each
+ * trigger-pull. Every number below is a starting guess, same standing
+ * "not playtested" caveat as the rest of this file.
+ */
+export const WEAPON_UPGRADES = {
+  /** Fires 3 pellets per trigger-pull instead of 1: one straight ahead,
+   * one at +spreadRad, one at -spreadRad off the ship's current heading. */
+  splitshot: {
+    spreadRad: (12 * Math.PI) / 180, // 12 degrees each side, 24 degrees total - a starting guess
+  },
+  /** Multiplies SHIP.fireCooldownMs - "significantly reduces," decided
+   * as roughly a third of the base cooldown. Composes with Heavy Shot
+   * (fires heavy shots at the reduced cooldown) and with the heat system
+   * below (still gated by it, doesn't bypass overheating). */
+  rapidFire: {
+    cooldownMultiplier: 0.35,
+    /** "Optional but recommended," built and on by default - flip
+     * `enabled` off to fall back to plain unlimited rapid fire without
+     * touching any call site. Heat is added once per trigger-pull, not
+     * per individual pellet - Splitshot firing 3 pellets at once is one
+     * weapon discharge, not three, so equipping it doesn't silently
+     * triple this system's heat cost. */
+    heat: {
+      enabled: true,
+      heatPerShot: 12, // ~8-9 shots before overheating at maxHeat=100
+      maxHeat: 100,
+      decayPerSecond: 30, // drains a full bar in ~3.3s of not firing
+      overheatLockoutMs: 1500, // "short cooldown," decided as a starting guess
+    },
+  },
+  /** Overrides the base weapon's own projectile stats entirely while
+   * active (bigger, slower, more damage, a real kinetic push) - composes
+   * with Splitshot by feeding these numbers into every pellet instead of
+   * the base ones, per the brief's own SPLITSHOT+HEAVY SHOT example. */
+  heavyShot: {
+    radius: 7, // ~2.8x PROJECTILE.radius (2.5) - reads as a distinctly bigger shot
+    speed: 4, // half PROJECTILE.speed (8) - "moves slower," decided
+    damage: 4, // vs. the implicit 1 every other hit deals - only matters against Fracture/Cardinal's HP (confirmed via AskUserQuestion: asteroids/UFO die in one hit regardless of damage, so this is a boss-shredding number, not an asteroid one)
+    // px/step velocity added directly to whatever's pushed (see
+    // GameScene.applyHeavyShotImpulse/systems/KineticImpulse.ts) - full
+    // strength at the impact point, linearly falling off to zero at
+    // impulseRadius. Comparable to BLACK_HOLE.captureBaseSpeed (1.5) so
+    // it reads as a real shove, not a nudge - clearly faster than a
+    // large asteroid's own base speed (ASTEROID.large.speed, 0.67).
+    kineticImpulse: 1.5,
+    impulseRadius: 90, // area-of-effect push radius, ~4x a large asteroid's own radius (23) - confirmed via AskUserQuestion ("area impulse too," not just the directly-hit asteroid's split children)
+  },
+  /** Every player's own Scrap cost to unlock each upgrade - flat per the
+   * brief's "suggested initial costs," not scaled by anything (round
+   * number, difficulty, or how many upgrades a player already owns). */
+  costs: {
+    splitshot: 5,
+    rapidFire: 5,
+    heavyShot: 5,
+  },
+} as const;
+
+/**
  * Asteroid sizes and the "smaller is faster" curve, decided in
  * docs/gameplay.md: small ~1.8-2x large's speed. Scores are the "Classic
  * inverse-size" decision (large=20, medium=50, small=100). `speed` is in
@@ -125,10 +191,41 @@ export const ASTEROID = {
   large: { radius: 23, speed: 0.67, score: 20 },
   medium: { radius: 14, speed: 1.08, score: 50 },
   small: { radius: 8, speed: 1.3, score: 100 },
-  vertexCountRange: [8, 13] as const,
-  jaggedness: 0.45, // matches the confirmed live sample in docs/art_direction.md
+  /**
+   * Silhouette variety (docs/roadmap.md's "more varied asteroid
+   * silhouettes" polish-pass item) - one family is picked at random per
+   * rock (`Asteroid.ts`, `systems/AsteroidShape.ts`'s `pickShapeFamily`)
+   * instead of every rock sharing one fixed vertexCountRange/jaggedness
+   * pair. Scoped via a live-rendered concept review + `AskUserQuestion`
+   * before landing. `jagged` is the original v1 baseline (matches the
+   * confirmed live sample in docs/art_direction.md), unchanged - the
+   * other two are new.
+   */
+  shapeFamilies: [
+    { vertexCountRange: [7, 9] as const, jaggedness: 0.2 }, // rounded
+    { vertexCountRange: [8, 13] as const, jaggedness: 0.45 }, // jagged - v1 baseline, unchanged
+    { vertexCountRange: [11, 15] as const, jaggedness: 0.75 }, // spiky
+  ] as const,
   spawnCountPerWave: 5,
   waveGrowthPerLevel: 2, // each cleared wave spawns this many more large asteroids
+  /**
+   * Fixes a real bug, reported directly ("[a Gravity Well] accelerates
+   * the asteroids... without destroying [them] they are too fast to
+   * shoot"): a Black Hole's (or a Fracture gravity Fragment's) outer-band
+   * pull is a continuous applied force with no speed ceiling of its own,
+   * and asteroids have zero air friction, so a boosted rock stayed that
+   * fast *permanently*, well past the hazard's own despawn. Confirmed via
+   * `AskUserQuestion`: the pull itself staying dramatic wasn't the
+   * complaint, only that it never wore off - so this decays any speed
+   * above the rock's own tier `speed` (above) back down, but only once
+   * it's no longer being pulled by anything at all
+   * (`GameScene.applyBlackHoleGravityForces`/`applyFractureGravityForces`
+   * track this per-frame; `Asteroid.update()` reads it) - a starting
+   * guess (not playtested), same standing caveat as every other physics
+   * constant in this file: ~4-5s for a rock pulled to roughly 3x normal
+   * to fully settle back down.
+   */
+  speedDecayPerSec: 0.3,
 } as const;
 
 export const UFO = {
@@ -443,4 +540,21 @@ export const CARDINAL = {
 
   armScore: 150, // per arm destroyed
   coreScore: 1200, // the final blow that ends the fight - biggest single payout after FRACTURE.score (1000), since this is the later/harder of the two bosses
+} as const;
+
+/**
+ * Shared "a boss stage just started" safety net, requested directly, for
+ * both bosses (The Fracture, The Cardinal) in every mode. The very first
+ * spawn point when a boss stage begins previously used the same normal
+ * home diamond every non-boss stage transition does - a real gap, since
+ * mid-fight *respawns* already get the safer `BOSS_CORNER_POSITIONS`
+ * treatment (`GameScene.spawnOffsetFor`) but the opening spawn didn't,
+ * because `resetStageHazards()` (which does the teleport) runs before
+ * the boss entity itself exists, so `isBossEncounterActive()` was still
+ * false at that exact moment. Fixed by passing an explicit
+ * `isBossStageStart` flag into `resetStageHazards()` instead of relying
+ * on that timing - see its own doc comment.
+ */
+export const BOSS_STAGE_START = {
+  invulnerabilityMs: 3000, // "3 seconds unbreakable," decided - longer than SHIP.respawnInvulnerabilityMs (2000ms), since a boss fight's opening moment is a higher-stakes spot to appear vulnerable in than an ordinary mid-round respawn
 } as const;

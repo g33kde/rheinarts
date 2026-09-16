@@ -6,8 +6,14 @@
  * other's file, same "pure rule logic gets extracted and unit-tested"
  * convention as `systems/BlackHoleGravity.ts`/`systems/CommanderRescue.ts`.
  */
-export function applyHit(hp: number): { hp: number; destroyed: boolean } {
-  const next = Math.max(0, hp - 1);
+/**
+ * `damage` defaults to 1, same backward-compatible shape as
+ * `FractureCombat.applyHit` - see that function's own doc comment for
+ * why Heavy Shot (`systems/WeaponUpgrades.ts`) is the only caller that
+ * ever passes more.
+ */
+export function applyHit(hp: number, damage = 1): { hp: number; destroyed: boolean } {
+  const next = Math.max(0, hp - damage);
   return { hp: next, destroyed: next === 0 };
 }
 

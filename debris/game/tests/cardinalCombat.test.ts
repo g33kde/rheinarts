@@ -13,6 +13,14 @@ describe('applyHit', () => {
   it('never goes negative on an extra hit past zero', () => {
     expect(applyHit(0)).toEqual({ hp: 0, destroyed: true });
   });
+
+  it('decrements by a larger damage amount when given one (Heavy Shot)', () => {
+    expect(applyHit(20, 4)).toEqual({ hp: 16, destroyed: false });
+  });
+
+  it('clamps a damage amount that overkills to exactly zero, still destroyed', () => {
+    expect(applyHit(3, 4)).toEqual({ hp: 0, destroyed: true });
+  });
 });
 
 describe('determinePhase', () => {

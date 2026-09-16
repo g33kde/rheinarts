@@ -9,6 +9,515 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-08-29 — Fixed: Gravity Well permanently sped up asteroids
+
+Bug report, investigated rather than guessed at: "[the Black Hole]
+accelerates the asteroids... without destroying [them] they are too
+fast to shoot." Root cause: `Ship.update()` clamps to `SHIP.maxSpeed`
+every frame, so a ship caught in a Gravity Well's escapable outer band
+(a continuous applied force, `applyBlackHoleGravityForces`) never runs
+away - but `Asteroid.update()` had no speed cap at all, and asteroids
+have `frictionAir: 0` by design. A rock pulled by a Black Hole (or a
+Fracture gravity Fragment - `systems/BlackHoleGravity.ts`'s force math
+reused there directly) kept accelerating for as long as it stayed in
+the field, and since nothing ever decayed it back down, the boost was
+*permanent* - well past the hazard's own despawn, for the rest of the
+round.
+
+Two rounds of `AskUserQuestion` before writing any code: first,
+whether to cap the pull's peak speed or let any excess bleed off
+afterward - "mainly after it's gone" (the in-the-moment acceleration
+wasn't the actual complaint, only that it never wore off), so no cap
+was added, only a decay. Second, whether the decay should be Black-Hole-
+specific or a general rule - "decay whenever not currently near any
+gravity source," so it also covers the Fracture boss's own gravity
+Fragment for free, no per-hazard special-casing.
+
+- **`systems/MovementSystem.ts`**: new `decayExcessSpeed(velocity,
+  baseSpeed, decayPerSecond, deltaSeconds)`, pure/tested, same
+  direction-preserving shape as the existing `clampSpeed`. No-ops at or
+  below `baseSpeed`, and never decays past it (`Math.max`).
+- **`GameConfig.ts`**: `ASTEROID.speedDecayPerSec` (0.3 - a starting
+  guess, ~4-5s for a 3x-boosted rock to fully settle back down).
+- **`entities/Asteroid.ts`**: stores its own tier `speed` as `baseSpeed`
+  (previously read once and discarded); `update()` gained an
+  `isBeingPulled` parameter - only decays excess speed while `false`, so
+  a rock actively mid-pull keeps whatever dramatic acceleration the
+  hazard is currently giving it.
+- **`GameScene.ts`**: `applyBlackHoleGravityForces`/
+  `applyFractureGravityForces` both now take a shared `pulledAsteroids:
+  Set<Asteroid>` and add any asteroid they actually apply a nonzero
+  force to (their `applyGravity` closures now return whether they
+  pulled anything, instead of a bare `void`); the per-asteroid
+  `update()` call reads `pulledAsteroids.has(asteroid)` to decide.
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`
+(166/166, +5 new `decayExcessSpeed` cases) all clean. Confirmed live
+against the running dev server: boosted a real asteroid to ~3x its own
+base speed, held `isBeingPulled=true` for 30 frames and confirmed zero
+decay (speed stayed exactly 2.0, dramatic acceleration preserved while
+actively pulled), then switched to `isBeingPulled=false` and watched it
+decay linearly back to its exact base speed (0.67) over ~4.4 real
+seconds, with no overshoot below it.
+
+---
+
+## 2026-08-28 — Reverted Ship/UFO glow (kept ship geometry detail)
+
+Follow-up, requested directly, to the shape polish pass below. Both
+outer-glow treatments pulled back off:
+
+- `entities/Ship.ts` - removed the layered outer-glow strokes and the
+  bright inner "neon tube" core line, plus their now-unused
+  `GLOW_LAYERS`/`GLOW_BASE_WIDTH`/`GLOW_WIDTH_STEP`/`GLOW_BASE_ALPHA`/
+  `CORE_LINE_ALPHA` constants. **Kept**: the geometry-detail pass
+  (canopy lens, wing panel lines, engine-intake ring) - only the glow
+  half of the ship's own two-part treatment was reverted, the two were
+  independent additions to `draw()` and came out cleanly on their own.
+- `entities/Ufo.ts` - removed the same layered outer-glow strokes and
+  their constants. Glow was the UFO's *entire* polish-pass addition
+  (geometry detail was concept-reviewed but never landed there - see
+  `docs/art_direction.md`), so this entity is now back to its exact
+  pre-polish look.
+- Asteroid's shape families + per-rock craters/cracks
+  (`systems/AsteroidShape.ts`, `entities/Asteroid.ts`) are untouched -
+  they never had a glow treatment to begin with (deliberately skipped
+  during scoping over density concerns).
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`
+(161/161, unchanged - no logic branch removed, purely visual) all
+clean. Confirmed live against the running dev server, same
+plain-`Graphics`-object rendering approach the original pass used to
+sidestep this session's headless-Chromium `Ship`-rendering quirk: both
+ships and the UFO render as plain outlined shapes with no halo at real
+gameplay scale and enlarged, the ship's canopy/wing/engine detail still
+visible, asteroid field unaffected.
+
+`docs/art_direction.md`'s Ship/UFO sections and `docs/roadmap.md` item
+24 both updated with "landed, then reverted" notes rather than being
+quietly rewritten as if the glow never happened.
+
+---
+
+## 2026-08-28 — Ship/asteroid/UFO shape polish pass
+
+Item 12's one remaining piece (`docs/roadmap.md`) - explicitly skipped
+at the time for lacking a real brief. Got one now: requested directly
+as "come up with ideas and show me the mockup... invest some time,"
+so this landed via a proper live-rendered concept sheet (all three
+entities, real game colors, drawn in-engine at enlarged scale) reviewed
+through two rounds of `AskUserQuestion` before any of it was built -
+first on overall direction (rendering-only glow vs. geometry detail vs.
+a per-entity mix), then a final round that added per-rock asteroid
+detail back in after the initial recommendation had skipped it. See
+`docs/roadmap.md` item 24 and `docs/art_direction.md`'s "Polish pass,
+landed" notes (Ship/Asteroid/UFO sections) for the full per-entity
+breakdown - summary:
+
+- **Ship**: glow (layered strokes behind the hull + a bright inner
+  core line, `entities/Ship.ts`) *and* geometry detail (canopy lens,
+  wing panel lines, engine notch) - both, since at most 4 ships ever
+  exist at once, no density risk.
+- **UFO**: glow only (`entities/Ufo.ts`) - a reviewed geometry-detail
+  concept (rivets, a dome rim highlight) wasn't landed, judged too
+  subtle to earn its cost at the UFO's real on-screen size.
+- **Asteroid**: no glow at all, deliberately - the one entity where a
+  dozen-plus can be on screen at once, flagged as a real density risk
+  during scoping. Got two other things instead: **shape families**
+  (`ASTEROID.shapeFamilies` in `GameConfig.ts` - rounded/jagged/spiky,
+  one picked at random per rock via the new `pickShapeFamily`,
+  replacing the single fixed vertexCountRange/jaggedness every rock
+  used to share) and **per-rock surface detail** (procedural craters +
+  crack lines, `generateCraters`/`pickCrackTargets`, both new pure
+  functions in `systems/AsteroidShape.ts`) scaled down by size tier -
+  small rocks get none, both too tiny to read and the tier the density
+  concern was actually about.
+
+All three of the new pure functions (`pickShapeFamily`, `generateCraters`,
+`pickCrackTargets`) are seedable/deterministic and unit-tested, same
+convention as `generateAsteroidPoints` itself. Every glow/detail tuning
+constant (layer counts, widths, alphas, crater/crack counts per size)
+is file-local rather than in `GameConfig.ts` - cosmetic only, doesn't
+touch hit-testing, same "stays local" convention `Cardinal.ts`'s own
+cosmetic constants already established.
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`
+(161/161, +10 new) all clean. Confirmed live against the running dev
+server at **real gameplay scale**, not just the enlarged concept
+sheet - spawned a full 8-asteroid wave and confirmed shape variety +
+crater/crack detail read correctly without becoming visual noise at
+that density. Hit one real snag along the way: `Ship`'s actual
+Matter-wrapped instance rendered as an unrelated glyph in this specific
+headless-Chromium test session - traced it by reproducing the exact
+same artifact against the pristine pre-polish `Ship.ts` (proving it
+predates this change entirely, not a regression) and by rendering the
+identical hull-drawing code through a plain (non-Matter) `Graphics`
+object instead, at both real and enlarged scale, which rendered
+correctly every time - confirms the polish code itself is right; the
+artifact is specific to this test harness's headless WebGL context, not
+to a real browser, and is flagged here rather than quietly worked
+around.
+
+---
+
+## 2026-08-27 — Safe spawn + 3s invulnerability at every boss stage start
+
+Requested directly, in response to the question "where does the ship
+spawn when a Cardinal stage starts" surfacing a real gap: the answer was
+the normal home diamond, not the boss-safe corners a *mid-fight*
+respawn already gets. "For all bosses in all game modes the spawn point
+should be safe and the players should be 3 seconds unbreakable."
+
+Root cause: `resetStageHazards()` (which does the actual teleport-home
+step at every stage transition) runs *before*
+`materializeFracture()`/`materializeCardinal()` create the boss entity
+itself, so `spawnOffsetFor()`'s own `isBossEncounterActive()` check
+(`this.fracture !== undefined || this.cardinal !== undefined`) still
+read false at that exact moment - the mid-fight-respawn path
+(`processPendingRespawns`) was never affected, only this one opening
+moment.
+
+Fix: `resetStageHazards()` now takes an explicit `isBossStageStart:
+boolean` instead of relying on that timing. `beginNextLevel()` (normal
+stage) passes `false` - unchanged behavior, home diamond,
+`SHIP.respawnInvulnerabilityMs` (2s). `materializeFracture()`/
+`materializeCardinal()` both pass `true` - ships now use
+`BOSS_RESPAWN_OFFSETS` unconditionally (the same safe corners a
+mid-fight respawn uses, including in Single Player, which
+`isBossEncounterActive()` already exempts from its usual dead-center
+spawn during an active boss encounter) and a new
+`BOSS_STAGE_START.invulnerabilityMs` (3000ms, "3 seconds unbreakable,"
+decided - longer than the normal 2s respawn grace, since a boss fight's
+opening moment is a higher-stakes spot to appear vulnerable in).
+Applies to all three modes alike, since `resetStageHazards()` is the one
+shared call point for every stage-begin, boss or not.
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (151/151,
+unchanged - orchestration, no new pure-logic branch) all clean. Confirmed
+live against the running dev server: Single Player + The Cardinal spawns
+at the top-left boss corner `(220, 220)`, not dead-center `(960, 600)`;
+Cooperative + The Fracture puts P1/P2 at their own corners, both
+invulnerable; invulnerability confirmed true at +2999ms and false at
++3001ms (exactly 3s, not the old 2s) for a boss-stage start, while a
+normal stage transition (tested with `fracture`/`cardinal` explicitly
+cleared first, to rule out a leftover-reference test artifact) still
+lands ships on the ordinary home diamond with exactly 2s - fully
+unaffected.
+
+---
+
+## 2026-08-27 — Audited every boss attack for the same hit-test gap
+
+Follow-up, requested directly ("check for all bosses") after the laser
+fix below. Walked every Fracture/Cardinal attack mechanic looking for
+the same "ship treated as a dimensionless point" pattern:
+
+- **Reliable, no change needed**: Fracture's Fragment 🟡 launcher shard
+  and Cardinal's Phase 2 plasma ball are both real Matter-physics bodies
+  (`CATEGORY.SHIP` in their collision mask) - normal circle-vs-circle
+  collision, inherently radius-aware on both sides. Fracture's Core/
+  Fragment ship-ram ("behaves like rocks") is also real Matter collision,
+  not a manual check. Fracture's 🔴 aggressive ring and Cardinal's Phase
+  3 detonation blast are both solid, filled growing-circle checks (not
+  thin moving corridors) - a ship inside the radius gets caught as the
+  boundary sweeps past it, no precise-alignment problem to have.
+- **Same pattern as the laser, fixed for consistency (not the same
+  severity)**: Cardinal's core-ram hazard
+  (`distance <= CARDINAL.coreRadius`) and Fracture's 🔴 ring hit-test
+  (`distance <= ringRadius`) both omitted the ship's own radius too -
+  now `+ SHIP.radius` on both. Neither was the "essentially unhittable"
+  bug the laser was (the core doesn't move relative to itself, and the
+  ring is a solid disk, not a corridor a moving beam sweeps through) -
+  these were a few pixels of edge-case imprecision, not a functional
+  bug, fixed because the same "a ship's real size should count, not
+  just its center coordinate" principle applies everywhere it's cheap
+  and safe to apply it.
+- **Left alone, deliberately**: Cardinal's Phase 3 detonation blast is
+  evaluated once, at the moment of detonation, already at its full final
+  `detonationMaxRadius` - not a moment-in-time partial value like the
+  ring's growing radius. The missing ship-radius there is genuinely
+  negligible (a few pixels at a single evaluated instant), not worth the
+  same treatment.
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` (151/151,
+unchanged - both new call sites reuse the already-tested
+`SHIP.radius`/`+` pattern, no new pure-logic branch to cover) all clean.
+
+---
+
+## 2026-08-27 — Fixed: The Cardinal's Phase 1 laser rarely killed ships
+
+Bug report, investigated live rather than guessed at. Root cause: The
+Cardinal's laser hit-test (`isPointOnBeam`, `systems/BeamGeometry.ts`)
+treated a ship as a dimensionless point - correct-in-practice for The
+Fracture's laser (a fixed-angle beam that holds still for its whole
+300ms active window, `entities/FractureLaser.ts`), but a real bug for
+The Cardinal's, which - per its own design spec, "the danger zone is a
+rotating cross, not a fixed one" - keeps rotating throughout its entire
+1-second firing window. A beam that's actually sweeping needs the
+target's own physical size to register a hit at all; one that's static
+doesn't.
+
+Confirmed via a controlled live test before touching any code: forcing
+the laser "active" against a correctly-positioned, held-still ship
+(bypassing the real attack-cycle timer entirely) did correctly detect
+and queue the hit, and calling the detect+process pipeline synchronously
+did correctly destroy the ship - proving the underlying kill pipeline
+was never broken. The actual gap only showed up simulating a *real*
+frame-by-frame sweep through a firing window: `isPointOnBeam` checked
+only `distanceToSegment(shipCenter, beamStart, beamEnd) <= width/2`
+(7px either side of the line, `CARDINAL.laserWidth` 14) with zero
+allowance for the ship's own radius - a corridor narrow enough, on a
+beam moving ~3px/frame at typical engagement range, that a player who
+wasn't standing on the mathematically-precise swept line at the exact
+right instant just never got hit, which reads exactly like "the laser
+never destroys ships."
+
+Fix: `isPointOnBeam` gained an optional `pointRadius` parameter
+(defaults to 0, fully backward compatible with every other existing
+caller/test), widening the effective corridor to `width/2 + pointRadius`.
+Both real callers - The Cardinal's and The Fracture's own laser-vs-ship
+checks (`GameScene.updateCardinalAttacks`/`updateFractureAttacks`) - now
+pass `SHIP.radius` (8), matching how every *other* hazard in this game
+already treats a ship's actual physical footprint rather than its exact
+center coordinate. Fracture's laser wasn't broken (static beams don't
+need this), but the fix applies there too for consistency - a ship's
+true collision size should count the same way against every hazard.
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`
+(151/151, +4 new `isPointOnBeam` cases covering the new parameter) all
+clean. Confirmed live: simulated the exact frame-by-frame sweep a real
+firing window produces (60fps steps through the full 1000ms window,
+`cardinal.update()`+`updateCardinalAttacks()` called each step, no
+shortcuts) against a ship parked near - not exactly on - the beam's
+predicted midpoint line; the widened corridor registered the hit
+earlier in the sweep than the old point-only math did. Full "does this
+now feel fair to dodge in real play" needs live human play to confirm -
+that's inherently a moving-beam-vs-moving-player timing question a
+script can't fully settle, flagged honestly rather than overclaimed.
+
+---
+
+## 2026-08-27 — Stage-clear weapon shop
+
+The shop UI the previous weapon-upgrade entry deliberately didn't build
+("do not build a complete shop UI unless necessary") - requested
+directly as its own follow-up. Fully designed via two rounds of
+`AskUserQuestion` (8 confirmed forks total: trigger timing, multiplayer
+layout, input model, mode scope, then eliminated-player handling and
+purchase timing) plus a drawn mockup reviewed and approved before any
+code was written.
+
+Replaces the old "STAGE CLEARED / PRESS ANY KEY FOR NEXT LEVEL"
+`waitForKeyPress` flow with a new `'shop'` session state
+(`GameScene.enterShop()`/`updateShop()`/`exitShop()`) that owns its own
+per-frame update loop, same "different per-frame path than a one-shot
+keypress" shape `updateInitialsEntry()` already established for the
+initials-entry screen - this one just does it for up to 4 players'
+inputs independently at once instead of one shared input.
+
+- **One shared screen, every stage clear** - `this.players.length`
+  panels (not always 4, only players actually in this round), laid out
+  side by side and centered, matching `MenuScene`'s own card style.
+- **Each player's own existing controls, no new bindings** - `turnDirection`
+  (edge-triggered, same rising-edge detection `updateInitialsEntry` uses)
+  cycles a per-panel cursor through their 3 upgrades then a trailing
+  READY row (`systems/WeaponUpgrades.ts`'s new `nextShopCursor`, pure and
+  unit-tested); their fire input confirms - on an upgrade row that's an
+  immediate purchase via the already-built `purchaseWeaponUpgrade()`
+  hook (scrap deducts and the upgrade activates right then, no staged/
+  pending state), on READY it toggles that player's ready flag so they
+  can un-ready and keep shopping.
+- **No timer - waits for every non-eliminated player to ready up**, then
+  calls the exact same `beginNextLevel()` the old keypress flow used, so
+  the boss-stage alternation/announcement logic downstream is completely
+  unaffected.
+- **Eliminated players get a permanently-ready "OUT" panel** - stays in
+  its slot (dimmed border), never interactive, and is excluded from the
+  all-ready gate by construction (`panel.eliminated || panel.ready`) so
+  an already-out player can never stall the other three.
+- Row states: `OWNED` (jade, matches the existing scrap-pickup color),
+  an affordable cost in plain text, or a dimmed cost when the player
+  can't afford it yet - all three always visible, per the confirmed
+  "show locked upgrades, don't hide them" design.
+
+One real bug caught by the live verification pass, not just trusted on
+paper: the eliminated branch of `buildShopPanel` returned early without
+ever calling `refreshShopPanel`, so an "OUT" player's panel border
+rendered but the "P2 / OUT" label stayed blank - fixed by calling it
+before the early return. A second, cosmetic-only issue found the same
+way: Phaser left-aligns multi-line text by default, so "P2" (narrower)
+sat visibly left of "OUT" (wider) within the centered panel - fixed with
+an explicit `align: 'center'` on that Text style.
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`
+(148/148, +4 for `nextShopCursor`) all clean. Confirmed live against the
+running dev server (temporarily exposed the `Phaser.Game` instance on
+`window`, reverted immediately after - `git diff` on `main.ts` is
+clean): started a Cooperative round, force-eliminated P2 to exercise the
+OUT-panel path, forced a stage clear, drove P1's real keyboard input
+(WASD+Space) to cycle the cursor and buy Heavy Shot (scrap 20 -> 15,
+`OWNED` state confirmed live), toggled P1 ready, and confirmed the
+round actually advanced (`state` transitioned to `bossAnnouncement`,
+`this.shop` cleaned up to `undefined`) the instant the last
+non-eliminated player readied up - the eliminated P2 never blocked it.
+
+---
+
+## 2026-08-27 — Weapon upgrade system: Splitshot, Rapid Fire, Heavy Shot
+
+Not originally scoped; requested directly with a full spec (three
+upgrades, composable stacking, Scrap-funded shop hooks, no shop UI).
+Scoped down from `docs/roadmap.md`'s speculative "Salvage" Weapons tree
+(rapid fire, heavy cannon, ricochet, mines, plasma balls, Engines tree)
+to just these three, confirmed via `AskUserQuestion` on four load-bearing
+forks before writing any code, then verified live against the running
+dev server.
+
+**Base weapon vs. upgrades, separated per the brief**: every player
+starts on the plain base weapon (`PROJECTILE`, unchanged). Each upgrade
+is a one-time per-player unlock living on `PlayerSlot.weapon` (not
+`Ship` - `ship` gets destroyed/replaced on every respawn and every stage
+transition, `weapon` must survive both, same requirement Scrap itself
+already met by living on the slot).
+
+- **`systems/WeaponUpgrades.ts`** (new, pure, unit-tested) - the
+  composability core. `computeShotSpecs(state, shipHeading, config)`
+  turns a player's active-upgrade set into the actual list of shots one
+  trigger-pull fires: Splitshot decides *how many* (1 or a 3-way fan,
+  `WEAPON_UPGRADES.splitshot.spreadRad` - 12° each side, configurable),
+  Heavy Shot decides *what stats* each shot has (radius/speed/damage/
+  impulse, overriding the base weapon's numbers rather than stacking on
+  top - the brief's own SPLITSHOT+HEAVY SHOT example). The two are
+  independent axes, so every stacking combination (any subset of the
+  three) falls out of this one function with no per-combination
+  branching - Rapid Fire doesn't even appear here, it only changes fire
+  *cadence* (`computeFireCooldownMs`) and the on-screen-shot cap
+  (`computeMaxOnScreenShots` - confirmed via `AskUserQuestion`: Splitshot
+  triples a player's own cap, so a 3-pellet volley isn't silently
+  throttled by `SHIP.maxOnScreenShots`, a number picked before upgrades
+  existed).
+- **`systems/WeaponHeat.ts`** (new, pure, unit-tested) - Rapid Fire's
+  "optional but recommended" heat system, built and on by default
+  (`WEAPON_UPGRADES.rapidFire.heat.enabled`, one flag to disable
+  entirely). Heat is added once per trigger-pull, not per Splitshot
+  pellet - confirmed as a deliberate call (documented in both the config
+  and the module itself): equipping Splitshot doesn't silently triple
+  Rapid Fire's heat cost, since a 3-pellet volley is one weapon
+  discharge. Decays every frame regardless of firing state, including
+  underneath an active overheat lockout.
+- **`systems/WeaponShop.ts`** (new, pure, no Phaser/UI dependency at
+  all, per "weapon logic should be separated from UI and shop logic") -
+  `canAfford`/`purchaseUpgrade`, the actual "shop should support"
+  bullets from the brief (afford-check, deduct, apply, one-time unlock).
+  `GameScene.purchaseWeaponUpgrade(slotIndex, upgradeId)` is the thin
+  public wrapper - "the required interfaces/hooks for the shop," no shop
+  scene built, per the brief's own explicit scope limit.
+- **`Projectile`** gained optional `radius`/`speed`/`damage`/
+  `kineticImpulse` constructor params (all defaulting to today's exact
+  base-weapon values) - Heavy Shot is the same class with different
+  numbers, not a new entity, matching "the upgrade should modify the
+  existing weapon."
+- **Damage, scoped to bosses only** (confirmed via `AskUserQuestion`):
+  asteroids and the UFO already die in exactly one hit regardless of
+  damage, so Heavy Shot's damage bonus has nowhere to go there.
+  `FractureCombat.applyHit`/`CardinalCombat.applyHit` (and the
+  entity-level `takeHit`/`takeArmHit`/`takeCoreHit` methods that call
+  them) gained an optional `damage = 1` parameter, fully backward
+  compatible with every existing call site and test - Heavy Shot passes
+  `projectile.damage` (4, vs. the implicit 1 every other hit deals) and
+  chews through Fracture/Cardinal HP proportionally faster.
+- **Kinetic impulse, area effect confirmed via `AskUserQuestion`**
+  ("push asteroids... if supported by the game," reaching nearby
+  debris, not just the asteroid directly destroyed):
+  `computeImpulseVelocity` (pure, unit-tested) falls off linearly from
+  full strength at the impact point to zero at
+  `WEAPON_UPGRADES.heavyShot.impulseRadius` (90px). A target essentially
+  at the impact point (a freshly split child, spawned exactly at its
+  parent's death position) gets pushed along the shot's own heading -
+  "SHIP -> HEAVY SHOT -> ASTEROID -> NEW DIRECTION," the brief's own
+  example; anything else caught in the radius gets pushed radially
+  outward instead, reading as a shockwave.
+  `GameScene.applyHeavyShotImpulse` applies this directly to each
+  candidate's Matter velocity (a one-time add, not `applyForce` - see
+  the new method's own doc comment on why a direct velocity nudge is the
+  right primitive for a one-time "impulse" vs. `applyForce`'s gotcha,
+  tuned for sustained per-frame forces). Runs after `destroyAsteroid`'s
+  own split children are already in `this.asteroids`, so one loop
+  covers both cases.
+- **Suggested costs landed as specified**: 5 Scrap each
+  (`WEAPON_UPGRADES.costs`), spent from `PlayerSlot.scrap` (the same
+  currency Fracture/Cardinal scrap pickups already fund).
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`
+(144/144, up from 108 - 30 new cases across
+`weaponUpgrades`/`weaponHeat`/`weaponShop`.test.ts plus 4 added to the
+existing Fracture/Cardinal combat tests for the new `damage` param) all
+clean. Confirmed live against the running dev server (temporarily
+exposed the `Phaser.Game` instance on `window`, reverted immediately
+after - `git diff` on `main.ts` is clean): purchased all three upgrades
+on a live player (correct Scrap deduction, correct rejection of a
+repeat purchase and an invalid slot), held fire with all three stacked
+and confirmed exactly 12 heavy (`radius:7, damage:4, kineticImpulse:1.5`)
+projectiles in three-per-volley ±12° fans up to the Splitshot-scaled
+cap, watched heat accumulate, and destroyed a real asteroid with a
+simulated Heavy Shot hit to confirm the kinetic push actually lands on
+Matter velocity.
+
+Two live-rendered mockups (Splitshot's 3-way fan, Heavy Shot's larger/
+tinted projectile next to a normal shot) were reviewed and approved
+before any of this was written, per direct request.
+
+---
+
+## 2026-08-27 — Every stage transition now clears UFOs and returns ships home
+
+"After each completed Stage, reset the new stage - no UFO and default
+number of rocks, ships of all players at home location," per direct
+request. `resetStageHazards()` already cleared leftover asteroids/Black
+Holes at every stage-begin point (`beginNextLevel()`'s normal-wave
+branch, `materializeFracture()`, `materializeCardinal()`) - extended in
+place rather than adding parallel call sites, so this applies to every
+stage transition automatically, including into and out of a boss fight
+(confirmed via `AskUserQuestion`).
+
+- **No UFO**: any UFO(s) and their in-flight shots still alive from the
+  stage/fight that just ended are destroyed (`ufo.destroy()`/
+  `shot.destroy()`, not just spliced from the array - avoids orphaned
+  Matter bodies). Doesn't touch the UFO's own periodic spawn timer for
+  the *new* stage - one can still appear again once that timer's up,
+  same as always.
+- **Default number of rocks**: confirmed via `AskUserQuestion` that
+  `ASTEROID.spawnCountPerWave + ASTEROID.waveGrowthPerLevel` (a flat
+  formula, not a per-stage-count ramp) was already the intended
+  "default" and needed no change - this request was about clearing
+  leftovers, not the count itself.
+- **Ships home**: every player whose ship is currently alive is
+  teleported back to their own spawn point (`spawnOffsetFor()`, the
+  same corner-diamond/dead-center offset round start and death-respawn
+  already use) via a fresh `Ship` instance (old one explicitly
+  `destroy()`'d first) with `SHIP.respawnInvulnerabilityMs` of
+  invulnerability - a fresh wave's rocks can spawn right on the home
+  diamond, and a player didn't do anything wrong to deserve dying for
+  it. Deliberately skips any player whose ship isn't alive right now
+  (eliminated, mid-respawn-delay, or - Cooperative - currently a
+  drifting/being-towed Commander instead of a ship) - each of those
+  already has its own place that positions them correctly without this
+  method's help, and resetting them here would be a bug (e.g. spawning
+  a duplicate ship for a player who's mid-rescue as a Commander).
+
+Verified: `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`
+(108/108) all clean. Confirmed live against the running dev server -
+temporarily exposed the `Phaser.Game` instance on `window` (reverted
+immediately after, `git diff` on `main.ts` is clean), drove a real
+Cooperative round to the `GameScene`, manually displaced both ships
+off their home position and spawned a UFO, then called
+`resetStageHazards()` directly: UFO count 1 → 0, both ships' positions
+snapped back exactly to their spawn-diamond coordinates, both flagged
+invulnerable immediately after.
+
+---
+
 ## 2026-08-26 — Menu music swapped to asteroid-field.mp3
 
 One-line change, on request: `systems/Music.ts`'s `MENU_MUSIC_URL` now

@@ -49,6 +49,29 @@ shapes, but that's arguably more in the classic vector-arcade spirit than
 painted rocks would be. Zero pipeline work, unlike the Warden/Boss/pickup
 sprites — generated in code, not measured out of a sheet.
 
+**Polish pass, landed** (`docs/roadmap.md`'s "shape polish" item,
+scoped via a live-rendered concept sheet + `AskUserQuestion` covering
+both ship/asteroid/UFO at once - see that item for the full decision
+trail). Two additions, both still "generated, not art":
+
+- **Shape families**: `ASTEROID.shapeFamilies` replaces the single
+  fixed vertexCountRange/jaggedness pair every rock used to share with
+  three profiles - rounded (low jaggedness), the original v1 "jagged"
+  baseline (unchanged), and spiky (high jaggedness) - one picked at
+  random per rock (`pickShapeFamily`). Field-level variety, no per-rock
+  rendering cost.
+- **Per-rock surface detail**: procedural craters (small stroked
+  circles) and crack lines (drawn from center out to one of the
+  silhouette's own actual vertices, so a crack always lands exactly on
+  the jagged edge, never floating past it) - `generateCraters`/
+  `pickCrackTargets`, `systems/AsteroidShape.ts`. Scaled down by size
+  tier on purpose: small rocks (16px across, numerous after splits) get
+  none at all - both too tiny to read and the one tier where a per-rock
+  glow/detail cost at that density was flagged as a real risk during
+  scoping. **Glow was explicitly left off asteroids** for the same
+  density reason, unlike the ship/UFO below - confirmed via
+  `AskUserQuestion`.
+
 ## Ship silhouette: "Interceptor," decided
 
 Chosen from three live-rendered concepts (Classic Wedge, Interceptor,
@@ -76,6 +99,21 @@ no per-color art needed. Engine flame is a separate triangle drawn from
 the rear notch (`[-0.30, 0.00]`), pulsing in length with thrust, same
 warm orange glow regardless of hull color so "this ship is thrusting"
 reads the same for every player.
+
+**Polish pass, landed** (`docs/roadmap.md`'s "shape polish" item,
+scoped via a live-rendered concept sheet + `AskUserQuestion`) - the
+hull itself, above, is completely unchanged:
+
+- **Surface detail**: a canopy lens near the nose, two wing panel
+  lines, and a small engine-intake ring near the rear notch - low-alpha
+  linework in the ship's own color, additive only.
+- **Outer glow - landed, then reverted, on request.** Layered strokes
+  behind the hull plus a bright inner core line (the "neon tube"
+  double-stroke technique The Fracture's own laser beam already uses)
+  shipped briefly, then was pulled back off both the Ship and the UFO
+  specifically (asteroids never had it - see that section's own note)
+  - the confirmed look here is the plain outlined hull plus the surface
+    detail above, no glow.
 
 ## Background: "Twin Planets," decided
 
@@ -194,6 +232,17 @@ everything else. No rotation (a saucer doesn't need to visibly spin to
 read as alive — the under-light pulse carries that job), but the whole
 silhouette can gently bob/tilt during flight, same spirit as the ship's
 thrust flame being the "this thing is active" tell.
+
+**Polish pass** (`docs/roadmap.md`'s "shape polish" item, scoped via a
+live-rendered concept sheet + `AskUserQuestion`) - the silhouette above
+is unchanged, and stays that way: **glow landed, then was reverted, on
+request** (layered strokes behind the body/dome outlines, same
+technique as the Ship's own glow briefly used) - the confirmed look is
+back to the plain outlined saucer described above, no glow. Geometry
+detail (rivet dots, a dome rim highlight) was concept-reviewed
+alongside the glow but never landed at all - judged too subtle to earn
+its tuning cost at the UFO's actual small on-screen size, decided
+directly rather than shipped speculatively.
 
 ## Commander: "Astronaut," decided
 

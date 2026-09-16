@@ -126,18 +126,18 @@ export class Cardinal {
     };
   }
 
-  /** No-op (returns `destroyed: false`) while materializing, once every arm is already down, or once past Phase 1 entirely - same "the caller still gets a definite answer either way" shape as Fracture's own `takeHit`. */
-  takeArmHit(armIndex: number, nowMs: number): boolean {
+  /** No-op (returns `destroyed: false`) while materializing, once every arm is already down, or once past Phase 1 entirely - same "the caller still gets a definite answer either way" shape as Fracture's own `takeHit`. `damage` defaults to 1 (a normal shot) - Heavy Shot passes more, see FractureCombat.applyHit's own doc comment (CardinalCombat.applyHit mirrors it). */
+  takeArmHit(armIndex: number, nowMs: number, damage = 1): boolean {
     if (this.isMaterializing(nowMs) || this.phase !== 'armed' || !this.isArmAlive(armIndex)) return false;
-    const result = applyHit(this.armHp[armIndex] ?? 0);
+    const result = applyHit(this.armHp[armIndex] ?? 0, damage);
     this.armHp[armIndex] = result.hp;
     return result.destroyed;
   }
 
   /** Only valid once every arm is gone (Phase 2) - a no-op otherwise, same shape as `takeArmHit`. */
-  takeCoreHit(nowMs: number): boolean {
+  takeCoreHit(nowMs: number, damage = 1): boolean {
     if (this.isMaterializing(nowMs) || this.phase !== 'coreExposed') return false;
-    const result = applyHit(this.coreHp);
+    const result = applyHit(this.coreHp, damage);
     this.coreHp = result.hp;
     return result.destroyed;
   }
