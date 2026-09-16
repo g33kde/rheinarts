@@ -11,18 +11,31 @@
 #
 # Prompts for: container ID, hostname, LXC template (an interactive
 # picker - see select_template() below), disk/CPU/memory/swap, network
-# bridge, static IP, gateway. Each shows a default in [brackets] - press
+# bridge, static IP, gateway, and a root password (hidden input, see
+# prompt_password() below). Each shows a default in [brackets] - press
 # Enter to accept it. Everything else (repo URL, storage, Node version,
 # API port, install path) is fixed in the "not prompted" block below,
 # not meant to vary between installs.
 #
-# To automate (no prompts, including the template picker), export the
-# variables first and pass -y - TEMPLATE must already be downloaded in
-# this mode (see 'pveam list local'), since there's no interactive
-# picker to fall back on:
+# The root password prompt is optional - leave it blank to skip
+# (matches the original behavior: no password set, console/SSH login
+# unavailable until you run `pct exec <CTID> -- passwd` yourself).
+# `pct enter <CTID>` from the Proxmox host never needs a password
+# regardless, since it attaches via the host's own root trust.
+#
+# To automate (no prompts, including the template picker AND the
+# password prompt - automated runs never set one, regardless of
+# environment), export the variables first and pass -y - TEMPLATE must
+# already be downloaded in this mode (see 'pveam list local'), since
+# there's no interactive picker to fall back on:
 #   CTID=210 HOSTNAME=rheinarts IP_CIDR=192.168.1.60/24 GATEWAY=192.168.1.1 \
 #     TEMPLATE=local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst \
 #     ./install-lxc.sh -y
+#
+# update-lxc.sh (repo root, alongside this script) lands automatically
+# at /opt/rheinarts/update-lxc.sh as part of the git clone below -
+# nothing extra to download. Run it later, inside the container, to
+# pull + rebuild + restart everything in one step.
 
 set -euo pipefail
 
@@ -122,6 +135,37 @@ select_template() {
   TEMPLATE="local:vztmpl/$selected"
 }
 
+# Optional root password (skipped entirely under -y, no env var
+# override - confirmed via AskUserQuestion: automated runs never set
+# one). Hidden input (read -rs), confirmed twice to catch typos. A
+# blank first entry, or a confirmation that doesn't match, skips
+# password setup - same as the original no-password behavior - rather
+# than looping or failing the whole install over it.
+prompt_password() {
+  ROOT_PASSWORD=""
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    return
+  fi
+
+  echo
+  echo "Root password for console/SSH login (pct enter needs none - this"
+  echo "is only for the Proxmox web console, 'pct console', and SSH)."
+  local pw1 pw2
+  read -rsp "Root password [leave blank to skip]: " pw1
+  echo
+  if [[ -z "$pw1" ]]; then
+    echo "Skipping - set one later with: pct exec <CTID> -- passwd"
+    return
+  fi
+  read -rsp "Confirm root password: " pw2
+  echo
+  if [[ "$pw1" != "$pw2" ]]; then
+    echo "Passwords didn't match - skipping. Set one later with: pct exec <CTID> -- passwd"
+    return
+  fi
+  ROOT_PASSWORD="$pw1"
+}
+
 echo "=== Rhein Arts LXC installer ==="
 echo
 
@@ -135,9 +179,16 @@ prompt SWAP_MB    "Swap (MB)"                                        "512"
 prompt BRIDGE     "Network bridge"                                   "vmbr0"
 prompt IP_CIDR    "Static IP, with prefix (e.g. 192.168.1.50/24)"    "192.168.1.50/24"
 prompt GATEWAY    "Gateway"                                          "192.168.1.1"
+prompt_password
 
 echo
 echo "=== Creating LXC $CTID ($HOSTNAME) ==="
+PCT_CREATE_EXTRA_ARGS=()
+ROOT_PASSWORD_WAS_SET=0
+if [[ -n "$ROOT_PASSWORD" ]]; then
+  PCT_CREATE_EXTRA_ARGS+=(--password "$ROOT_PASSWORD")
+  ROOT_PASSWORD_WAS_SET=1
+fi
 pct create "$CTID" "$TEMPLATE" \
   --hostname "$HOSTNAME" \
   --cores "$CORES" \
@@ -147,7 +198,9 @@ pct create "$CTID" "$TEMPLATE" \
   --net0 "name=eth0,bridge=${BRIDGE},ip=${IP_CIDR},gw=${GATEWAY}" \
   --unprivileged 1 \
   --features nesting=0 \
-  --onboot 1
+  --onboot 1 \
+  "${PCT_CREATE_EXTRA_ARGS[@]}"
+unset ROOT_PASSWORD PCT_CREATE_EXTRA_ARGS
 
 pct start "$CTID"
 echo "Waiting for network..."
@@ -170,6 +223,7 @@ echo "=== Cloning and building ==="
 pct exec "$CTID" -- bash -c "
   set -e
   git clone --quiet '$REPO_URL' '$INSTALL_PATH'
+  chmod +x '$INSTALL_PATH/update-lxc.sh'
   cd '$INSTALL_PATH/godspeed/game' && npm ci --silent && npm run build --silent
   cd '$INSTALL_PATH/debris/game'   && npm ci --silent && npm run build --silent
   cd '$INSTALL_PATH/debris/highscore-api' && npm ci --silent && npm run build --silent
@@ -289,6 +343,11 @@ echo "Portal:  http://${ACCESS_IP}/"
 echo "Debris:  http://${ACCESS_IP}/debris/"
 echo "API:     http://${ACCESS_IP}/api/debris/highscores?mode=singlePlayer"
 echo
-echo "To update later, re-run the 'Cloning and building' + 'Laying out the"
-echo "web root' steps inside the container (see DEPLOYMENT-LXC.md's"
-echo "'Updating' section), or re-run this script against a fresh CTID."
+if [[ "$ROOT_PASSWORD_WAS_SET" == "0" ]]; then
+  echo "No root password was set - the Proxmox web console, 'pct console',"
+  echo "and SSH won't accept a login yet. 'pct enter $CTID' from this host"
+  echo "works regardless. To enable the others: pct exec $CTID -- passwd"
+  echo
+fi
+echo "To update later: pct exec $CTID -- /opt/rheinarts/update-lxc.sh"
+echo "(or 'pct enter $CTID' then run /opt/rheinarts/update-lxc.sh directly)."

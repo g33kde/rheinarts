@@ -25,11 +25,11 @@ Prereqs: a Proxmox host, root shell access.
 ```
 
 Prompts for **container ID, hostname, LXC template, disk size, CPU
-cores, memory, swap, network bridge, static IP, and gateway** — each
-shows a default in `[brackets]`, press Enter to accept it or type your
-own value. Everything else (repo URL, storage, Node.js version, API
-port, install path) is fixed, not prompted — those aren't meant to
-vary between installs.
+cores, memory, swap, network bridge, static IP, gateway, and a root
+password** — each shows a default in `[brackets]`, press Enter to
+accept it or type your own value. Everything else (repo URL, storage,
+Node.js version, API port, install path) is fixed, not prompted —
+those aren't meant to vary between installs.
 
 The template prompt is an interactive picker, not free text: it lists
 whatever LXC templates are already downloaded on this host first (no
@@ -40,9 +40,17 @@ automatically. Typing something that isn't one of the numbered choices
 is taken as a literal template volid, for anyone who already knows
 exactly what they want.
 
-To automate with **no prompts at all** (including the template
-picker): export the variables first and pass `-y`. `TEMPLATE` must
-already be downloaded in this mode, since there's no interactive
+The root password prompt is optional (hidden input, confirmed twice) —
+leave it blank to skip, same as not setting one at all. `pct enter
+<CTID>` from the Proxmox host never needs a password regardless, since
+it attaches via the host's own root trust; skipping just means the
+Proxmox web console, `pct console`, and SSH won't accept a login until
+you run `pct exec <CTID> -- passwd` yourself later.
+
+To automate with **no prompts at all** (including the template picker
+and the password prompt — automated runs never set one, regardless of
+environment): export the variables first and pass `-y`. `TEMPLATE`
+must already be downloaded in this mode, since there's no interactive
 picker to fall back on:
 
 ```bash
@@ -266,7 +274,22 @@ leaderboard hitting the systemd service over loopback.
 
 ## Updating
 
-No image tags to bump — pull, rebuild, restart, directly on the LXC:
+No image tags to bump. `update-lxc.sh` (repo root, alongside
+`install-lxc.sh`) lands automatically at `/opt/rheinarts/update-lxc.sh`
+as part of the `git clone` the installer already does — nothing
+separate to download. Pull, rebuild, restart, in one command:
+
+```bash
+pct exec <CTID> -- /opt/rheinarts/update-lxc.sh
+```
+
+(or `pct enter <CTID>` and run `/opt/rheinarts/update-lxc.sh` directly
+from inside). It always rebuilds all three projects (both games + the
+highscore API) rather than trying to detect what changed — slower than
+strictly necessary on a no-op update, but it can't miss one by guessing
+wrong.
+
+The manual equivalent, if you'd rather not run the script:
 
 ```bash
 cd /opt/rheinarts && git pull
@@ -288,7 +311,9 @@ systemctl restart debris-highscore-api
 
 `nginx -s reload` only if `nginx.conf` itself changed — static file
 updates need no nginx restart at all (no-cache headers mean the next
-request just picks them up).
+request just picks them up). Neither the script nor the manual steps
+touch the nginx site config itself — that's generated once at install
+time, not tracked by this repo; a config change is a manual re-apply.
 
 **Real trade-off vs. the k8s path**: there's no tagged image to roll
 back to if a build goes wrong — `git checkout <previous-commit>` and
