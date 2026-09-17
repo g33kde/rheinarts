@@ -615,6 +615,14 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
       ring for the second charge - **pulsing chosen**. First charge is
       the original static ring, unchanged; the second adds an
       independently-breathing outer ring, no new HUD element added.
+26. [x] Scrap pickup enlarged again - not originally scoped, requested
+    directly after item 19 Pass 4's own "smaller than or the same size
+    as the little rocks" sizing turned out to read as too small in
+    practice. `FRACTURE.swarmRadius`/`TARGET_SPAN_PX` went 7/12px to
+    11/20px (see CHANGELOG for the full before/after), chosen from a live
+    size comparison against the smallest asteroid rather than guessed -
+    deliberately bigger than that rock now, reversing Pass 4's own call.
+    Applies identically to The Cardinal's arm-scrap, same entity.
 
 ## Future ideas
 

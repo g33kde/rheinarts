@@ -488,7 +488,12 @@ export const FRACTURE = {
   shardCooldownMs: 3000, // "every 3 seconds," decided
   shardSpeed: 5, // px/step - between UFO.shotSpeed (6) and PROJECTILE.speed (8), reads as a heavier "shard" than a clean laser bolt
 
-  swarmRadius: 7, // "smaller than or the same size as the little rocks," decided - was 12 (24px across, bigger than ASTEROID.small's own 8px-radius/16px-across footprint); now 7 (14px across), safely under it
+  // Reported too small at 7 (14px across) - bumped to 11 (22px hitbox
+  // diameter) after a live size comparison against ASTEROID.small's own
+  // 16px-across footprint, this time deliberately bigger than the smallest
+  // rock rather than under it (reverses the original "smaller than or the
+  // same size" decision - was 12/24px pre-redesign, then 7/14px, now this).
+  swarmRadius: 11,
   swarmSpeed: 0.9, // faster than fragmentSpeed - "smaller is faster," same as ASTEROID's own size tiers
   swarmCountPerFragment: 6, // 3 fragments x 6 = up to 18 total, reads as "dozens" across the whole Phase 3 escalation without ever having that many alive from one single fragment
   scrapCollectionMs: 10000, // "a 10 sec countdown," decided - starts once the last Fragment dies

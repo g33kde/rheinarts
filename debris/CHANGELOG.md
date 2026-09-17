@@ -9,6 +9,22 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-09-17 — Scrap pickup enlarged (again)
+
+Reported too small: `FRACTURE.swarmRadius` (`entities/FractureSwarmBit.ts`'s
+hitbox) and `TARGET_SPAN_PX` (its visual tetromino footprint) went from
+7/12px to 11/20px, chosen from a live size comparison against the smallest
+asteroid's own 16px-across footprint before implementation. This is the
+third size this entity has been - originally 12/24px (bigger than the
+smallest rock), corrected to 7/14px specifically to be "smaller than or the
+same size" as it (item 19 Pass 4), and now deliberately bigger again after
+that correction turned out to read as too small in practice. Same entity
+covers both The Fracture's own Swarm tier and The Cardinal's arm-scrap, so
+this applies to both identically with no extra changes needed. Verified
+live: spawned a real `FractureSwarmBit` next to a live asteroid via the dev
+server (not just the size-comparison mockup) and screenshotted the actual
+rendered glow/tetromino at true gameplay scale.
+
 ## 2026-09-17 — Bigger destruction particles; stackable Shield (max 2)
 
 Two independent requests, both reviewed live before implementation.

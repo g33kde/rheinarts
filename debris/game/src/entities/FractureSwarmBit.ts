@@ -55,13 +55,16 @@ const TETROMINOES: readonly (readonly [number, number])[][] = [
   ], // L
 ];
 
-// "Smaller than or the same size as the little rocks," decided - the
-// overall footprint every tetromino piece is scaled to fit, regardless
-// of its own natural bounding box (a 4-wide I-piece and a 2x2 O-piece
-// both end up reading as "the same size class"). Comfortably under
-// FRACTURE.swarmRadius's own 14px hitbox diameter, leaving a small
-// margin so the visual never pokes past the (invisible) collision circle.
-const TARGET_SPAN_PX = 12;
+// The overall footprint every tetromino piece is scaled to fit, regardless
+// of its own natural bounding box (a 4-wide I-piece and a 2x2 O-piece both
+// end up reading as "the same size class"). Reported too small at 12 -
+// bumped to 20 on request, chosen from a live size comparison against
+// ASTEROID.small's own 16px-across footprint (deliberately bigger now,
+// reversing the original "smaller than or the same size as the little
+// rocks" call). Comfortably under FRACTURE.swarmRadius's own 22px hitbox
+// diameter, leaving a small margin so the visual never pokes past the
+// (invisible) collision circle.
+const TARGET_SPAN_PX = 20;
 
 interface Cell {
   readonly x: number;

@@ -451,8 +451,12 @@ layouts, randomized per spawn), dark metal plating, a slow pulsing
 muted-jade glow (`COLORS.scrap`, picked over gold/copper/green
 candidates - pure green ruled out, too close to Player 4's own
 acid-green), plus a gentle floating bob on top of its existing spin and
-drift. Sized to read as "at or under the smallest asteroid" now,
-correcting a real gap - it used to be bigger. Same entity
+drift. **Sizing has moved twice since**: originally bigger than the
+smallest asteroid, corrected to read "at or under" it, then reported too
+small at that size and bumped again - now deliberately bigger than the
+smallest asteroid (`FRACTURE.swarmRadius`/`TARGET_SPAN_PX`, see
+`docs/roadmap.md`'s newest entry for the exact numbers), the opposite of
+the "at or under" call this paragraph originally made. Same entity
 (`entities/FractureSwarmBit.ts`)
 now also drops from The Cardinal's own destroyed arms (`docs/roadmap.md`
 item 22), so this redesign applies to both bosses' scrap identically.
