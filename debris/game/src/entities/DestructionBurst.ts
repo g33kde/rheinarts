@@ -39,6 +39,7 @@ export class DestructionBurst {
     speedRange: readonly [number, number],
     lifespanMs: number,
     nowMs: number,
+    private readonly particleRadiusPx: number,
   ) {
     this.color = color;
     this.lifespanMs = lifespanMs;
@@ -67,7 +68,7 @@ export class DestructionBurst {
       particle.x += particle.vx * deltaSeconds;
       particle.y += particle.vy * deltaSeconds;
       g.fillStyle(this.color, 1 - age / this.lifespanMs);
-      g.fillCircle(particle.x, particle.y, 2);
+      g.fillCircle(particle.x, particle.y, this.particleRadiusPx);
     }
 
     if (!anyStillAlive) this.destroy();

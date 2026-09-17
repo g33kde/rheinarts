@@ -105,14 +105,18 @@ variant later):
   player's shot/ship) with no life lost and no respawn-flinch, then
   breaks. Same semantics as Godspeed's Shield pickup, deliberately reused
   rather than reinvented.
-- **Single charge, non-stacking for v1**: a ship can hold at most one
-  shield at a time. Touching a second Shield pickup while already
-  holding a charge is a harmless no-op (not wasted, just capped) rather
-  than stacking multiple hits of protection — Godspeed's own Shield
-  stacks, but that's a different game with a different pickup cadence;
-  this is the simplest version of the mechanic, not a port of that one.
-  Revisit if v1 playtesting says one charge is a good, worth reconsidering
-  before adding more power-up types (see `docs/roadmap.md`).
+- **Stacks up to 2 charges** (`SHIELD.maxCharges`, requested directly after
+  v1 shipped as single-charge) — a ship can hold up to two hits of
+  protection at once, consumed one at a time. Touching a third pickup
+  while already at the cap is a harmless no-op (not wasted, just capped),
+  same courtesy the original single-charge version had at 1. Visually,
+  the first charge is the original static sapphire ring, unchanged; a
+  second charge adds a pulsing outer ring (`entities/Ship.ts`'s `draw()`)
+  that breathes independently — reviewed live as an artifact mockup
+  (a rotating-dashed-ring alternative was also built and compared) before
+  implementation — so the charge count reads at a glance with no new HUD
+  element, same "the visual is the only tell" rule the respawn-invulnerability
+  flicker already follows.
 - **v1 starting value**: spawns roughly every 20–30s ("Moderate" cadence)
   — regularly enough to matter, not guaranteed to be there when you need
   it. How many at once / fixed spots vs. random position is still open,

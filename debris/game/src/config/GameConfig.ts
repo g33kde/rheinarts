@@ -249,6 +249,10 @@ export const SHIELD = {
   radius: 14,
   speed: 0.4, // px/step (Matter velocity units, not px/sec - see SHIP's doc comment above). ~24px/sec on screen - slower than any asteroid, reads as calm/collectible.
   spawnIntervalMs: 25000, // "Moderate" cadence, decided in docs/gameplay.md
+  // Stacks up to this many charges (was a single non-stacking charge) -
+  // a pickup while already at max is just wasted, same "no-op" semantics
+  // the old single-charge version had at 1.
+  maxCharges: 2,
 } as const;
 
 export const LIVES_PER_PLAYER = 3;
@@ -263,9 +267,12 @@ export const LIVES_PER_PLAYER = 3;
  * "does this read as punchy or excessive" in this environment.
  */
 export const EFFECTS = {
-  shipBurst: { count: 20, speedRange: [40, 140] as const, lifespanMs: 500 },
-  asteroidBurst: { count: 10, speedRange: [20, 80] as const, lifespanMs: 400 },
-  ufoBurst: { count: 24, speedRange: [50, 160] as const, lifespanMs: 550 },
+  // sizePx (particle radius) scales with the same "bigger death = bigger
+  // burst" logic count/speedRange already follow - was a flat 2px for every
+  // burst type, made configurable and enlarged on request.
+  shipBurst: { count: 20, speedRange: [40, 140] as const, lifespanMs: 500, sizePx: 5 },
+  asteroidBurst: { count: 10, speedRange: [20, 80] as const, lifespanMs: 400, sizePx: 4 },
+  ufoBurst: { count: 24, speedRange: [50, 160] as const, lifespanMs: 550, sizePx: 6 },
   majorShake: { durationMs: 250, intensity: 0.012 }, // ship or UFO destroyed
   minorShake: { durationMs: 120, intensity: 0.004 }, // an asteroid destroyed
 } as const;

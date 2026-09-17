@@ -9,6 +9,48 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-09-17 — Bigger destruction particles; stackable Shield (max 2)
+
+Two independent requests, both reviewed live before implementation.
+
+**Destruction-burst particle size** (`entities/DestructionBurst.ts`) — was a
+flat 2px-radius dot for every burst type (ship/asteroid/UFO alike), never
+configurable. Compared 2-6px side by side at real burst density (10-particle
+asteroid pop) via a live-rendered mockup before picking a number. Landed:
+`sizePx` added to each of `EFFECTS.shipBurst`/`asteroidBurst`/`ufoBurst`
+(`GameConfig.ts`), scaled per type on request rather than one flat constant -
+asteroid 4px, ship 5px, UFO 6px, following the same "bigger death = bigger
+effect" logic `count`/`speedRange` already used. `DestructionBurst`'s
+constructor takes the radius as a parameter now instead of a hardcoded
+literal; its one call site (`GameScene.spawnBurst`) passes `config.sizePx`
+through.
+
+**Shield stacking** (`entities/Ship.ts`, `docs/gameplay.md`) - was a single
+non-stacking charge (v1 scope, `docs/gameplay.md` explicitly flagged it as
+"revisit if playtesting says one charge is a good"); now stacks up to
+`SHIELD.maxCharges` (2, `GameConfig.ts`). `Ship`'s internal `shielded:
+boolean` became `shieldCharges: number` - `grantShield()` increments
+(capped, a no-op past max, same courtesy the old single-charge version had),
+`consumeShield()` decrements by one. `hasShield`/`consumeShield()`'s public
+call sites (`GameScene`'s hit-absorption and pickup paths) needed no changes
+at all - `hasShield` stayed a boolean (`charges > 0`), so every existing
+"does this ship survive a hit" check kept working unchanged.
+
+Visual: reviewed as a published Artifact mockup comparing two animated
+treatments for the second charge - a rotating segmented outer ring (echoing
+The Cardinal's rotation motif) vs. a pulsing/breathing solid outer ring -
+before writing any game code. **Pulsing ring chosen.** The first charge is
+the original static sapphire ring, completely unchanged; a second charge
+adds an outer ring whose radius and alpha both ease in and out
+independently (`Ship.draw()`), so the charge count reads at a glance with no
+new HUD element - same "the visual is the only tell" rule the
+respawn-invulnerability flicker already follows. Verified live against the
+running dev server (not just the mockup) by temporarily exposing the Phaser
+game instance on `window` (reverted after), granting a ship 1 then 2
+charges, and screenshotting both - confirmed the second ring renders as a
+clean, distinct circle at true gameplay scale, not just enlarged in the
+concept sheet.
+
 ## 2026-08-29 — Fixed: Gravity Well permanently sped up asteroids
 
 Bug report, investigated rather than guessed at: "[the Black Hole]

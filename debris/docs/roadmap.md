@@ -597,6 +597,24 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
       untouched by this - they never had glow to begin with. See
       `docs/art_direction.md`'s Ship/UFO sections for the corresponding
       "landed, then reverted" notes.
+25. [x] Bigger destruction particles + stackable Shield (max 2) - not
+    originally scoped, two independent requests landed together, both
+    reviewed live before implementation (see CHANGELOG for full detail).
+    - **Particle size**: `entities/DestructionBurst.ts`'s previously
+      hardcoded 2px dot is now `EFFECTS.*Burst.sizePx`, sized per burst
+      type after a live 2-6px comparison - asteroid 4px, ship 5px, UFO
+      6px, following the same "bigger death = bigger effect" logic
+      `count`/`speedRange` already used.
+    - **Shield stacking**: `SHIELD.maxCharges` (2) - resolves the
+      "stacking shield charges" example the "Power-ups beyond Shield"
+      deferred-item explicitly named. `Ship`'s `shielded: boolean` became
+      `shieldCharges: number`; `hasShield`/`grantShield()`/
+      `consumeShield()` kept their existing signatures, so every call
+      site elsewhere needed no changes. Visual: reviewed as a published
+      Artifact mockup comparing a rotating-dashed vs. a pulsing outer
+      ring for the second charge - **pulsing chosen**. First charge is
+      the original static ring, unchanged; the second adds an
+      independently-breathing outer ring, no new HUD element added.
 
 ## Future ideas
 
@@ -1225,9 +1243,10 @@ extraction zone, under real pressure the whole way there.
 
 ## Explicitly deferred past v1
 
-- **Power-ups beyond Shield** (rapid-fire, multi-shot, stacking shield
-  charges, etc.) — Shield alone is v1 scope (see above); everything else
-  in this space waits until v1 is proven fun without it.
+- **Power-ups beyond Shield** (rapid-fire, multi-shot, etc.) — Shield
+  alone is v1 scope (see above); everything else in this space waits
+  until v1 is proven fun without it. **Stacking shield charges, one of
+  the examples originally listed here, has since landed - see item 25.**
 - **A second UFO variant** (classic Asteroids has a large "dumb" saucer
   and a small "accurate" one — v1 ships with one).
 - **Best-of-N round structure** for Competitive (play one round at a time

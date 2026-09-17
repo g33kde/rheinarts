@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { SHIP, SHIP_HULL, SHIP_HULL_SCALE, COLORS } from '../config/GameConfig';
+import { SHIP, SHIP_HULL, SHIP_HULL_SCALE, COLORS, SHIELD } from '../config/GameConfig';
 import { CATEGORY } from '../systems/CollisionCategories';
 import { clampSpeed, wrapPosition } from '../systems/MovementSystem';
 import type { Vector2 } from '../utilities/Vector2';
@@ -21,7 +21,7 @@ export class Ship {
   readonly color: number;
   private thrusting = false;
   private alive = true;
-  private shielded = false;
+  private shieldCharges = 0;
   private invulnerableUntilMs = -Infinity;
   private lastNowMs = 0;
 
@@ -89,17 +89,17 @@ export class Ship {
   }
 
   get hasShield(): boolean {
-    return this.shielded;
+    return this.shieldCharges > 0;
   }
 
-  /** No-op if already shielded - single non-stacking charge, per docs/gameplay.md. */
+  /** Stacks up to `SHIELD.maxCharges` (2) - a no-op past the cap, same "wasted pickup" semantics the old single-charge version had at 1. */
   grantShield(): void {
-    this.shielded = true;
+    this.shieldCharges = Math.min(this.shieldCharges + 1, SHIELD.maxCharges);
   }
 
-  /** Consumes the charge on an absorbed hit - "absorbs exactly one hit... then breaks." */
+  /** Consumes one charge on an absorbed hit - "absorbs exactly one hit... then breaks," now per-charge rather than all-or-nothing. */
   consumeShield(): void {
-    this.shielded = false;
+    this.shieldCharges = Math.max(this.shieldCharges - 1, 0);
   }
 
   /** Damage-only immunity - movement/turning still work, only handleCollision's damage paths check this. Firing is gated separately by GameScene (decided: can move during respawn invuln, can't shoot). */
@@ -168,9 +168,23 @@ export class Ship {
 
     this.drawSurfaceDetail(g);
 
-    if (this.shielded) {
+    if (this.shieldCharges > 0) {
       g.lineStyle(2, COLORS.shield, 0.8);
       g.strokeCircle(0, 0, SHIP_HULL_SCALE * 1.6);
+    }
+
+    if (this.shieldCharges > 1) {
+      // Second charge: a pulsing outer ring - breathes independently of the
+      // (static) inner ring, reading as "holding an extra charge" without a
+      // new HUD element - reviewed live as an artifact mockup before
+      // implementation (Option B, "pulsing ring", chosen over a rotating
+      // dashed-segment alternative).
+      const outerRadius = SHIP_HULL_SCALE * 1.6 * 1.34;
+      const breathe = Math.sin((this.lastNowMs / 1000) * 1.8);
+      const radius = outerRadius + breathe * (outerRadius * 0.04);
+      const alpha = 0.45 + 0.3 * (breathe * 0.5 + 0.5);
+      g.lineStyle(2, COLORS.shield, alpha);
+      g.strokeCircle(0, 0, radius);
     }
   }
 

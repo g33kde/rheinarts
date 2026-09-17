@@ -2570,10 +2570,19 @@ export class GameScene extends Phaser.Scene {
   private spawnBurst(
     origin: Vector2,
     color: number,
-    config: { count: number; speedRange: readonly [number, number]; lifespanMs: number },
+    config: { count: number; speedRange: readonly [number, number]; lifespanMs: number; sizePx: number },
   ): void {
     this.bursts.push(
-      new DestructionBurst(this, origin, color, config.count, config.speedRange, config.lifespanMs, this.time.now),
+      new DestructionBurst(
+        this,
+        origin,
+        color,
+        config.count,
+        config.speedRange,
+        config.lifespanMs,
+        this.time.now,
+        config.sizePx,
+      ),
     );
   }
 
