@@ -95,7 +95,9 @@ export class FractureFragment {
       frictionStatic: 0,
       collisionFilter: {
         category: CATEGORY.FRACTURE,
-        mask: CATEGORY.PROJECTILE | CATEGORY.SHIP,
+        // ASTEROID added on request - same "behave like rocks" extension
+        // as Fracture.ts's own Core body.
+        mask: CATEGORY.PROJECTILE | CATEGORY.SHIP | CATEGORY.ASTEROID,
       },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Graphics>;

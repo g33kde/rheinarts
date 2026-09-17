@@ -63,7 +63,10 @@ export class Fracture {
       frictionStatic: 0,
       collisionFilter: {
         category: CATEGORY.FRACTURE,
-        mask: CATEGORY.PROJECTILE | CATEGORY.SHIP,
+        // ASTEROID added on request - an asteroid that drifts into the
+        // Core is destroyed on contact too now, same "behave like rocks"
+        // rule ships already got (see GameScene.handleCollision).
+        mask: CATEGORY.PROJECTILE | CATEGORY.SHIP | CATEGORY.ASTEROID,
       },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Graphics>;

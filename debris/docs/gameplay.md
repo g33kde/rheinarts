@@ -190,8 +190,8 @@ what you see is exactly how close is actually too close.
 
 Debris's first boss — see `docs/roadmap.md` item 19 for the full landing
 note and "The Fracture" future-ideas entry for the complete intended
-design (asteroid contact, a death sequence) this is still working
-toward.
+design this is still working toward. Asteroid contact landed separately,
+see item 27 - the death/implosion sequence is the one piece still open.
 
 **Mode-agnostic** (all three modes), triggered by the very first stage
 clear of a round: a 3-second "THE FRACTURE" banner — the game's first

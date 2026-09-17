@@ -349,10 +349,11 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     defeating the Core/Fragments. **Also decided in Pass 3**: an
     already-active Black Hole is now force-despawned the instant the
     Core materializes, not just blocked from spawning fresh.
-    **Deliberately still not built**: asteroid contact (still only ships
-    and a player's own shot can touch any tier), and the death/implosion
-    sequence - a lethal hit at the Core/Fragment tiers still just
-    destroys/splits it outright. **Pass 4** (Swarm's visual redesign,
+    **Deliberately still not built at this point**: asteroid contact
+    (still only ships and a player's own shot could touch any tier - see
+    item 27, later, for this landing) and the death/implosion sequence -
+    a lethal hit at the Core/Fragment tiers still just destroys/splits it
+    outright. **Pass 4** (Swarm's visual redesign,
     requested directly, mockup reviewed first - "floating parts," not a
     small rock): the plain jagged-shard look is gone, replaced by a
     blocky tetromino-shaped fragment (one of the 7 standard Tetris
@@ -623,6 +624,23 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     size comparison against the smallest asteroid rather than guessed -
     deliberately bigger than that rock now, reversing Pass 4's own call.
     Applies identically to The Cardinal's arm-scrap, same entity.
+27. [x] Bosses made collision-aware for ships and asteroids alike - not
+    originally scoped, requested directly ("make both (and future) bosses
+    collision aware... ships or asteroids hit it, they get destroyed.
+    Shield protects the player"). Two forks resolved via
+    `AskUserQuestion` before implementation: Cardinal's arms become a ram
+    hazard too (previously core-only), and scope extends to the bosses'
+    own attacks (plasma ball, launcher shard), not just their bodies.
+    Ship-vs-Fracture-body already existed and is untouched; everything
+    else is new (see CHANGELOG for the full per-boss breakdown). A
+    shared `pendingBossAsteroidHits` queue covers every boss-body-contact
+    source regardless of whether the boss is Matter-backed (The
+    Fracture) or manually distance-checked (The Cardinal) - a future
+    boss, either kind, has an obvious existing queue to feed rather than
+    inventing its own. Verified live: asteroids destroyed on contact with
+    both bosses' bodies (core, arm, fragment) with no boss damage, a
+    shielded ship survives one arm hit at the cost of its charge, and the
+    plasma ball destroys an asteroid it hits.
 
 ## Future ideas
 
@@ -720,9 +738,9 @@ in spirit: "the more you damage it, the more of it there is."
 **Landed, item 19**, in three passes: trigger/announcement/materialize,
 then the Core → Fragment → Swarm splitting itself, then real attacks +
 ship contact + Swarm redesigned as a scrap pickup. See item 19 for the
-exact per-pass split. Remaining gaps: asteroid contact and the death
-sequence below. A few deviations from the original pitch worth flagging
-here specifically:
+exact per-pass split. **Asteroid contact landed too, see item 27** -
+the remaining gap is just the death sequence below. A few deviations
+from the original pitch worth flagging here specifically:
 
 - **Positioning actually matches the pitch now, via a different route**:
   it spawns off-screen above top-center and drifts down to arena-center

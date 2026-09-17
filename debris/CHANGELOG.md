@@ -9,6 +9,63 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-09-17 — Bosses are collision-aware: ships and asteroids now take damage on contact
+
+Requested directly: "make both (and future) bosses collision aware... ships
+or asteroids hit it, they get destroyed. Shield protects the player (-1
+shield per collision)." Two real forks resolved via `AskUserQuestion` before
+touching code: **Cardinal's arms become a ram hazard too** (previously only
+the bare core was - arms let ships pass straight through, despite being "the
+widest, most solid-looking part of the structure" per the design doc), and
+**scope extends to the bosses' own attacks** (Cardinal's plasma ball,
+Fracture's launcher shard), not just their bodies.
+
+**Ship-vs-boss-body already existed for The Fracture** (Core/Fragments kill
+an unshielded ship, shield absorbs and consumes a charge, boss takes no
+damage) - untouched, already correct. Cardinal's core-only ram check
+(`updateCardinalAttacks`) is unchanged too. What's new:
+
+- **Cardinal arms are now a ram hazard** (ship and asteroid alike), reusing
+  the exact same `armStart`/`armEnd` segment + `distanceToSegment` math the
+  existing projectile-vs-arm hit-test already used, just with the target's
+  own radius added (`CARDINAL.armHitWidth / 2 + SHIP.radius`/`+
+  asteroid.radius`) - reverses this file's own prior "arms are deliberately
+  not a ram hazard" comment.
+- **Asteroid-vs-boss-body, for both bosses**: an asteroid touching The
+  Fracture's Core/Fragment or The Cardinal's core/arm is destroyed *whole*
+  (no split, no score) - reusing the exact precedent the Gravity Well's own
+  lethal center already set (`processBlackHoleCaptureAndLethal`), not the
+  normal shot-destroys-it split cascade, since there's no player action to
+  reward here. The boss itself takes no damage from either kind of contact,
+  same as it already took none from a ship ram. Fracture's Core/Fragment are
+  Matter-backed, so this is just a widened `collisionFilter.mask` (added
+  `CATEGORY.ASTEROID`) plus a new `handleCollision` branch; Cardinal isn't
+  Matter-backed at all, so it's a new manual per-frame distance/segment
+  check in `updateCardinalAttacks`, mirroring the ship-ram checks exactly.
+- **Cardinal's plasma ball and Fracture's launcher shard now also destroy
+  an asteroid they hit** (previously ship-only), consumed on contact either
+  way, same as a UfoShot already is - both are real Matter bodies, so this
+  is the same widened-mask-plus-branch treatment as the Fracture body
+  above.
+- One new shared queue, `pendingBossAsteroidHits: Asteroid[]`, covers every
+  boss-body-contact source (Fracture's Matter collision, Cardinal's manual
+  core/arm checks) - same "one array covers every source" shape
+  `pendingShipHits` already uses, so a future boss (Matter-backed or not)
+  has an obvious queue to feed rather than inventing its own. The plasma
+  ball/shard get their own small typed queues instead (`{asteroid, plasma}`/
+  `{asteroid, shard}`) since, unlike direct body contact, there's a second
+  object (the attack itself) that also needs destroying.
+
+Verified live against the running dev server (not just the build/test
+suite): spawned a real Cardinal and Fracture, placed asteroids directly on
+the core and on a living arm and confirmed both destroyed with no boss
+damage; placed a shielded ship on a living arm and confirmed the shield
+charge dropped to zero while the ship survived the first hit, then was
+destroyed by a second hit while still resting in the danger zone with no
+shield left (expected - same behavior a shielded core ram already had,
+not a new edge case this introduced); fired a plasma ball into a live
+asteroid and confirmed both were destroyed.
+
 ## 2026-09-17 — Scrap pickup enlarged (again)
 
 Reported too small: `FRACTURE.swarmRadius` (`entities/FractureSwarmBit.ts`'s

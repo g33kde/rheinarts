@@ -417,6 +417,24 @@ export class GameScene extends Phaser.Scene {
   // plasma ball has its own sensor body) - populated from
   // handleCollision(), same shape as pendingFractureShardHits.
   private pendingCardinalPlasmaHits: { ship: Ship; plasma: CardinalPlasmaBall }[] = [];
+  // An asteroid touching a boss's own body (Fracture Core/Fragment,
+  // Cardinal core/arm) - destroyed whole, no split, no score, same
+  // "consumed, not shattered" precedent the Gravity Well's own lethal
+  // center already set (see processBlackHoleCaptureAndLethal). One
+  // shared queue regardless of which boss/body part caused it, same
+  // "one array covers every source" shape pendingShipHits already uses -
+  // Fracture's own Matter collision feeds it from handleCollision(),
+  // Cardinal's manual core/arm distance checks feed it from
+  // updateCardinalAttacks(), and any future boss can feed the same
+  // queue either way.
+  private pendingBossAsteroidHits: Asteroid[] = [];
+  // The plasma ball/shard are consumed on any contact (ship or asteroid
+  // alike, same as a UfoShot) - separate typed queues since (unlike
+  // pendingBossAsteroidHits above) there's a second object to destroy
+  // alongside the asteroid, same shape as pendingCardinalPlasmaHits/
+  // pendingFractureShardHits' own ship-side queues.
+  private pendingCardinalPlasmaAsteroidHits: { asteroid: Asteroid; plasma: CardinalPlasmaBall }[] = [];
+  private pendingFractureShardAsteroidHits: { asteroid: Asteroid; shard: FractureShard }[] = [];
   // Swarm pickups are never lethal (decided) - a separate queue from
   // every other pendingX hit array above, same shape as
   // pendingShieldPickups, not a "hit" at all.
@@ -502,6 +520,9 @@ export class GameScene extends Phaser.Scene {
     this.pendingCardinalArmHits = [];
     this.pendingCardinalCoreHits = [];
     this.pendingCardinalPlasmaHits = [];
+    this.pendingBossAsteroidHits = [];
+    this.pendingCardinalPlasmaAsteroidHits = [];
+    this.pendingFractureShardAsteroidHits = [];
     this.pendingScrapPickups = [];
     this.pendingFriendlyFireHits = [];
     this.pendingRespawns = [];
@@ -648,6 +669,9 @@ export class GameScene extends Phaser.Scene {
     this.processPendingCardinalArmHits(nowMs);
     this.processPendingCardinalCoreHits(nowMs);
     this.processPendingCardinalPlasmaHits(nowMs);
+    this.processPendingBossAsteroidHits();
+    this.processPendingCardinalPlasmaAsteroidHits();
+    this.processPendingFractureShardAsteroidHits();
     this.processPendingScrapPickups(nowMs);
     this.processPendingRespawns(nowMs);
     this.processPendingCommanderPickups();
@@ -1250,22 +1274,25 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * The Cardinal isn't Matter-backed (see its own doc comment), so all
-   * three of its interactions - the laser cross vs. ships, projectiles
-   * vs. its arms/core, and the ship-ram hazard the core always is - are
-   * plain per-frame distance/segment checks here, the same "plain math
-   * hazard" pattern `processBlackHoleCaptureAndLethal` and
-   * `updateFractureAttacks`'s own laser check already use. The Phase 2
-   * plasma ball is the one exception (a real Matter body), fired from
-   * here but hit-tested via the normal handleCollision() path.
+   * of its interactions - the laser cross vs. ships, projectiles vs. its
+   * arms/core, and the ship/asteroid ram hazard the core and every
+   * living arm now are - are plain per-frame distance/segment checks
+   * here, the same "plain math hazard" pattern
+   * `processBlackHoleCaptureAndLethal` and `updateFractureAttacks`'s own
+   * laser check already use. The Phase 2 plasma ball is the one
+   * exception (a real Matter body), fired from here but hit-tested via
+   * the normal handleCollision() path.
    */
   private updateCardinalAttacks(nowMs: number): void {
     const cardinal = this.cardinal;
     if (!cardinal) return;
 
-    // Ship-vs-core ram - always active, every phase, same "behaves like
-    // a rock" precedent The Fracture's own Core already set. Arms are
-    // deliberately not a ram hazard (only their laser is dangerous) -
-    // see CARDINAL's own doc comment in GameConfig.ts.
+    // Ship/asteroid-vs-core ram - always active, every phase, same
+    // "behaves like a rock" precedent The Fracture's own Core already
+    // set. Arms get the same treatment below, once per living arm -
+    // requested directly, reversing this file's own earlier "arms are
+    // deliberately not a ram hazard" call (see CARDINAL's doc comment in
+    // GameConfig.ts, now stale on that specific point).
     this.players.forEach((player) => {
       if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
       const distance = Math.hypot(player.ship.position.x - cardinal.position.x, player.ship.position.y - cardinal.position.y);
@@ -1277,6 +1304,14 @@ export class GameScene extends Phaser.Scene {
       // was), but the same principle applies for consistency.
       if (distance <= CARDINAL.coreRadius + SHIP.radius && !this.pendingShipHits.includes(player.ship)) {
         this.pendingShipHits.push(player.ship);
+      }
+    });
+
+    this.asteroids.forEach((asteroid) => {
+      if (!asteroid.isAlive) return;
+      const distance = Math.hypot(asteroid.position.x - cardinal.position.x, asteroid.position.y - cardinal.position.y);
+      if (distance <= CARDINAL.coreRadius + asteroid.radius && !this.pendingBossAsteroidHits.includes(asteroid)) {
+        this.pendingBossAsteroidHits.push(asteroid);
       }
     });
 
@@ -1317,6 +1352,30 @@ export class GameScene extends Phaser.Scene {
             if (!this.pendingCardinalArmHits.some((hit) => hit.projectile === projectile)) {
               this.pendingCardinalArmHits.push({ armIndex, projectile });
             }
+          }
+        });
+
+        // Ship/asteroid ram vs. this specific arm's physical span - same
+        // segment every projectile hit-test above already uses, with the
+        // target's own radius added (same "count the real size, not just
+        // the center point" fix the core ram/laser checks already apply).
+        this.players.forEach((player) => {
+          if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
+          if (
+            distanceToSegment(player.ship.position, armStart, armEnd) <= CARDINAL.armHitWidth / 2 + SHIP.radius &&
+            !this.pendingShipHits.includes(player.ship)
+          ) {
+            this.pendingShipHits.push(player.ship);
+          }
+        });
+
+        this.asteroids.forEach((asteroid) => {
+          if (!asteroid.isAlive) return;
+          if (
+            distanceToSegment(asteroid.position, armStart, armEnd) <= CARDINAL.armHitWidth / 2 + asteroid.radius &&
+            !this.pendingBossAsteroidHits.includes(asteroid)
+          ) {
+            this.pendingBossAsteroidHits.push(asteroid);
           }
         });
       }
@@ -1486,6 +1545,17 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // Same "behave like rocks" contact, extended to asteroids on request -
+    // an asteroid that drifts into the Core or a Fragment is destroyed
+    // whole (no split, no score - same precedent the Gravity Well's own
+    // lethal center set), the boss takes no damage from it either way.
+    if (asteroid?.isAlive && (fracture?.isAlive || fractureFragment?.isAlive)) {
+      if (!this.pendingBossAsteroidHits.includes(asteroid)) {
+        this.pendingBossAsteroidHits.push(asteroid);
+      }
+      return;
+    }
+
     // Swarm: always safe, decided - a pickup (pendingScrapPickups), never a pendingShipHits entry. Its own mask no longer includes CATEGORY.PROJECTILE at all (see FractureSwarmBit's doc comment), so this is the only pair it can appear in.
     if (ship?.isAlive && fractureSwarmBit?.isAlive) {
       if (!this.pendingScrapPickups.some((pickup) => pickup.swarmBit === fractureSwarmBit)) {
@@ -1505,14 +1575,32 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // Extended to asteroids on request, same "consumed on any contact"
+    // rule - the shard is destroyed and so is the asteroid (whole, no
+    // split, no score), symmetric with the ship-contact branch above.
+    if (asteroid?.isAlive && fractureShard?.isAlive) {
+      if (!this.pendingFractureShardAsteroidHits.some((hit) => hit.shard === fractureShard)) {
+        this.pendingFractureShardAsteroidHits.push({ asteroid, shard: fractureShard });
+      }
+      return;
+    }
+
     // The Cardinal's own Phase 2 attack - same "always consumed on
     // contact, invulnerability checked at resolve time" shape as
     // FractureShard just above. The rest of The Cardinal (arms, core,
-    // ram) isn't Matter-backed at all, so this is the only Cardinal-
-    // related pair that can ever reach handleCollision().
+    // ram) isn't Matter-backed at all, so the plasma ball is the only
+    // Cardinal-related entity that can ever reach handleCollision().
     if (ship?.isAlive && cardinalPlasma?.isAlive) {
       if (!this.pendingCardinalPlasmaHits.some((hit) => hit.plasma === cardinalPlasma)) {
         this.pendingCardinalPlasmaHits.push({ ship, plasma: cardinalPlasma });
+      }
+      return;
+    }
+
+    // Same extension as FractureShard above, for the plasma ball.
+    if (asteroid?.isAlive && cardinalPlasma?.isAlive) {
+      if (!this.pendingCardinalPlasmaAsteroidHits.some((hit) => hit.plasma === cardinalPlasma)) {
+        this.pendingCardinalPlasmaAsteroidHits.push({ asteroid, plasma: cardinalPlasma });
       }
       return;
     }
@@ -2360,6 +2448,40 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** The shard is consumed either way, same as the ship-contact branch - the asteroid it hit is destroyed whole (no split, no score), same rule every other boss-asteroid contact below follows. */
+  private processPendingFractureShardAsteroidHits(): void {
+    if (this.pendingFractureShardAsteroidHits.length === 0) return;
+    const hits = this.pendingFractureShardAsteroidHits;
+    this.pendingFractureShardAsteroidHits = [];
+    for (const { asteroid, shard } of hits) {
+      if (shard.isAlive) shard.destroy();
+      if (asteroid.isAlive) {
+        this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
+        asteroid.destroy();
+      }
+    }
+  }
+
+  /**
+   * An asteroid touching a boss's own body (Fracture Core/Fragment,
+   * Cardinal core/arm) - destroyed whole, no split, no score, same
+   * "consumed, not shattered" precedent the Gravity Well's own lethal
+   * center set (`processBlackHoleCaptureAndLethal`). The boss itself
+   * takes no damage from the contact, same as it takes none from a ship
+   * ram - see the ship-contact branches in handleCollision()/
+   * updateCardinalAttacks() this mirrors.
+   */
+  private processPendingBossAsteroidHits(): void {
+    if (this.pendingBossAsteroidHits.length === 0) return;
+    const hits = this.pendingBossAsteroidHits;
+    this.pendingBossAsteroidHits = [];
+    for (const asteroid of hits) {
+      if (!asteroid.isAlive) continue;
+      this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
+      asteroid.destroy();
+    }
+  }
+
   /** A hit decrements that specific arm's own 20 HP; once it reaches zero the arm explodes into scrap (reusing FractureSwarmBit - see this.fractureSwarm's own doc comment for why) and goes dark, but the fight continues - The Cardinal itself is never destroyed by this alone. */
   private processPendingCardinalArmHits(nowMs: number): void {
     if (this.pendingCardinalArmHits.length === 0) return;
@@ -2418,6 +2540,20 @@ export class GameScene extends Phaser.Scene {
       if (plasma.isAlive) plasma.destroy();
       if (ship.isAlive && !ship.isInvulnerable(nowMs) && !this.pendingShipHits.includes(ship)) {
         this.pendingShipHits.push(ship);
+      }
+    }
+  }
+
+  /** Same extension as processPendingFractureShardAsteroidHits, for the plasma ball. */
+  private processPendingCardinalPlasmaAsteroidHits(): void {
+    if (this.pendingCardinalPlasmaAsteroidHits.length === 0) return;
+    const hits = this.pendingCardinalPlasmaAsteroidHits;
+    this.pendingCardinalPlasmaAsteroidHits = [];
+    for (const { asteroid, plasma } of hits) {
+      if (plasma.isAlive) plasma.destroy();
+      if (asteroid.isAlive) {
+        this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
+        asteroid.destroy();
       }
     }
   }

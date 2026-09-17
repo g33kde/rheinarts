@@ -32,7 +32,9 @@ export class FractureShard {
       shape: { type: 'circle', radius: FRACTURE.swarmRadius },
       isSensor: true,
       frictionAir: 0,
-      collisionFilter: { category: CATEGORY.FRACTURE, mask: CATEGORY.SHIP },
+      // ASTEROID added on request - the shard destroys any asteroid it
+      // hits too now, same as it already does a ship.
+      collisionFilter: { category: CATEGORY.FRACTURE, mask: CATEGORY.SHIP | CATEGORY.ASTEROID },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Graphics>;
     this.visual.setPosition(position.x, position.y);
