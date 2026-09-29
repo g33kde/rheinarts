@@ -660,6 +660,187 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     matches the proposed table exactly, not just the unit tests in
     isolation.
 
+## v2 candidates
+
+Not built, not scheduled — but scoped enough to pick up. Deliberately
+**not numbered**: the list above is a record of what actually landed
+(items 14-28 each got their number at landing time, not when they were
+first suggested), so anything here gets appended there when it ships
+rather than reserving a number in advance.
+
+Came out of a "how do we take Debris to the next level" brainstorming
+pass, weighted by `docs/vision.md`'s own stated main driver — *"that
+rescue is the game's main hook"* — rather than by raw content volume.
+Grouped by the four directions that pass picked up. Two forks were
+decided during it and are marked **decided** inline; everything else
+still carries real open questions, and none of the numbers below are
+tuned.
+
+### Cooperative hook
+
+- [ ] **Commander thruster puff.** An adrift Commander is currently
+      fully passive for up to `COMMANDER.rescueWindowMs` (10s) — the
+      downed player just watches. **Decided: give them a weak thruster
+      puff** — a few seconds of limited drift control, enough to nudge
+      toward a rescuer or away from an incoming rock. Precedent for the
+      problem rather than the solution: Left 4 Dead lets an incapped
+      player still fire a pistol, Mario Kart's bubble still steers,
+      Towerfall turns you into a ghost who can still throw — a local
+      multiplayer game can't afford 10 seconds of dead air for one of
+      the people in the room. Directly deepens item 15 (see "Co-op
+      rescue mechanics" below), the hook the game is designed around.
+      **Open**: how much control (a fixed number of puffs, a small fuel
+      budget, or continuous-but-very-weak thrust?); whether using it
+      costs rescue-window time; whether it can push a Commander *into*
+      a hazard — it probably should, since agency with no risk isn't a
+      decision.
+
+- [ ] **Ship-to-ship tether.** An elastic physical link between two
+      ships: sling a teammate clear of a Gravity Well, whip a rock,
+      tow a Commander home faster than carrying them, or accidentally
+      drag your partner through the Cardinal's beam. Reference point is
+      *Lovers in a Dangerous Spacetime* — forced physical
+      co-dependence, where the fun is the coordination failure as much
+      as the success. Builds on two things that already exist
+      (momentum physics, the Commander tow) rather than adding a new
+      subsystem, and it's the only proposal here that makes 2-4P play
+      structurally different from 1P play.
+      **Open**: who initiates and how (a hold-to-attach input, or
+      automatic on proximity?); does it hard-constrain distance like a
+      rope, or just apply spring force; can it be cut/broken by damage
+      or by a hazard crossing it; is it Cooperative-only, or is
+      tethering an *enemy* player in Competitive a mechanic too (it's
+      a great idea and a balance nightmare); does a tether tow a
+      Commander faster than the current carry, or replace carrying.
+
+- [ ] **Crew-role hulls.** Pick a hull at the existing menu player
+      cards: a Rescue hull (fast tow, weak guns), a Gunship (heavy
+      fire, poor tow), an Interceptor (fast/fragile). Framed as
+      **roles rather than power tiers**, so a crew has to cover each
+      other's gaps — which serves the co-op pillar directly — and it
+      adds replay identity with no meta-progression, staying inside
+      the "not roguelite" line. Arcade beat-'em-up character-select is
+      the model (Turtles in Time, Marvel vs. Capcom), not an RPG class
+      system.
+      **Open**: how many hulls; whether Single Player gets the pick too
+      (probably, but then the leaderboard arguably needs a hull column
+      or the scores aren't comparable); whether hull choice interacts
+      with the weapon shop (item 23) or is orthogonal to it; whether
+      Competitive should restrict duplicates.
+
+### New threats
+
+- [ ] **The Assembler** — a boss that welds itself together out of the
+      asteroid field mid-stage instead of materializing whole. Full
+      concept preserved under "Future ideas" below, same treatment The
+      Fracture and The Cardinal got before they were built.
+
+- [ ] The rest of the **enemy roster** (Drone, Miner, Saboteur,
+      Collector, Warp Ship) and the two other boss-tier concepts (The
+      Harvester, The Magnetar) already have their own Future-ideas
+      entry below — unchanged, still unbuilt, listed here only so this
+      section isn't mistaken for the complete picture.
+
+### Score depth and replay variety
+
+- [ ] **Combo multiplier.** Three leaderboards exist (item 20) but
+      scoring is flat — every rock is worth the same whenever you shoot
+      it. A decaying multiplier that builds with rapid consecutive
+      kills instantly gives the existing score chase depth, and rewards
+      aggression over camping. *Geometry Wars* and *Luftrausers* are
+      the references: in both, the multiplier — not the raw kill — is
+      the actual game.
+      **Open**: what resets it (a timeout? taking a hit? both?); is it
+      per-player or pooled in Cooperative (pooled matches how Co-op
+      already pools score); does it show as a HUD number, or somewhere
+      more diegetic; does it cap.
+
+- [ ] **Stage rank at stage clear.** An S/A/B/C letter on the
+      stage-clear screen, from some mix of time, accuracy, and
+      damage taken. Gives the stage-clear/shop beat a payoff beyond
+      "spend your Scrap," and is the cheapest way to make a *good*
+      clear feel different from a slow scrappy one. Devil May Cry /
+      Metal Gear Rising convention.
+      **Open**: which inputs and their weights; whether rank pays out
+      bonus Scrap (couples it to the shop economy, which cuts both
+      ways); per-player or per-crew in Cooperative; whether a rank
+      also lands on the leaderboard.
+
+- [ ] **Light stage choice.** After a stage clear, pick the next stage
+      from 2-3 visible options — e.g. "Dense Field: +50% rocks, +100%
+      Scrap" vs. a known boss vs. a "Salvage Run" with no enemies and a
+      Scrap payout. **Decided: this is allowed** — the "not
+      procedural/roguelite" line in `docs/vision.md` was written before
+      the shop, the bosses and Scrap existed, and a per-round choice
+      with no cross-session carry-over doesn't cross into Godspeed's
+      territory. **`docs/vision.md`'s "What this is not (v1)" section
+      should be updated if this actually lands** — it currently says
+      "one arena, one escalating wave structure" outright.
+      **Open**: how many options; whether the boss is ever hidden/
+      unknown; whether it replaces the strict normal/boss alternation
+      (item 22) or layers on top of it; how it interacts with the shop
+      screen, which already occupies that exact moment.
+
+- [ ] **Crew-size spawn scaling.** Four players currently fight the
+      same asteroid count as one. Item 28 just added the per-stage
+      curve (`systems/StageScaling.ts`), so this is a small extension
+      of an existing pure function rather than new machinery.
+      **Open**: linear in player count or sub-linear (4 players are
+      far more than 4x as effective as 1 — more guns, and rocks get
+      cleared before they split); does it scale UFO cadence too, or
+      only rocks; does it apply to boss stages.
+
+- [ ] **Arena terrain / variants.** The arena is an empty wrapping
+      rectangle plus a background. Candidates: static wreckage that
+      acts as *cover* (nothing in Debris currently blocks a shot), a
+      one-way debris belt flowing across the field, or a no-wrap
+      walled variant where shots and ships bounce. Changes Competitive
+      tactics the most — cover fundamentally alters a last-ship-standing
+      duel. *Super Stardust* and *Geometry Wars*' arena variants are
+      the reference.
+      **Open**: does terrain persist for a whole round or vary per
+      stage; is it destructible; how does it interact with screen-wrap
+      (the one genuinely load-bearing physics rule in the game); does
+      the Space Station relocation (item 22) need to avoid it.
+
+### Cabinet feel
+
+- [ ] **Hyperspace.** The one iconic Asteroids verb Debris doesn't
+      have: a panic button that teleports you to a random spot, with a
+      real chance of materializing inside a rock. Interacts with
+      everything already built — plausibly the only escape from a
+      Gravity Well past the event horizon, or from the Cardinal's
+      closing detonation ring. Small scope, high authenticity.
+      **Open**: cooldown or unlimited; what the death chance actually
+      is (1979 Asteroids was famously brutal); does it work while
+      invulnerable/mid-respawn; in Cooperative, can an adrift Commander
+      hyperspace (probably not — that's the thruster puff's job); is
+      it a shop upgrade rather than a default verb.
+
+- [ ] **Attract mode.** Idle on the menu for ~30s and the game demos
+      itself — an AI round playing out behind cycling leaderboards.
+      Debris is deployed to a literal cabinet portal, and this is the
+      one cabinet ritual it's missing. Also solves a real problem: a
+      passer-by currently sees a static menu, not the game.
+      **Open**: does it need real AI, or is a recorded/scripted demo
+      enough (much cheaper, and what most cabinets actually did); does
+      any input break out of it instantly; does it also cycle the
+      per-mode leaderboards, or just play.
+
+- [ ] **Slow-motion on the deciding blow.** ~400ms of time dilation on
+      the round-deciding moment — the last-ship-standing kill in
+      Competitive, or a boss's death. Nuclear Throne / Devil May Cry
+      punctuation: very cheap, disproportionate impact on how a round
+      *ends*, which is the part people remember.
+      **Open**: which moments qualify (boss death, final elimination,
+      a last-second rescue?); does it respect `prefers-reduced-motion`
+      like the existing camera shake does (it probably should); does
+      audio pitch-shift with it or stay flat.
+
+- [ ] **UFO sound effects** — already tracked under "Explicitly
+      deferred past v1" below, listed here only because it belongs to
+      this group: it's the last SFX gap in the game.
+
 ## Future ideas
 
 Bigger speculative systems — not scoped, not scheduled, but worth
@@ -724,6 +905,7 @@ co-op-only or also appear in Competitive is an open question, not decided.
 | ⚡ **The Magnetar** | A huge electromagnetic boss that alternates between **PULL** and **PUSH** phases — drags every ship and asteroid in the arena together, then violently throws it all back outward. Boss-tier, arena-wide, requested directly. Distinct from the existing Gravity Well hazard (`docs/gameplay.md`) despite the surface similarity: Gravity Well is a passive, localized, pull-only environmental hazard on its own timer with no HP to fight; the Magnetar is an active, arena-wide, two-phase boss with hit points, more Harvester's sibling than Gravity Well's. |
 | 💠 **The Fracture** | A crystalline boss that splits when damaged instead of just dying — Core → 3 Fragments → Swarm. Boss-tier, requested directly, full concept preserved in its own section below rather than compressed here. **Landed, see item 19** — the splitting/movement/multi-tier-HP core loop is built; real attacks, ship contact, and the death sequence are still open. |
 | ✝️ **The Cardinal** | A stationary four-armed mechanical boss permanently anchored at arena-center — four laser cannons at N/E/S/W, the whole cross rotating continuously clockwise, firing all four simultaneously every few seconds. Boss-tier, requested directly, full concept preserved in its own section below rather than compressed here. **Landed, see item 22** — three-phase fight (armed → core exposed → critical detonation), all decided numbers built as spec'd. |
+| 🧲 **The Assembler** | A boss that **builds itself out of the asteroid field** over the course of a stage instead of materializing whole — visibly drawing rocks in and welding them together while the crew is busy fighting. Interruptible: shoot the pieces mid-assembly and you slow or stop it. Boss-tier, *Sinistar*-descended, full concept preserved in its own section below. Unbuilt — see "v2 candidates" above. |
 
 **Chaos Meter tie-ins worth remembering** (connecting this to the section
 above, not deciding it now):
@@ -1059,6 +1241,85 @@ design spec, not v1 scope):
   in the open or specifically threatens whoever's already closest to
   center.
 
+### The Assembler
+
+A third boss-tier concept, from a "next level" brainstorming pass — not
+requested as a spec the way The Fracture and The Cardinal were, so this
+is a pitch rather than a decided design. Same "preserve it in full"
+treatment as those two. **Unbuilt** — tracked under "v2 candidates"
+above.
+
+The pitch: **a boss that builds itself out of the asteroid field while
+you're busy with the asteroid field.** Rocks drift inward toward a point,
+lock together, and weld into a structure over the course of a stage. It
+is *not* announced and dropped in fully-formed the way both existing
+bosses are — you watch it happen, and you can interfere.
+
+**Why this one and not a fourth laser platform**: it's the only boss
+concept here whose pressure is on the *clock and the crew's attention*
+rather than on dodging. Both shipped bosses are dodge-and-shoot fights
+against a finished object. This one asks a question instead — *do we
+break off and stop the assembly, or finish the rescue first?* — and in
+Cooperative that fork lands directly on the mechanic `docs/vision.md`
+calls the game's main hook. A boss that makes the rescue decision harder
+is worth more to Debris than a boss with a new attack pattern.
+
+**Lineage**: *Sinistar* (1983), which is the same arcade generation as
+Asteroids itself and did exactly this — workers assembled the Sinistar
+from mined crystals while you played, and once complete it hunted you.
+Two things made it famous: the assembly was visible and interruptible,
+and it *talked* ("BEWARE, I LIVE!"), which turned a timer into dread.
+The name fits Debris almost too well — a game about wreckage, where the
+wreckage assembles itself.
+
+**Thematic fit**: every other thing in this arena is inert debris the
+player shoots apart. This is the field putting itself back together. It
+also gives a mechanical reason to *not* clear every rock immediately,
+which is the opposite of the incentive every other stage has — the one
+idea here that changes how players treat asteroids themselves.
+
+**Rough shape** (all speculative):
+
+1. **Seeding.** Somewhere into a stage, a nucleus appears and starts
+   pulling nearby asteroids toward it — visibly, on a slow timer, with
+   the same telegraph fairness every other hazard in this game follows.
+2. **Assembly.** Each absorbed rock becomes a visible plate/limb on the
+   growing structure, so its progress is readable at a glance without a
+   progress bar. Shooting a rock *in transit* denies it. Shooting an
+   already-attached plate knocks it back off.
+3. **Completion.** If it finishes, it's a real boss fight — presumably
+   the strongest of the three, as the payoff for having let it finish.
+4. **Denial.** If the crew keeps it starved long enough, it collapses
+   and the stage clears without ever becoming a boss.
+
+**Open questions** (none of this is decided):
+
+- **Does it consume the stage's actual asteroids, or spawn its own?**
+  Consuming real ones is far more interesting — clearing rocks fast
+  starves it, so good play at the normal game is *also* the counter —
+  but it fights the existing stage-clear condition, which is "no rocks
+  left." If the Assembler ate the last rock, does the stage clear?
+- **Is full denial actually allowed?** A boss you can skip entirely is a
+  strange thing to build; but a boss you can't affect makes the
+  interruption mechanic decorative. Possible middle: denial always
+  works but pays much less Scrap/score than beating it assembled, so
+  skipping it is the safe-and-poor line.
+- **Does it fit the alternation (item 22) at all?** Both current bosses
+  own their own stage. This one wants to grow *during a normal stage*,
+  which is a different structural slot — it might be a normal-stage
+  event rather than a boss-stage pick, or it might need "light stage
+  choice" (v2 candidates) to exist first so a player opts into it.
+- **Does it taunt?** Sinistar's voice is the entire reason anyone
+  remembers it. Debris has no voice audio at all today, and adding it
+  is a real asset/identity decision, not just a sound file.
+- **What happens to absorbed mass when it dies** — does the field get
+  its rocks back as a shower of debris (fitting, chaotic, and possibly
+  unsurvivable), or does it just explode like the others?
+- **Cooperative-specific**: can an adrift Commander be pulled in by the
+  assembly field? Brutal, thematically perfect, and probably too
+  punishing — but it's exactly the crew-attention fork this concept is
+  built around.
+
 ### Co-op rescue mechanics — landed, see item 15
 
 Built as "Emergency Ejection & Rescue" (`docs/gameplay.md`), on request.
@@ -1087,6 +1348,14 @@ speculation below assumed, worth noting for anyone comparing the two:
   countdown, but vulnerable to hazards again while waiting for a second
   pickup.
 
+**Proposed extension, not built**: the adrift Commander is currently
+fully passive for the whole 10-second window, which leaves one of the
+people in the room with nothing to do. A **weak thruster puff** giving
+them limited drift control is decided in principle — see "Commander
+thruster puff" under "v2 candidates" above for the open questions
+(how much control, whether it costs window time, whether it can push
+them into a hazard).
+
 ### Bosses
 
 Requested as its own development direction, not fully specified yet at
@@ -1103,6 +1372,15 @@ The Fracture's old one-time trigger** -
 `GameScene.beginNextLevel()`'s `fractureIntroduced` latch, which used to
 divert into the boss sequence only "after ending stage one" and never
 again for the rest of the round, is gone.
+
+**The Assembler** (see its own section above, and "v2 candidates") is
+the third boss concept, and the first one that **doesn't cleanly fit
+this alternation**: it wants to grow during a *normal* stage rather than
+own a boss stage of its own, so whoever picks it up has to decide
+whether it joins `pickRandomBoss()`'s pool at all, becomes a
+normal-stage event instead, or waits on "light stage choice" (v2
+candidates) so a player opts into it deliberately. Worth resolving
+before building it, not during.
 
 **The Harvester** (see "Enemy roster" above) - a huge, arena-consuming
 boss gated behind Chaos Level 6 - is NOT part of this resolution.
@@ -1299,8 +1577,12 @@ extraction zone, under real pressure the whole way there.
   sound distinct from the ship's) - the only SFX gap left now that the
   UFO itself is built (item 4). Its destruction currently reuses the
   ship-destruction explosion rather than staying silent or getting its
-  own placeholder.
-- **Difficulty options / tunable wave scaling** beyond the built-in ramp.
+  own placeholder. Also grouped under "Cabinet feel" in "v2 candidates"
+  above, since that's the work it naturally travels with.
+- **Difficulty options / tunable wave scaling** beyond the built-in ramp
+  (item 28 added the per-stage curve; this is about exposing it as a
+  player-facing choice). Related: "crew-size spawn scaling" under "v2
+  candidates" above, which scales the same curve by player count.
 - **Stage-scaled asteroid/UFO counts** — **landed, see item 28.**
 - **Touch/mobile controls.**
 - **Online multiplayer.** Local input only for the foreseeable future —
