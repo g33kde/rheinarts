@@ -206,8 +206,18 @@ export const ASTEROID = {
     { vertexCountRange: [8, 13] as const, jaggedness: 0.45 }, // jagged - v1 baseline, unchanged
     { vertexCountRange: [11, 15] as const, jaggedness: 0.75 }, // spiky
   ] as const,
-  spawnCountPerWave: 5,
-  waveGrowthPerLevel: 2, // each cleared wave spawns this many more large asteroids
+  /**
+   * Stage-scaled spawn count (docs/roadmap.md's "Stage-scaled asteroid/UFO
+   * counts") - replaces the old flat `spawnCountPerWave`/`waveGrowthPerLevel`
+   * two-tier formula (stage 1 got 5, every stage after got a fixed 7,
+   * forever, never climbing further) outright. Now a linear ramp, capped:
+   * see `systems/StageScaling.ts`'s `computeAsteroidSpawnCount`. Starting
+   * numbers, not playtested - same standing caveat as every other tuning
+   * constant in this file.
+   */
+  baseSpawnCount: 4, // stage 1 - a touch lighter than the old flat 5
+  spawnGrowthPerStage: 1, // +1 large asteroid per stage after the first, not a one-time +2 jump
+  maxSpawnCount: 14, // ceiling reached at stage 11 - keeps a very long round from spiraling into a physics-engine mess
   /**
    * Fixes a real bug, reported directly ("[a Gravity Well] accelerates
    * the asteroids... without destroying [them] they are too fast to
@@ -233,7 +243,16 @@ export const UFO = {
   speed: 0.92, // px/step (Matter velocity units, not px/sec - see SHIP's doc comment above). ~55px/sec on screen.
   score: 200, // decided: keep the original placeholder, per docs/gameplay.md's "200+ points"
   fireCooldownMs: 1800,
-  spawnIntervalMs: 12000, // no cap on concurrent UFOs, decided - if nothing's killed the last one, a new one spawns anyway
+  // Stage-scaled cadence (docs/roadmap.md's "Stage-scaled asteroid/UFO
+  // counts") - replaces the old flat `spawnIntervalMs` (12000ms
+  // regardless of round progress) outright. See
+  // `systems/StageScaling.ts`'s `computeUfoSpawnIntervalMs`. No cap on
+  // concurrent UFOs either way, decided - if nothing's killed the last
+  // one, a new one spawns anyway once the (now stage-scaled) interval
+  // elapses.
+  baseSpawnIntervalMs: 16000, // stage 1 - slower than the old flat 12000
+  spawnIntervalStepDownMs: 800, // gets this much more frequent each subsequent stage
+  minSpawnIntervalMs: 6000, // floor reached at stage 14 - keeps later stages from becoming unfair UFO spam
   maxConcurrentDuringBoss: 4, // "boss stages spawn max 4 UFOs," decided - the one exception to the no-cap rule above, gated by GameScene.isBossEncounterActive()
   shotSpeed: 6, // px/step - slightly slower than the player's PROJECTILE.speed (8), stays dodgeable
   shotRadius: 2.5,

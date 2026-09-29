@@ -9,6 +9,42 @@ milestone, same convention as Godspeed's `CHANGELOG.md`.
 
 ---
 
+## 2026-09-21 — Stage-scaled asteroid/UFO counts
+
+Requested directly, resolving the three open questions the "Stage-scaled
+asteroid/UFO counts" deferred-item already named: linear (not tapering),
+yes it has a cap/floor, and it **replaces** the old formula outright.
+
+Before this, difficulty jumped once and flattened out forever: stage 1
+spawned `ASTEROID.spawnCountPerWave` (5), every stage after got a fixed
+`+ waveGrowthPerLevel` (2) — 7, unchanging for the rest of the round. UFO
+spawn frequency didn't scale by stage at all (`spawnIntervalMs`, a flat
+12000ms). Neither had a way to express "fewer of both early, climbing
+smoothly across a full round."
+
+Landed as a real per-stage linear ramp, both capped/floored so a very long
+round can't spiral into a physics-engine mess or unfair UFO spam:
+
+- **Asteroids**: `ASTEROID.baseSpawnCount` (4) + `spawnGrowthPerStage` (1)
+  per stage, capped at `maxSpawnCount` (14, reached stage 11) —
+  `systems/StageScaling.ts`'s `computeAsteroidSpawnCount`, pure and tested.
+- **UFO**: `UFO.baseSpawnIntervalMs` (16000) − `spawnIntervalStepDownMs`
+  (800) per stage, floored at `minSpawnIntervalMs` (6000, reached stage 14)
+  — `computeUfoSpawnIntervalMs`, same file, same treatment.
+
+Needed a real stage counter first — one didn't exist anywhere in the code,
+not even for display. New `GameScene.normalStageCount` (starts at 1,
+increments once per normal-stage transition in `beginNextLevel()`) feeds
+both functions. Boss stages don't advance it — they spawn their own small
+fixed ambient wave (`FRACTURE.spawnAsteroidCount`/`CARDINAL.spawnAsteroidCount`),
+a separate system from this curve. A proposed table (exact per-stage
+numbers) was reviewed and confirmed before writing any code.
+
+Verified live against the running dev server: forced ten consecutive
+normal-stage transitions and confirmed the actual spawned asteroid count
+at each stage matches the proposed table exactly (4, 5, 6, ... capping at
+14 by stage 11), not just the unit tests in isolation.
+
 ## 2026-09-17 — Bosses are collision-aware: ships and asteroids now take damage on contact
 
 Requested directly: "make both (and future) bosses collision aware... ships

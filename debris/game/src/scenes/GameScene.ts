@@ -63,6 +63,7 @@ import {
   MENU_MUSIC_KEY,
 } from '../systems/Music';
 import { evaluateRoundOutcome, GAME_MODE_LABELS, type GameMode } from '../systems/RoundOutcome';
+import { computeAsteroidSpawnCount, computeUfoSpawnIntervalMs } from '../systems/StageScaling';
 import {
   ASTEROID_HIT_SFX_KEY,
   SHIELD_PICKUP_SFX_KEY,
@@ -333,6 +334,13 @@ export class GameScene extends Phaser.Scene {
   // very first stage-clear of the round still triggers a boss first,
   // same as the original behavior.
   private lastStageWasBoss = false;
+  // How many normal (non-boss) stages have begun this round - 1 for the
+  // round's first wave (spawned directly in create()), incremented once
+  // per subsequent normal-stage transition in beginNextLevel(). Feeds
+  // systems/StageScaling.ts's asteroid-count/UFO-interval curves; boss
+  // stages don't advance it - they spawn their own small fixed ambient
+  // wave, a separate system from this one.
+  private normalStageCount = 1;
   private cardinal: Cardinal | undefined;
   private cardinalPlasmaBalls: CardinalPlasmaBall[] = [];
   // Set once the last Fragment dies, cleared once the countdown runs
@@ -493,6 +501,7 @@ export class GameScene extends Phaser.Scene {
     this.fractureLasers = [];
     this.fractureShards = [];
     this.lastStageWasBoss = false;
+    this.normalStageCount = 1;
     this.cardinal = undefined;
     this.cardinalPlasmaBalls = [];
     this.cardinalHealthBarBorder = undefined;
@@ -530,7 +539,7 @@ export class GameScene extends Phaser.Scene {
     this.pendingCommanderHazardHits = [];
     this.overlayTexts = [];
     this.pauseMenuObjects = [];
-    this.spawnWave(ASTEROID.spawnCountPerWave);
+    this.spawnWave(computeAsteroidSpawnCount(this.normalStageCount));
     this.refreshAllPlayerHud();
 
     this.add
@@ -840,14 +849,13 @@ export class GameScene extends Phaser.Scene {
     }
 
     // "Boss stages spawn max 4 UFOs," decided - only capped during a
-    // boss encounter; normal stages keep the original "no cap" behavior
-    // (UFO.spawnIntervalMs's own doc comment). Deliberately doesn't
-    // reset `lastUfoSpawnAtMs` while capped, so the instant a slot frees
-    // up (a UFO dies) a new one spawns right away if the interval had
-    // already elapsed, rather than waiting a fresh full interval from
-    // whenever the cap happened to clear.
+    // boss encounter; normal stages keep the original "no cap" behavior.
+    // Deliberately doesn't reset `lastUfoSpawnAtMs` while capped, so the
+    // instant a slot frees up (a UFO dies) a new one spawns right away
+    // if the interval had already elapsed, rather than waiting a fresh
+    // full interval from whenever the cap happened to clear.
     const ufoSpawnCapped = this.isBossEncounterActive() && this.ufos.length >= UFO.maxConcurrentDuringBoss;
-    if (!ufoSpawnCapped && nowMs - this.lastUfoSpawnAtMs >= UFO.spawnIntervalMs) {
+    if (!ufoSpawnCapped && nowMs - this.lastUfoSpawnAtMs >= computeUfoSpawnIntervalMs(this.normalStageCount)) {
       this.spawnUfo();
       this.lastUfoSpawnAtMs = nowMs;
     }
@@ -3046,12 +3054,13 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.lastStageWasBoss = false;
+    this.normalStageCount += 1;
     this.state = 'playing';
     this.matter.world.resume();
     this.stageElapsedMs = 0;
     this.playStageMusic(GAMEPLAY_MUSIC_KEY);
     this.resetStageHazards(this.time.now, false);
-    this.spawnWave(ASTEROID.spawnCountPerWave + ASTEROID.waveGrowthPerLevel);
+    this.spawnWave(computeAsteroidSpawnCount(this.normalStageCount));
   }
 
   /**

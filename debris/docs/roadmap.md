@@ -641,6 +641,24 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     both bosses' bodies (core, arm, fragment) with no boss damage, a
     shielded ship survives one arm hit at the cost of its charge, and the
     plasma ball destroys an asteroid it hits.
+28. [x] Stage-scaled asteroid/UFO counts - resolves the deferred-item of
+    the same name above, all three of its own open questions answered:
+    linear (not tapering), yes a cap/floor, replaces the old formula
+    outright rather than layering on it. A written proposal (the exact
+    per-stage table) was reviewed and confirmed before any code was
+    written. Needed a real stage counter first - none existed anywhere in
+    the code, not even for display; new `GameScene.normalStageCount`
+    (starts at 1, increments once per normal-stage transition in
+    `beginNextLevel()` - boss stages don't advance it, they spawn their
+    own separate small ambient wave) feeds two new pure/tested functions
+    in `systems/StageScaling.ts`: `computeAsteroidSpawnCount` (base 4,
+    +1/stage, capped at 14) and `computeUfoSpawnIntervalMs` (base 16000ms,
+    −800ms/stage, floored at 6000ms), replacing `ASTEROID.spawnCountPerWave`/
+    `waveGrowthPerLevel` and the old flat `UFO.spawnIntervalMs`
+    respectively. Verified live: forced ten consecutive normal-stage
+    transitions and confirmed the actual spawned count at each stage
+    matches the proposed table exactly, not just the unit tests in
+    isolation.
 
 ## Future ideas
 
@@ -1283,20 +1301,7 @@ extraction zone, under real pressure the whole way there.
   ship-destruction explosion rather than staying silent or getting its
   own placeholder.
 - **Difficulty options / tunable wave scaling** beyond the built-in ramp.
-- **Stage-scaled asteroid/UFO counts** — requested directly. Today's
-  asteroid count is a flat step, not a curve: `ASTEROID.spawnCountPerWave`
-  (5) on the very first stage, then a fixed `+ ASTEROID.waveGrowthPerLevel`
-  (2) on every stage after that, forever (7, never climbing any further) -
-  see `beginNextLevel()`. UFO spawn frequency doesn't scale by stage at
-  all - `UFO.spawnIntervalMs` (12000ms) is a flat constant regardless of
-  how far into a round the player already is. The idea: fewer of both on
-  early stages, climbing per stage instead of jumping once and
-  flattening out - gives a round its own difficulty ramp rather than
-  hitting "full difficulty" after the very first stage. Not scoped: the
-  actual growth curve (linear vs. something that tapers off), whether it
-  has a ceiling, and whether it replaces the existing
-  `spawnCountPerWave + waveGrowthPerLevel` formula outright or layers on
-  top of it.
+- **Stage-scaled asteroid/UFO counts** — **landed, see item 28.**
 - **Touch/mobile controls.**
 - **Online multiplayer.** Local input only for the foreseeable future —
   a real netcode project, not a natural extension of this one.
