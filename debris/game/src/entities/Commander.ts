@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
-import { COMMANDER } from '../config/GameConfig';
+import { COLORS, COMMANDER } from '../config/GameConfig';
 import { CATEGORY } from '../systems/CollisionCategories';
 import { computeTowPosition } from '../systems/CommanderRescue';
-import { wrapPosition } from '../systems/MovementSystem';
+import { clampSpeed, wrapPosition } from '../systems/MovementSystem';
 import { toCssHex } from '../utilities/Color';
 import type { Vector2 } from '../utilities/Vector2';
 import type { MatterGameObject } from './MatterGameObject';
@@ -46,6 +46,14 @@ export class Commander {
   private towedBy: Ship | null = null;
   private hasBeenRescued = false;
   private alive = true;
+  // EVA thruster state (COMMANDER.puff*) - the downed player's own
+  // limited agency while adrift. `facingRad` is logical only: the body
+  // itself is deliberately never rotated (see setFixedRotation below and
+  // the tumbling-person art direction), so the direction is shown by a
+  // chevron and the thruster flame instead.
+  private facingRad: number;
+  private puffFuelSeconds = COMMANDER.puffFuelSeconds;
+  private isPuffing = false;
 
   constructor(
     scene: Phaser.Scene,
@@ -58,6 +66,10 @@ export class Commander {
     this.slotIndex = slotIndex;
     this.color = color;
     this.ejectedAtMs = nowMs;
+    // Start aimed along the ejection heading - whichever way you were
+    // flung is where a puff would take you, so the first press does
+    // something predictable rather than something arbitrary.
+    this.facingRad = headingRad;
 
     const visual = scene.add.graphics();
     scene.matter.add.gameObject(visual, {
@@ -114,6 +126,45 @@ export class Commander {
     this.towedBy = ship;
     this.visual.setVelocity(0, 0);
     this.timerText.setVisible(false);
+  }
+
+  get remainingPuffFuelRatio(): number {
+    return COMMANDER.puffFuelSeconds <= 0 ? 0 : this.puffFuelSeconds / COMMANDER.puffFuelSeconds;
+  }
+
+  /**
+   * The downed player's own input, applied to their adrift pilot
+   * (COMMANDER.puff*) - GameScene routes the matching slot's turn/thrust
+   * here each frame. Reuses the player's existing turn/thrust bindings
+   * rather than adding new ones: the muscle memory transfers straight
+   * from flying, which matters when you've got seconds to react.
+   *
+   * No-ops entirely once carried (your rescuer is flying now) or once
+   * the fuel budget is spent.
+   */
+  applyControl(turnDirection: -1 | 0 | 1, thrusting: boolean, deltaSeconds: number): void {
+    this.isPuffing = false;
+    if (!this.alive || this.state !== 'adrift') return;
+
+    if (turnDirection !== 0) {
+      this.facingRad += turnDirection * COMMANDER.puffTurnRateRadPerSec * deltaSeconds;
+    }
+
+    if (!thrusting || this.puffFuelSeconds <= 0) return;
+
+    // Spend only what's actually left this frame, so the budget can't be
+    // overdrawn by a long frame.
+    const spent = Math.min(this.puffFuelSeconds, deltaSeconds);
+    this.puffFuelSeconds -= spent;
+    this.isPuffing = true;
+
+    const velocity = this.visual.getVelocity();
+    const boosted = {
+      x: velocity.x + Math.cos(this.facingRad) * COMMANDER.puffAccelPerSec * spent,
+      y: velocity.y + Math.sin(this.facingRad) * COMMANDER.puffAccelPerSec * spent,
+    };
+    const clamped = clampSpeed(boosted, COMMANDER.puffMaxSpeed);
+    this.visual.setVelocity(clamped.x, clamped.y);
   }
 
   /** A carrier that dies mid-transit drops this Commander back into open space - see the class doc's note on this edge case. */
@@ -185,6 +236,57 @@ export class Commander {
     g.fillCircle(-scale * 0.08, -scale * 0.34, scale * 0.14);
 
     g.restore();
+
+    // EVA thruster tells, drawn outside the bob transform so they read as
+    // equipment rather than part of the tumble. Only while adrift and
+    // only while there's fuel left to matter - once it's spent, they
+    // disappear entirely, which *is* the "you're out" signal.
+    if (this.state === 'adrift' && this.puffFuelSeconds > 0) {
+      this.drawThrusterTells(g, scale);
+    }
+  }
+
+  /** Aim chevron (where a puff would send you) plus the flame itself while thrusting, and a small fuel bar - the body is never rotated, so these are the only directional cue. */
+  private drawThrusterTells(g: Phaser.GameObjects.Graphics, scale: number): void {
+    const aimDistance = scale * 1.25;
+    const aimX = Math.cos(this.facingRad) * aimDistance;
+    const aimY = Math.sin(this.facingRad) * aimDistance;
+
+    // chevron pointing the way the next puff would push
+    const wingAngle = 0.6;
+    const wing = scale * 0.32;
+    g.lineStyle(2, this.color, 0.75);
+    g.beginPath();
+    g.moveTo(aimX - Math.cos(this.facingRad - wingAngle) * wing, aimY - Math.sin(this.facingRad - wingAngle) * wing);
+    g.lineTo(aimX, aimY);
+    g.lineTo(aimX - Math.cos(this.facingRad + wingAngle) * wing, aimY - Math.sin(this.facingRad + wingAngle) * wing);
+    g.strokePath();
+
+    if (this.isPuffing) {
+      // flame out the back, opposite the aim - same "thrust shows behind
+      // you" language the Ship's own flame already uses.
+      const backX = -Math.cos(this.facingRad) * scale * 0.7;
+      const backY = -Math.sin(this.facingRad) * scale * 0.7;
+      const flame = scale * (0.45 + Math.random() * 0.2); // flicker, same trick Ship.draw uses
+      g.fillStyle(COLORS.flame, 0.85);
+      g.beginPath();
+      g.moveTo(backX - Math.cos(this.facingRad + 1.4) * scale * 0.18, backY - Math.sin(this.facingRad + 1.4) * scale * 0.18);
+      g.lineTo(backX - Math.cos(this.facingRad) * flame, backY - Math.sin(this.facingRad) * flame);
+      g.lineTo(backX - Math.cos(this.facingRad - 1.4) * scale * 0.18, backY - Math.sin(this.facingRad - 1.4) * scale * 0.18);
+      g.closePath();
+      g.fillPath();
+    }
+
+    // Fuel bar sits *below* the rescue countdown text, not above it - the
+    // countdown is at visualScale * 1.7 and the thruster flame swings
+    // through everything within ~1x scale of the body, so this is the one
+    // band around the astronaut nothing else competes for.
+    const barWidth = scale * 0.9;
+    const barY = scale * 2.6;
+    g.lineStyle(1, this.color, 0.35);
+    g.strokeRect(-barWidth / 2, barY, barWidth, 3);
+    g.fillStyle(this.color, 0.8);
+    g.fillRect(-barWidth / 2, barY, barWidth * this.remainingPuffFuelRatio, 3);
   }
 
   private drawLimb(

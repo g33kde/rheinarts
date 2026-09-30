@@ -6,6 +6,10 @@ import type { PlayerInput } from './PlayerInput';
 // Xbox/PlayStation/generic controllers, no per-brand special-casing.
 const BUTTON_SHOOT = 0; // bottom face button (A / Cross)
 const BUTTON_THRUST = 7; // right trigger (R2 / RT)
+// Left trigger (L2 / LT) - deliberately mirrors thrust on the opposite
+// trigger, and is far enough from the face buttons that nobody fires
+// their panic teleport by fumbling for the shoot button.
+const BUTTON_HYPERSPACE = 6;
 const BUTTON_DPAD_LEFT = 14;
 const BUTTON_DPAD_RIGHT = 15;
 const TURN_STICK_DEADZONE = 0.25;
@@ -37,5 +41,9 @@ export class GamepadInput implements PlayerInput {
 
   get isFiring(): boolean {
     return this.pad.buttons[BUTTON_SHOOT]?.pressed ?? false;
+  }
+
+  get isHyperspacing(): boolean {
+    return this.pad.buttons[BUTTON_HYPERSPACE]?.pressed ?? false;
   }
 }

@@ -1,8 +1,13 @@
 # Controls
 
-Every player, regardless of input device, controls the same three things
-(see `docs/gameplay.md`): **turn**, **thrust**, **shoot**. Only the mapping
-differs.
+Every player, regardless of input device, controls the same four things
+(see `docs/gameplay.md`): **turn**, **thrust**, **shoot**, **hyperspace**.
+Only the mapping differs.
+
+Hyperspace was a later addition - the game shipped with three verbs for a
+long time, and much of this doc was written then. It's a default verb
+every player has, not an upgrade: see `HYPERSPACE` in `GameConfig.ts` for
+the misjump odds and cooldown, and `docs/gameplay.md` for what it does.
 
 ## Player slots
 
@@ -29,10 +34,15 @@ differs.
 
 ## Keyboard
 
-| | Turn left / right | Thrust | Shoot |
-| --- | --- | --- | --- |
-| **Player 1** | `A` / `D` | `W` | `Space` |
-| **Player 2** | `←` / `→` | `↑` | `Right Ctrl` |
+| | Turn left / right | Thrust | Shoot | Hyperspace |
+| --- | --- | --- | --- | --- |
+| **Player 1** | `A` / `D` | `W` | `Space` | `S` |
+| **Player 2** | `←` / `→` | `↑` | `Right Ctrl` | `↓` |
+
+`S` / `↓` for hyperspace sit directly under each player's own thrust key
+and were genuinely free, precisely *because* of the "no backward key"
+decision noted below - so neither player has to move their hand off their
+existing zone to reach it.
 
 `W` / `↑` for thrust (not a 4-directional move) is deliberate — see
 `docs/gameplay.md`'s note on momentum-based movement. There is no
@@ -54,6 +64,11 @@ per-brand special-casing):
 | Turn left / right | Left stick X-axis, **or** D-pad left/right |
 | Thrust | Right trigger (`R2` / `RT`) |
 | Shoot | Bottom face button (`A` on Xbox, `Cross` on PlayStation) |
+| Hyperspace | Left trigger (`L2` / `LT`) |
+
+Hyperspace deliberately mirrors thrust on the opposite trigger, and sits
+far from the face buttons - a panic teleport that fires because someone
+fumbled for the shoot button would be worse than not having one.
 
 Both a stick and the D-pad are accepted for turning so it works equally
 well on a controller someone's holding loosely (stick) or one they're

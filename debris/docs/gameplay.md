@@ -9,8 +9,9 @@
 
 ## The ship
 
-Three inputs, same for every player regardless of keyboard or gamepad (see
-`docs/controls.md` for the actual key/button mapping):
+Four inputs, same for every player regardless of keyboard or gamepad (see
+`docs/controls.md` for the actual key/button mapping). It was three for
+most of this game's life - hyperspace came later:
 
 - **Turn** (left/right) — rotates the ship in place. Does not move it.
 - **Thrust** — accelerates the ship *in the direction it's currently
@@ -25,6 +26,31 @@ Three inputs, same for every player regardless of keyboard or gamepad (see
   as "Classic Asteroids" pacing (deliberate, every shot matters) over a
   faster spam-friendly rate or a slower aim-heavy one. Starting points to
   feel out once playable, not immutable.
+- **Hyperspace** — the 1979 panic button: vanish and reappear somewhere
+  uniformly random in the arena, on a cooldown. Velocity is **not**
+  carried through, so you arrive stationary and disoriented — that's what
+  makes it a real decision instead of a free dodge. It can also simply
+  kill you (`HYPERSPACE.deathChance`, a "misjump"), which is the price of
+  using it: often the only way out of a Gravity Well past the event
+  horizon or the Cardinal's closing detonation ring, and occasionally a
+  worse idea than whatever you were escaping. A Shield absorbs a misjump
+  like any other lethal hit, and in Cooperative a fatal one ejects a
+  Commander exactly as a rock would.
+
+**Hulls.** Each player picks one of three hulls on the menu card before
+a round - roles rather than power tiers, so a crew covers each other's
+gaps:
+
+- **Interceptor** — fast, balanced guns. Exactly the original ship, and
+  the default.
+- **Gunship** — much faster fire and more shots on screen, but turns and
+  accelerates noticeably worse.
+- **Rescue** — the only hull that holds a **third** Shield charge, and
+  quick off the mark, at the cost of genuinely weak guns.
+
+Available in every mode including Single Player. The leaderboards
+deliberately don't record which hull a score was set with (see
+`docs/roadmap.md` item 37).
 
 A ship destroyed by an asteroid, a UFO, a UFO shot, or (in Competitive)
 another player's shot or ship, costs it one life and respawns at an
@@ -282,6 +308,17 @@ the pilot **ejects as a Commander** (docs/art_direction.md's
 - **The Commander drifts slowly in a random direction**, wrapping at
   arena edges like everything else, with a **10-second countdown**
   rendered directly below them.
+- **The downed player still has a little control** — an EVA thruster
+  with a small **fuel budget** (`COMMANDER.puff*`): turn and thrust on
+  that player's own existing bindings, spending roughly 2.5 seconds of
+  thrust however they like. Added because ten seconds of being purely a
+  spectator is a long time to ask of someone standing at a cabinet. It
+  is deliberately feeble — enough to meet a rescuer halfway or slip one
+  rock, never enough to save yourself — and it can just as easily push
+  you *into* something, which is the point. An aim chevron shows where
+  the next puff would send you, a flame shows it firing, and a small bar
+  under the countdown shows what's left; once the fuel is gone all three
+  disappear, which is itself the "you're out" signal.
 - **A real hazard, not just a countdown** — an asteroid, a UFO, or a UFO
   shot can destroy an adrift Commander before anyone reaches them, ending
   that life early regardless of how much time was left.
@@ -338,6 +375,80 @@ the pilot **ejects as a Commander** (docs/art_direction.md's
 - **Its own global top-10 leaderboard** - see "Global high scores" below.
   The one ship's own final score is what's ranked, entered by that same
   player.
+
+## Arena terrain
+
+Some stages generate a few pieces of **static wreckage** - the only
+thing in the game that physically blocks anything. Ships and asteroids
+bounce off it, shots are absorbed by it (so it's real cover), and it
+changes a Competitive duel more than anything else does. Two
+deliberate exceptions: wreckage never generates near an arena edge, so
+the screen-wrap rule is never involved; and an adrift **Commander
+passes straight through it**, so nobody can be pinned behind cover
+during a rescue. Regenerated per stage, never present during a boss
+fight, and not destructible.
+
+## The tether (Cooperative)
+
+Two ships flying close together **automatically link** with an elastic
+tether, which snaps if stretched too far. It's slack at short range and
+only pulls once taut, so it never feels sticky - but a hard burn drags
+your partner with you. Sling a teammate clear of a Gravity Well, whip
+them toward a downed pilot, or drag them somewhere they very much did
+not want to go; the coordination failures are as much the point as the
+successes. Cooperative only.
+
+## Kill chain (score multiplier)
+
+Consecutive kills build a per-player multiplier (x2 at two kills, x3 at
+four, up to x8). It breaks two ways: letting the chain lapse without a
+kill, **or taking a hit** - including one a Shield absorbs, since the
+shield saves the ship rather than the streak. Per-player even in
+Cooperative, where the score itself is pooled: a shared chain would mean
+one player's mistake wipes everyone's, which is a bad rule for the mode
+built around getting hit and rescued. Shown in a player's own HUD only
+while it's above x1.
+
+## Stage rank
+
+Clearing a stage scores it **S/A/B/C** on the stage-clear headline,
+blending shot accuracy, damage taken and time against a par. Purely
+cosmetic feedback - it pays no Scrap and no score, and never reaches a
+leaderboard. One rank for the crew, not one per player.
+
+## Choosing the next stage
+
+At the shop, the crew votes on what comes next, on extra rows in the
+same panels they're already using. **Majority wins; ties go to the
+lowest-numbered player who voted.** The normal/boss alternation is
+unchanged underneath - the vote picks that stage's *flavor*:
+
+- **Before a boss stage** — which boss: The Fracture or The Cardinal.
+- **Before a normal stage** — how the field is stacked: **STANDARD**,
+  **DENSE FIELD** (half again as many rocks, but they pay double), or
+  **THE VOID** (fewer rocks, but UFOs arrive twice as often - emptier is
+  not the same as safer).
+
+## The Assembler
+
+A boss that **builds itself out of the asteroid field** partway through
+a normal stage, rather than arriving finished the way The Fracture and
+The Cardinal do. It seeds, drags nearby rocks in, and welds each one on
+as a visible plate. Two things can stop it:
+
+- **Starve it.** It eats the stage's *real* asteroids, so clearing the
+  field quickly is itself the counter - and ignoring the rocks to shoot
+  at it feeds it. Run it dry before it finishes and it collapses
+  without ever waking up. That pays **no score at all**: the reward for
+  denial is simply not having to fight it.
+- **Knock it apart.** Shooting it while it builds knocks plates back
+  off instead of damaging it, so a crew can split between the two
+  counters.
+
+Let it finish and it comes alive as a real boss - tougher the more it
+managed to eat - which hunts the nearest player and fires debris. Kill
+it then and it pays properly, and everything it swallowed comes back as
+scrap.
 
 ## Global high scores
 

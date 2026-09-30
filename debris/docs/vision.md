@@ -41,7 +41,13 @@ around.
 ## What this is not (v1)
 
 - Not procedural/roguelite (that's Godspeed's territory) — one arena, one
-  escalating wave structure.
+  escalating wave structure. **Amended once, deliberately**: the crew now
+  votes on the *flavor* of each next stage (which boss, or how the field
+  is stacked — `docs/roadmap.md`'s light stage choice). That's one choice
+  per stage transition with nothing carried between sessions, not a
+  branching run structure, and the normal/boss alternation underneath it
+  is unchanged. The line stands as written for anything beyond that:
+  no generated layouts, no meta-progression, no run seeds.
 - Not narrative or lore-driven — Asteroids doesn't need a story, and
   neither does this.
 - Not online multiplayer — local input only for v1 (see `docs/roadmap.md`).

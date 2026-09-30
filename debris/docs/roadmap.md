@@ -659,187 +659,215 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     transitions and confirmed the actual spawned count at each stage
     matches the proposed table exactly, not just the unit tests in
     isolation.
+29. [x] Crew-size spawn scaling - four players used to fight exactly the
+    same field as one, so every mode quietly got easier the more people
+    joined. `CREW_SCALING.perExtraPlayer` (0.4) scales both the asteroid
+    count and the UFO cadence by headcount, **sub-linearly** on purpose:
+    1 player 1.0x, 4 players 2.2x, not 4x - four sets of guns clear a
+    field far more than four times as fast, since rocks die before they
+    get the chance to split. The per-stage cap (item 28) applies *before*
+    the crew multiplier, so a full crew still scales past it; the UFO's
+    `minSpawnIntervalMs` stays an **absolute** floor, since a UFO hunts
+    you and doesn't split into something weaker when killed.
+30. [x] Commander thruster puff - the adrift pilot was fully passive for
+    the whole 10-second rescue window, which is a long time to give one
+    of four people at a cabinet nothing to do (Left 4 Dead, Mario Kart
+    and Towerfall all solve the same problem for the same reason). A
+    **fuel budget** (`COMMANDER.puffFuelSeconds`, 2.5s of thrust to
+    spend however you like), **decided** over discrete puffs or
+    unlimited-weak thrust. The Commander gains a logical facing that
+    turn rotates - the body itself is still never rotated (the
+    tumbling-person art direction stands), so direction is shown by an
+    aim chevron plus a thruster flame, with a fuel bar under the rescue
+    countdown. Deliberately feeble (`puffMaxSpeed` 1.2 vs `SHIP.maxSpeed`
+    6): enough to meet a rescuer halfway or dodge one rock, never enough
+    to save yourself unaided, and it can absolutely push you *into*
+    something.
+31. [x] Hyperspace - the one iconic 1979 Asteroids verb the game was
+    missing. A **default verb everyone has**, decided, not a shop
+    purchase: gating it would mean most rounds never see it. Bound to
+    `S` / `↓` / left trigger - all three were genuinely free precisely
+    because of the long-standing "no reverse thrust" decision, so nobody
+    moves their hand. Uniformly random destination, velocity deliberately
+    *not* preserved, and a `HYPERSPACE.deathChance` (0.15) misjump that
+    routes through the normal `pendingShipHits` path - so a Shield
+    absorbs it and, in Cooperative, a fatal misjump ejects a Commander
+    like any other death. This makes it the first time a player controls
+    **four** things rather than three, so `docs/controls.md`'s own
+    opening line changed with it.
+32. [x] Slow-motion on the deciding blow - `EFFECTS.slowMo` (0.25x for
+    450ms) on a boss dying or the elimination that ends a round. Scales
+    Matter's physics clock and the per-frame delta together, but
+    deliberately **not** `this.time.now`: every cooldown, rescue window
+    and boss timer is keyed off wall-clock time and slowing those too
+    would stretch all of them invisibly. The round-end path had to be
+    restructured for this - it used to freeze the world instantly, so
+    the deciding moment was over before anyone saw it; now
+    `checkRoundOutcome` snapshots the outcome and `resolveRoundOutcome`
+    applies it after the beat. Snapshotting matters: the last ship can
+    die inside that window, and a win shouldn't retroactively become a
+    draw. Gated by `prefers-reduced-motion`, same as the camera shake.
+33. [x] UFO sound effects - the last SFX gap (a UFO arrived in silence
+    and died using the *ship's* explosion). **Synthesized in code**
+    rather than added as .wav assets, decided: real arcade hardware of
+    that era generated these with oscillators and noise rather than
+    samples, and it matches how this project already does procedural
+    visuals. `systems/ProceduralSfx.ts` builds all three on Phaser's own
+    `AudioContext` (so browser autoplay unlocking is already handled) and
+    no-ops safely under `NoAudioSoundManager`. The shot was deliberately
+    mixed *louder* than the other two after measuring it ~6x quieter on
+    the first pass - it's the one cue that actually means "dodge now."
+34. [x] Attract mode - the cabinet ritual Debris was missing: leave the
+    menu alone for `ATTRACT_MODE.menuIdleMs` and the game starts playing
+    itself, flown by **simple AI bots** (decided over a canned/scripted
+    demo or an empty ambient field). `systems/DemoBot.ts`'s
+    `computeBotIntent` is pure and tested - turn toward the nearest live
+    hazard, fire when lined up, thrust to close or break away - with
+    `input/AiInput.ts` a dumb holder implementing the same `PlayerInput`
+    every human adapter does, so the demo is the real game, not a
+    simulation of it. Loops menu → demo → menu, which is what puts the
+    leaderboards back on screen between rounds rather than needing them
+    overlaid on live play. Any key, click or gamepad button drops out
+    instantly, and a demo that loses never touches a real leaderboard.
+35. [x] Combo multiplier - scoring was flat, so the three leaderboards
+    had nothing under them but survival. `systems/ComboMultiplier.ts`
+    (pure, tested): a chain climbing one multiplier step per
+    `COMBO.killsPerStep` kills, capped at x8. **Decided: it breaks on a
+    timeout *and* on taking a hit** - timeout alone would make it a pace
+    meter rather than something with stakes. A Shield-absorbed hit still
+    breaks it (the shield saves the ship, not the streak), otherwise the
+    safest way to play would also be the highest-scoring. Per-player
+    even in Cooperative where score itself is pooled: a shared chain
+    would let one player's mistake wipe everybody's, a harsh rule for
+    the one mode built around getting hit and rescued. Hooked into
+    `awardScore` alone, so every kill in the game - rock, UFO, Fracture
+    tier, Cardinal arm - counts without any of them knowing it exists.
+36. [x] Stage rank - an S/A/B/C letter on the stage-clear headline,
+    blending accuracy, damage taken and time against a par
+    (`systems/StageRank.ts`, pure and tested). **Decided: cosmetic
+    only** - no Scrap, no score, nothing on the leaderboard, because
+    wiring a brand-new untuned measure into the already-balanced shop
+    economy is how the economy breaks. Crew-wide rather than
+    per-player, so the screen shows one letter above a shop already
+    showing a panel per player. A stage where nothing was fired scores
+    accuracy *neutrally* rather than zero - "didn't need to shoot"
+    mustn't rank below "missed everything".
+37. [x] Crew-role hulls - Interceptor / Gunship / Rescue, picked per
+    player on the existing menu cards (`HULLS` in GameConfig.ts).
+    **Roles, not tiers**: the Gunship fires far faster but turns like a
+    barge, the Rescue hull is the only one holding a *third* Shield
+    charge but has genuinely weak guns, and the Interceptor is exactly
+    the pre-hull ship, so it doubles as default and baseline. `Ship`
+    now reads thrust/speed/turn/cooldown/shots/shield-cap from its hull
+    rather than the `SHIP` globals. **Every mode including Single
+    Player**, decided, with the leaderboards deliberately left alone -
+    scores across hulls aren't strictly comparable and that's accepted
+    as arcade-normal rather than fragmenting three live boards. The
+    third Shield charge needed its own visual: a static outer ring,
+    since two rings breathing at once reads as a wobble, not a count.
+38. [x] Light stage choice - the crew votes at the shop on what comes
+    next. **Decided: everyone votes, majority wins**, ties broken by the
+    lowest-numbered voter (arbitrary but stable, and explainable at a
+    cabinet: "P1 breaks ties"). Deliberately **keeps the normal/boss
+    alternation** (item 22) as the backbone and picks only the stage's
+    *flavor*: before a boss stage you choose which boss, before a normal
+    one the field (STANDARD / DENSE FIELD, more rocks at double score /
+    THE VOID, fewer rocks but twice the UFOs). Votes are extra rows
+    inside the existing shop panels rather than a new screen - the shop
+    already owns per-player input, so extending its cursor beat building
+    a second input loop. Required growing the shop panel (the new rows
+    pushed READY out through the bottom border) and amending
+    `docs/vision.md`'s "not procedural/roguelite" line, which said "one
+    arena, one escalating wave structure" outright - amended narrowly,
+    since nothing here persists between sessions.
+39. [x] Ship-to-ship tether - an elastic link between two Cooperative
+    ships (`systems/TetherSystem.ts`, pure and tested). **Cooperative
+    only**, decided: being physically dragged by an opponent with no
+    way to refuse is a different game, and wants its own design pass
+    rather than arriving as a side effect. **Attaches and breaks on its
+    own** rather than on a button - all four verbs were already bound
+    and a fifth would crowd both keyboard zones, which also makes the
+    tether something that *happens to* a crew flying together rather
+    than a resource they manage. Slack inside `restLengthPx` so flying
+    close never feels sticky; attach range is far shorter than break
+    range so a snapped tether doesn't instantly re-form. A test caught
+    the first tuning being wrong in a way that would have been hard to
+    feel: the spring hit `maxForce` at only 60px of stretch, making it
+    a constant yank rather than something that builds - there's now a
+    regression test pinning that.
+40. [x] The Assembler - Debris's third boss, and the only one that
+    builds itself out of the arena instead of arriving finished
+    (`systems/AssemblerBuild.ts` + `entities/Assembler.ts`). Every open
+    question from its concept section below is now resolved: **it eats
+    the stage's real asteroids** (so clearing rocks quickly is itself
+    the counter, and ignoring them to shoot it feeds it); **full denial
+    is allowed** - starve it and it collapses without ever waking up,
+    paying *nothing*, so denial is the safe line rather than the
+    lucrative one; **shots knock plates back off** while it builds, so
+    a crew can split between starving it and undoing its progress; and
+    it's a **normal-stage event, not a boss-stage pick**, which is what
+    lets it need a field to eat without touching the alternation at
+    all. It counts as a boss encounter for gating purposes, so it
+    inherits "stage isn't clear", "no Gravity Well on top of it" and
+    the UFO cap with no special cases. **It taunts** - see item 42,
+    which was built immediately afterwards precisely because "this game
+    has no voice assets" turned out to be a solvable problem rather
+    than a permanent constraint.
+41. [x] Arena terrain - static wreckage (`systems/ArenaTerrain.ts` +
+    `entities/Wreck.ts`), the first thing in this game that physically
+    blocks anything. **The screen-wrap conflict was resolved by
+    placement, not by rules**: an `edgeMarginPx` keeps wreckage in the
+    interior, so a static body never straddles an edge and never has to
+    either wrap or quietly become a wall - the wrap rule is untouched,
+    and there's a test pinning that invariant. Regenerated per stage,
+    **never during a boss fight** (both bosses were designed and tuned
+    around open space). Shots are *absorbed* rather than ricocheting,
+    since an unpredictable bounce reads as a bug. Commanders
+    deliberately pass straight through: an adrift pilot pinned behind
+    cover during a 10-second rescue window would be miserable, and the
+    hook outranks the consistency. Not destructible in this pass.
+42. [x] The game's voice (`systems/VoiceSynth.ts`) - a procedural
+    speech synthesizer, added on request for "a voice generator... like
+    always the same voice". **The browser's own `speechSynthesis` was
+    rejected for exactly that requirement**: its voice list varies by
+    OS, browser and user settings, so a cabinet would sound different
+    depending on where it ran, and it sounds like a screen reader
+    rather than a hostile object. Built instead the way the speech
+    chips of the era did it - a source-filter model with a sawtooth or
+    noise source through three bandpass formant filters, plus
+    ring-modulation and waveshaper drive for the machine character.
+    Pure deterministic arithmetic, so it is bit-identical on a Pi, a
+    Mac and a phone, and costs nothing to download. Formant frequencies
+    are **ramped rather than stepped** between phonemes, which is the
+    single detail that makes it intelligible instead of a string of
+    beeps. Lines the game says often are hand-written as explicit
+    phonemes (`VOICE_LINES`), exactly as allophone chips were driven; a
+    crude speller handles arbitrary text for one-offs. Wired to The
+    Assembler's four moments (item 40). Verified by measuring real
+    formant-structured output and by rendering a spectrogram showing
+    the formants actually moving across an utterance - **but not by
+    ear**, which is the one check this environment can't do.
 
-## v2 candidates
+## v2 candidates — all shipped
 
-Not built, not scheduled — but scoped enough to pick up. Deliberately
-**not numbered**: the list above is a record of what actually landed
-(items 14-28 each got their number at landing time, not when they were
-first suggested), so anything here gets appended there when it ships
-rather than reserving a number in advance.
+This list held twelve scoped-but-unbuilt candidates from a "how do we
+take Debris to the next level" pass, weighted by `docs/vision.md`'s own
+stated main driver (*"that rescue is the game's main hook"*) rather than
+by raw content volume. **All twelve have since landed**, across three
+sprints:
 
-Came out of a "how do we take Debris to the next level" brainstorming
-pass, weighted by `docs/vision.md`'s own stated main driver — *"that
-rescue is the game's main hook"* — rather than by raw content volume.
-Grouped by the four directions that pass picked up. Two forks were
-decided during it and are marked **decided** inline; everything else
-still carries real open questions, and none of the numbers below are
-tuned.
+- **Sprint 1** (items 29-34) - crew-size spawn scaling, Commander
+  thruster puff, hyperspace, slow-motion, UFO sound effects, attract
+  mode.
+- **Sprint 2** (items 35-38) - combo multiplier, stage rank, crew-role
+  hulls, light stage choice.
+- **Sprint 3** (items 39-41) - ship-to-ship tether, The Assembler,
+  arena terrain.
 
-### Cooperative hook
-
-- [ ] **Commander thruster puff.** An adrift Commander is currently
-      fully passive for up to `COMMANDER.rescueWindowMs` (10s) — the
-      downed player just watches. **Decided: give them a weak thruster
-      puff** — a few seconds of limited drift control, enough to nudge
-      toward a rescuer or away from an incoming rock. Precedent for the
-      problem rather than the solution: Left 4 Dead lets an incapped
-      player still fire a pistol, Mario Kart's bubble still steers,
-      Towerfall turns you into a ghost who can still throw — a local
-      multiplayer game can't afford 10 seconds of dead air for one of
-      the people in the room. Directly deepens item 15 (see "Co-op
-      rescue mechanics" below), the hook the game is designed around.
-      **Open**: how much control (a fixed number of puffs, a small fuel
-      budget, or continuous-but-very-weak thrust?); whether using it
-      costs rescue-window time; whether it can push a Commander *into*
-      a hazard — it probably should, since agency with no risk isn't a
-      decision.
-
-- [ ] **Ship-to-ship tether.** An elastic physical link between two
-      ships: sling a teammate clear of a Gravity Well, whip a rock,
-      tow a Commander home faster than carrying them, or accidentally
-      drag your partner through the Cardinal's beam. Reference point is
-      *Lovers in a Dangerous Spacetime* — forced physical
-      co-dependence, where the fun is the coordination failure as much
-      as the success. Builds on two things that already exist
-      (momentum physics, the Commander tow) rather than adding a new
-      subsystem, and it's the only proposal here that makes 2-4P play
-      structurally different from 1P play.
-      **Open**: who initiates and how (a hold-to-attach input, or
-      automatic on proximity?); does it hard-constrain distance like a
-      rope, or just apply spring force; can it be cut/broken by damage
-      or by a hazard crossing it; is it Cooperative-only, or is
-      tethering an *enemy* player in Competitive a mechanic too (it's
-      a great idea and a balance nightmare); does a tether tow a
-      Commander faster than the current carry, or replace carrying.
-
-- [ ] **Crew-role hulls.** Pick a hull at the existing menu player
-      cards: a Rescue hull (fast tow, weak guns), a Gunship (heavy
-      fire, poor tow), an Interceptor (fast/fragile). Framed as
-      **roles rather than power tiers**, so a crew has to cover each
-      other's gaps — which serves the co-op pillar directly — and it
-      adds replay identity with no meta-progression, staying inside
-      the "not roguelite" line. Arcade beat-'em-up character-select is
-      the model (Turtles in Time, Marvel vs. Capcom), not an RPG class
-      system.
-      **Open**: how many hulls; whether Single Player gets the pick too
-      (probably, but then the leaderboard arguably needs a hull column
-      or the scores aren't comparable); whether hull choice interacts
-      with the weapon shop (item 23) or is orthogonal to it; whether
-      Competitive should restrict duplicates.
-
-### New threats
-
-- [ ] **The Assembler** — a boss that welds itself together out of the
-      asteroid field mid-stage instead of materializing whole. Full
-      concept preserved under "Future ideas" below, same treatment The
-      Fracture and The Cardinal got before they were built.
-
-- [ ] The rest of the **enemy roster** (Drone, Miner, Saboteur,
-      Collector, Warp Ship) and the two other boss-tier concepts (The
-      Harvester, The Magnetar) already have their own Future-ideas
-      entry below — unchanged, still unbuilt, listed here only so this
-      section isn't mistaken for the complete picture.
-
-### Score depth and replay variety
-
-- [ ] **Combo multiplier.** Three leaderboards exist (item 20) but
-      scoring is flat — every rock is worth the same whenever you shoot
-      it. A decaying multiplier that builds with rapid consecutive
-      kills instantly gives the existing score chase depth, and rewards
-      aggression over camping. *Geometry Wars* and *Luftrausers* are
-      the references: in both, the multiplier — not the raw kill — is
-      the actual game.
-      **Open**: what resets it (a timeout? taking a hit? both?); is it
-      per-player or pooled in Cooperative (pooled matches how Co-op
-      already pools score); does it show as a HUD number, or somewhere
-      more diegetic; does it cap.
-
-- [ ] **Stage rank at stage clear.** An S/A/B/C letter on the
-      stage-clear screen, from some mix of time, accuracy, and
-      damage taken. Gives the stage-clear/shop beat a payoff beyond
-      "spend your Scrap," and is the cheapest way to make a *good*
-      clear feel different from a slow scrappy one. Devil May Cry /
-      Metal Gear Rising convention.
-      **Open**: which inputs and their weights; whether rank pays out
-      bonus Scrap (couples it to the shop economy, which cuts both
-      ways); per-player or per-crew in Cooperative; whether a rank
-      also lands on the leaderboard.
-
-- [ ] **Light stage choice.** After a stage clear, pick the next stage
-      from 2-3 visible options — e.g. "Dense Field: +50% rocks, +100%
-      Scrap" vs. a known boss vs. a "Salvage Run" with no enemies and a
-      Scrap payout. **Decided: this is allowed** — the "not
-      procedural/roguelite" line in `docs/vision.md` was written before
-      the shop, the bosses and Scrap existed, and a per-round choice
-      with no cross-session carry-over doesn't cross into Godspeed's
-      territory. **`docs/vision.md`'s "What this is not (v1)" section
-      should be updated if this actually lands** — it currently says
-      "one arena, one escalating wave structure" outright.
-      **Open**: how many options; whether the boss is ever hidden/
-      unknown; whether it replaces the strict normal/boss alternation
-      (item 22) or layers on top of it; how it interacts with the shop
-      screen, which already occupies that exact moment.
-
-- [ ] **Crew-size spawn scaling.** Four players currently fight the
-      same asteroid count as one. Item 28 just added the per-stage
-      curve (`systems/StageScaling.ts`), so this is a small extension
-      of an existing pure function rather than new machinery.
-      **Open**: linear in player count or sub-linear (4 players are
-      far more than 4x as effective as 1 — more guns, and rocks get
-      cleared before they split); does it scale UFO cadence too, or
-      only rocks; does it apply to boss stages.
-
-- [ ] **Arena terrain / variants.** The arena is an empty wrapping
-      rectangle plus a background. Candidates: static wreckage that
-      acts as *cover* (nothing in Debris currently blocks a shot), a
-      one-way debris belt flowing across the field, or a no-wrap
-      walled variant where shots and ships bounce. Changes Competitive
-      tactics the most — cover fundamentally alters a last-ship-standing
-      duel. *Super Stardust* and *Geometry Wars*' arena variants are
-      the reference.
-      **Open**: does terrain persist for a whole round or vary per
-      stage; is it destructible; how does it interact with screen-wrap
-      (the one genuinely load-bearing physics rule in the game); does
-      the Space Station relocation (item 22) need to avoid it.
-
-### Cabinet feel
-
-- [ ] **Hyperspace.** The one iconic Asteroids verb Debris doesn't
-      have: a panic button that teleports you to a random spot, with a
-      real chance of materializing inside a rock. Interacts with
-      everything already built — plausibly the only escape from a
-      Gravity Well past the event horizon, or from the Cardinal's
-      closing detonation ring. Small scope, high authenticity.
-      **Open**: cooldown or unlimited; what the death chance actually
-      is (1979 Asteroids was famously brutal); does it work while
-      invulnerable/mid-respawn; in Cooperative, can an adrift Commander
-      hyperspace (probably not — that's the thruster puff's job); is
-      it a shop upgrade rather than a default verb.
-
-- [ ] **Attract mode.** Idle on the menu for ~30s and the game demos
-      itself — an AI round playing out behind cycling leaderboards.
-      Debris is deployed to a literal cabinet portal, and this is the
-      one cabinet ritual it's missing. Also solves a real problem: a
-      passer-by currently sees a static menu, not the game.
-      **Open**: does it need real AI, or is a recorded/scripted demo
-      enough (much cheaper, and what most cabinets actually did); does
-      any input break out of it instantly; does it also cycle the
-      per-mode leaderboards, or just play.
-
-- [ ] **Slow-motion on the deciding blow.** ~400ms of time dilation on
-      the round-deciding moment — the last-ship-standing kill in
-      Competitive, or a boss's death. Nuclear Throne / Devil May Cry
-      punctuation: very cheap, disproportionate impact on how a round
-      *ends*, which is the part people remember.
-      **Open**: which moments qualify (boss death, final elimination,
-      a last-second rescue?); does it respect `prefers-reduced-motion`
-      like the existing camera shake does (it probably should); does
-      audio pitch-shift with it or stay flat.
-
-- [ ] **UFO sound effects** — already tracked under "Explicitly
-      deferred past v1" below, listed here only because it belongs to
-      this group: it's the last SFX gap in the game.
+Nothing remains here. The unbuilt work now lives entirely in "Future
+ideas" below (The Chaos Meter, the rest of the enemy roster, the
+Salvage Engines tree, Debris Delivery) and in "Explicitly deferred past
+v1".
 
 ## Future ideas
 
@@ -1373,14 +1401,14 @@ The Fracture's old one-time trigger** -
 divert into the boss sequence only "after ending stage one" and never
 again for the rest of the round, is gone.
 
-**The Assembler** (see its own section above, and "v2 candidates") is
-the third boss concept, and the first one that **doesn't cleanly fit
-this alternation**: it wants to grow during a *normal* stage rather than
-own a boss stage of its own, so whoever picks it up has to decide
-whether it joins `pickRandomBoss()`'s pool at all, becomes a
-normal-stage event instead, or waits on "light stage choice" (v2
-candidates) so a player opts into it deliberately. Worth resolving
-before building it, not during.
+**The Assembler** (see its own section above) is the third boss
+concept, and the one that **didn't fit this alternation** - it wants to
+grow during a *normal* stage rather than own a boss stage. **Resolved
+when it was built (item 40): it's a normal-stage event and never joins
+`pickRandomBoss()`'s pool at all.** It still counts as a boss encounter
+for gating purposes, so the stage-clear check, the no-Gravity-Well rule
+and the UFO cap all apply to it unchanged - it inherits every
+cross-boss convention without being part of the rotation.
 
 **The Harvester** (see "Enemy roster" above) - a huge, arena-consuming
 boss gated behind Chaos Level 6 - is NOT part of this resolution.
@@ -1573,12 +1601,9 @@ extraction zone, under real pressure the whole way there.
   and a small "accurate" one — v1 ships with one).
 - **Best-of-N round structure** for Competitive (play one round at a time
   until this is proven fun, then consider a match format like HyperOut's).
-- **UFO sound effects** (spawn, its own shot, a dedicated destruction
-  sound distinct from the ship's) - the only SFX gap left now that the
-  UFO itself is built (item 4). Its destruction currently reuses the
-  ship-destruction explosion rather than staying silent or getting its
-  own placeholder. Also grouped under "Cabinet feel" in "v2 candidates"
-  above, since that's the work it naturally travels with.
+- **UFO sound effects** — **landed, see item 33** (synthesized in code
+  rather than added as assets, which is why this one closed without any
+  new .wav files appearing).
 - **Difficulty options / tunable wave scaling** beyond the built-in ramp
   (item 28 added the per-stage curve; this is about exposing it as a
   player-facing choice). Related: "crew-size spawn scaling" under "v2

@@ -5,6 +5,7 @@ export interface KeyBindings {
   right: string;
   thrust: string;
   fire: string;
+  hyperspace: string;
 }
 
 // docs/controls.md's decided keyboard mapping. Tracked via native
@@ -13,11 +14,16 @@ export interface KeyBindings {
 // can't distinguish left/right Ctrl (both map to the same legacy keyCode),
 // but `event.code` ('ControlRight') can. Using raw codes for every
 // binding keeps P1 and P2 symmetric instead of mixing two approaches.
+// `KeyS`/`ArrowDown` for hyperspace: both sit directly under the thrust
+// key in their own zone and were genuinely unbound, since there's
+// deliberately no reverse thrust in this game (docs/controls.md) - so
+// neither player has to move their hand to reach it.
 export const P1_BINDINGS: KeyBindings = {
   left: 'KeyA',
   right: 'KeyD',
   thrust: 'KeyW',
   fire: 'Space',
+  hyperspace: 'KeyS',
 };
 
 export const P2_BINDINGS: KeyBindings = {
@@ -25,6 +31,7 @@ export const P2_BINDINGS: KeyBindings = {
   right: 'ArrowRight',
   thrust: 'ArrowUp',
   fire: 'ControlRight',
+  hyperspace: 'ArrowDown',
 };
 
 export class KeyboardInput implements PlayerInput {
@@ -62,12 +69,17 @@ export class KeyboardInput implements PlayerInput {
     return this.held.has(this.bindings.fire);
   }
 
+  get isHyperspacing(): boolean {
+    return this.held.has(this.bindings.hyperspace);
+  }
+
   private isBound(code: string): boolean {
     return (
       code === this.bindings.left ||
       code === this.bindings.right ||
       code === this.bindings.thrust ||
-      code === this.bindings.fire
+      code === this.bindings.fire ||
+      code === this.bindings.hyperspace
     );
   }
 

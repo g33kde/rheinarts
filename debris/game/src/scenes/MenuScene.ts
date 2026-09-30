@@ -1,6 +1,15 @@
 import Phaser from 'phaser';
 import { playLoopingSound, setVolume } from '../audio/LoopingSound';
-import { ARENA_HEIGHT, ARENA_WIDTH, COLORS, SHIP_HULL } from '../config/GameConfig';
+import {
+  ARENA_HEIGHT,
+  ARENA_WIDTH,
+  ATTRACT_MODE,
+  COLORS,
+  HULL_IDS,
+  HULLS,
+  type HullId,
+  SHIP_HULL,
+} from '../config/GameConfig';
 import { computeGamepadReadiness, type InputSource } from '../systems/GamepadAssignment';
 import { getMusicVolume, getSfxVolume, setMusicVolume, setSfxVolume } from '../systems/AudioSettings';
 import { filterStandardGamepads } from '../systems/GamepadDetection';
@@ -92,6 +101,12 @@ export class MenuScene extends Phaser.Scene {
   // Escape here mirrors HyperOut's MENU <-> QUIT_CONFIRM toggle exactly
   // (docs/art_direction.md's menu is explicitly modeled on HyperOut's).
   private confirmingQuit = false;
+  /** Wall-clock time of the last sign of a person, for the attract-mode idle timer (see checkAttractModeIdle). */
+  private lastInteractionAtMs = 0;
+  /** Per-slot hull choice (config's HULLS), carried into GameScene at start. Defaults to the pre-hull ship so an untouched menu behaves exactly as it always did. */
+  private hulls: HullId[] = ['interceptor', 'interceptor', 'interceptor', 'interceptor'];
+  private cardHullTexts: Phaser.GameObjects.Text[] = [];
+  private cardHullBlurbs: Phaser.GameObjects.Text[] = [];
   private quitConfirmObjects: Phaser.GameObjects.GameObject[] = [];
 
   constructor() {
@@ -100,6 +115,11 @@ export class MenuScene extends Phaser.Scene {
 
   create(): void {
     playLoopingSound(this, MENU_MUSIC_KEY, getMusicVolume());
+    this.lastInteractionAtMs = this.time.now;
+    this.input.keyboard?.on('keydown', () => this.noteInteraction());
+    this.input.on('pointerdown', () => this.noteInteraction());
+    this.input.on('pointermove', () => this.noteInteraction());
+    this.input.gamepad?.on('down', () => this.noteInteraction());
     this.cameras.main.setBackgroundColor(COLORS.background);
     this.confirmingQuit = false;
     this.quitConfirmObjects = [];
@@ -117,6 +137,8 @@ export class MenuScene extends Phaser.Scene {
     this.cardStatusTexts = [];
     this.cardBorders = [];
     this.cardToggleTexts = [];
+    this.cardHullTexts = [];
+    this.cardHullBlurbs = [];
 
     this.createTitle();
     this.createControlLegend();
@@ -139,6 +161,29 @@ export class MenuScene extends Phaser.Scene {
 
   update(): void {
     this.refreshCardStatus();
+    this.checkAttractModeIdle();
+  }
+
+  /**
+   * Attract mode (ATTRACT_MODE in GameConfig.ts): once the menu has sat
+   * untouched long enough, hand the screen over to a demo round that
+   * flies itself, which bounces back here when it's done - so an idle
+   * cabinet alternates between the leaderboards on this screen and the
+   * game actually being played, rather than showing a still menu
+   * forever.
+   *
+   * Deliberately suppressed while the quit dialog is open: that's a
+   * person mid-decision, not an idle machine.
+   */
+  private checkAttractModeIdle(): void {
+    if (this.confirmingQuit) return;
+    if (this.time.now - this.lastInteractionAtMs < ATTRACT_MODE.menuIdleMs) return;
+    this.scene.start('Game', { mode: this.mode, sources: this.sources, hulls: this.hulls, demo: true });
+  }
+
+  /** Any sign of a person resets the attract-mode countdown - see checkAttractModeIdle(). */
+  private noteInteraction(): void {
+    this.lastInteractionAtMs = this.time.now;
   }
 
   private createTitle(): void {
@@ -323,10 +368,10 @@ export class MenuScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
 
-      this.drawShipIcon(centerX, CARDS_TOP + 115, color);
+      this.drawShipIcon(centerX, CARDS_TOP + 104, color);
 
       const statusText = this.add
-        .text(centerX, CARDS_TOP + 190, '', {
+        .text(centerX, CARDS_TOP + 168, '', {
           fontFamily: 'monospace',
           fontSize: '24px',
           color: '#ffffff',
@@ -335,9 +380,37 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5);
       this.cardStatusTexts.push(statusText);
 
+      // Hull picker - every slot, since hulls apply in all three modes.
+      // Click cycles; the label and blurb are refreshed in
+      // refreshCardStatus() along with everything else on the card.
+      const hullText = this.add
+        .text(centerX, CARDS_TOP + 214, '', {
+          fontFamily: 'monospace',
+          fontSize: '22px',
+          fontStyle: 'bold',
+          color: cssColor,
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true })
+        .on('pointerdown', () => {
+          if (this.confirmingQuit || (this.mode === 'singlePlayer' && slot > 0)) return;
+          const current = HULL_IDS.indexOf(this.hulls[slot] ?? 'interceptor');
+          this.hulls[slot] = HULL_IDS[(current + 1) % HULL_IDS.length]!;
+        });
+      this.cardHullTexts.push(hullText);
+
+      const hullBlurb = this.add
+        .text(centerX, CARDS_TOP + 240, '', {
+          fontFamily: 'monospace',
+          fontSize: '15px',
+          color: '#6a6a80',
+        })
+        .setOrigin(0.5);
+      this.cardHullBlurbs.push(hullBlurb);
+
       if (slot < 2) {
         const toggle = this.add
-          .text(centerX, CARDS_TOP + 250, '[change]', {
+          .text(centerX, CARDS_TOP + 268, '[change]', {
             fontFamily: 'monospace',
             fontSize: '22px',
             color: '#6a6a80',
@@ -389,12 +462,20 @@ export class MenuScene extends Phaser.Scene {
       // Single Player is locked to P1 only (decided) - every other card
       // reads as locked out regardless of its own source/readiness, since
       // GameScene.buildPlayers() won't spawn a ship for it in this mode.
+      const hull = HULLS[this.hulls[slot] ?? 'interceptor'];
+      this.cardHullTexts[slot]?.setText(`< ${hull.label} >`);
+      this.cardHullBlurbs[slot]?.setText(hull.blurb);
+
       if (singlePlayerLocked && slot > 0) {
         text.setText('LOCKED\nSINGLE PLAYER');
         text.setColor('#5a5a6e');
         border.setAlpha(0.25);
+        this.cardHullTexts[slot]?.setAlpha(0.25);
+        this.cardHullBlurbs[slot]?.setAlpha(0.25);
         continue;
       }
+      this.cardHullTexts[slot]?.setAlpha(1);
+      this.cardHullBlurbs[slot]?.setAlpha(1);
 
       if (source === 'keyboard') {
         text.setText('KEYBOARD\nREADY');
@@ -501,7 +582,7 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private startGame(): void {
-    this.scene.start('Game', { mode: this.mode, sources: this.sources });
+    this.scene.start('Game', { mode: this.mode, sources: this.sources, hulls: this.hulls });
   }
 
   /**

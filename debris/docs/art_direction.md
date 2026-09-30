@@ -587,3 +587,34 @@ the natural corner or across the arena's midline.
 
 The mode indicator (`COOPERATIVE`/`COMPETITIVE`/`SINGLE PLAYER`) lives
 top-center, out of every corner's way.
+
+## The game's voice, decided
+
+Debris speaks - currently only through The Assembler, but the voice
+belongs to the game rather than to that boss, and anything else that
+needs to talk should use the same one.
+
+**Synthesized, never sampled** (`systems/VoiceSynth.ts`). The brief was
+"always the same voice", and the browser's built-in `speechSynthesis`
+cannot deliver that: its available voices differ by operating system,
+browser and user configuration, so the cabinet in the room and the
+laptop next to it would speak differently. A formant synthesizer is
+pure arithmetic, so it is identical everywhere and adds nothing to the
+download.
+
+It is the same reasoning this project already applies to its visuals
+(procedural asteroid silhouettes instead of sprite art) and its UFO
+sound effects, and it lands in the same place historically: the speech
+chips in early-80s arcade cabinets built words out of filtered
+oscillators for exactly these reasons.
+
+**Character**: low-pitched (74Hz), slightly slowed, with a shortened
+formant scale so it reads as something physically large; ring-modulated
+and soft-clipped so it sounds like a machine rather than a person. It
+should sound like the wreckage talking, not like a narrator.
+
+**Writing for it**: keep lines to two or three words. Frequently-heard
+lines are hand-written as phonemes rather than spelled text, because
+English spelling is too irregular for the small rule set that handles
+arbitrary strings - and a bark nobody can make out is worse than
+silence.

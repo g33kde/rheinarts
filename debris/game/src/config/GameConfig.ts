@@ -274,7 +274,273 @@ export const SHIELD = {
   maxCharges: 2,
 } as const;
 
+/**
+ * Hyperspace - the panic teleport from 1979 Asteroids, the one iconic
+ * verb this game was missing (docs/roadmap.md's "v2 candidates").
+ * Decided: a **default verb every player has**, not a shop purchase -
+ * gating it behind the shop would mean most rounds never see it.
+ *
+ * The destination is uniformly random inside the arena, exactly like
+ * the original - deliberately *not* biased toward open space, since
+ * "it might drop you somewhere worse" is the entire risk. A misjump
+ * (`deathChance`) routes through the same `pendingShipHits` path every
+ * other lethal hit uses, which means a Shield still absorbs it: not
+ * because a shield plausibly stops a failed teleport, but because that
+ * path is the only place the mode-specific consequences live (a
+ * Cooperative misjump ejects a Commander, Competitive spends a life),
+ * and duplicating all of that for one edge case would be worse.
+ *
+ * Starting guesses, not playtested - the original's own misjump odds
+ * were famously brutal and undocumented.
+ */
+export const HYPERSPACE = {
+  deathChance: 0.15,
+  cooldownMs: 3000,
+  edgeMarginPx: 60, // keeps a jump from dropping you half-off the arena edge
+} as const;
+
+/**
+ * Attract mode (docs/roadmap.md's "v2 candidates") - the cabinet ritual
+ * Debris was missing: leave the menu alone and the game starts playing
+ * itself, flown by `systems/DemoBot.ts`. Before this, someone walking
+ * past a cabinet saw a static menu rather than the game.
+ *
+ * The loop is menu -> demo -> menu, deliberately: bouncing back to the
+ * menu is what puts the leaderboards back on screen, so the two halves
+ * alternate the way a real cabinet's attract sequence did, without
+ * needing to overlay leaderboards on top of live gameplay.
+ */
+export const ATTRACT_MODE = {
+  menuIdleMs: 30000, // how long the menu sits untouched before the demo starts
+  demoDurationMs: 30000, // how long the demo runs before handing back to the menu
+} as const;
+
+/**
+ * Kill-chain score multiplier (`systems/ComboMultiplier.ts`) - scoring
+ * used to be flat, so the three leaderboards had nothing underneath
+ * them but survival time. **Decided: the chain breaks on a timeout
+ * *and* on taking a hit**, which is what turns it from a pace meter
+ * into something you're actually nervous about losing.
+ *
+ * Per-player rather than pooled, including in Cooperative (where the
+ * *score* is pooled): a shared chain would mean one player's mistake
+ * wipes everybody's multiplier, which is a harsh rule for the one mode
+ * built around people getting hit and being rescued.
+ *
+ * Starting guesses, not playtested.
+ */
+export const COMBO = {
+  windowMs: 2500, // a kill has to land within this of the last one to extend the chain
+  killsPerStep: 2, // x2 at 2 kills, x3 at 4, x4 at 6...
+  maxMultiplier: 8,
+} as const;
+
+/**
+ * The S/A/B/C letter on the stage-clear screen
+ * (`systems/StageRank.ts`). **Decided: cosmetic only** - no bonus
+ * Scrap, no bonus score, nothing on the leaderboard. Coupling a
+ * brand-new untuned measure to the already-balanced shop economy is how
+ * the economy gets broken; it can always gain a payout later once these
+ * numbers have been felt out.
+ *
+ * Crew-wide rather than per-player, so the stage-clear screen shows one
+ * letter instead of up to four competing ones above a shop that's
+ * already showing a panel per player.
+ *
+ * Every number here is a starting guess - par time especially, which
+ * nothing has measured against a real stage yet.
+ */
+export const STAGE_RANK = {
+  parTimeMs: 60000,
+  cleanlinessPenaltyPerHit: 0.34, // three hits in a stage zeroes the cleanliness component
+  accuracyWeight: 1,
+  cleanlinessWeight: 1,
+  speedWeight: 1,
+  thresholds: { s: 0.85, a: 0.7, b: 0.5 },
+} as const;
+
+/**
+ * Selectable hulls (docs/roadmap.md's "crew-role hulls"), picked per
+ * player on the menu cards. **Roles, not power tiers** - each one is
+ * clearly better at something and clearly worse at something else, so a
+ * crew covers each other's gaps rather than everyone converging on a
+ * single best pick. Arcade character-select, not an RPG class system:
+ * nothing here persists between sessions, so this stays well inside
+ * `docs/vision.md`'s "not procedural/roguelite" line.
+ *
+ * **Every mode, including Single Player**, decided - and the
+ * leaderboards deliberately stay as they are, with no hull column and
+ * no per-hull split. Scores across hulls aren't strictly comparable,
+ * which is accepted as arcade-normal rather than fragmenting three
+ * live boards over it.
+ *
+ * `interceptor` is exactly the pre-hull ship on every stat, so it
+ * doubles as the default and as the baseline the other two are
+ * described against. Starting guesses, not playtested.
+ */
+export type HullId = 'interceptor' | 'gunship' | 'rescue';
+
+export interface HullStats {
+  readonly label: string;
+  /** One-line "what am I good at" for the menu card. */
+  readonly blurb: string;
+  readonly thrustForce: number;
+  readonly maxSpeed: number;
+  readonly turnRateRadPerSec: number;
+  readonly fireCooldownMs: number;
+  readonly maxOnScreenShots: number;
+  readonly maxShieldCharges: number;
+}
+
+export const HULL_IDS: readonly HullId[] = ['interceptor', 'gunship', 'rescue'];
+
+export const HULLS: Record<HullId, HullStats> = {
+  // The original ship, unchanged - the baseline.
+  interceptor: {
+    label: 'INTERCEPTOR',
+    blurb: 'FAST - BALANCED GUNS',
+    thrustForce: 0.00003,
+    maxSpeed: 6,
+    turnRateRadPerSec: Math.PI * 1.2,
+    fireCooldownMs: 250,
+    maxOnScreenShots: 4,
+    maxShieldCharges: 2,
+  },
+  // Trades agility for firepower - noticeably heavier to point at
+  // something, much better once you have.
+  gunship: {
+    label: 'GUNSHIP',
+    blurb: 'HEAVY GUNS - SLUGGISH',
+    thrustForce: 0.000024,
+    maxSpeed: 5,
+    turnRateRadPerSec: Math.PI * 0.85,
+    fireCooldownMs: 170,
+    maxOnScreenShots: 6,
+    maxShieldCharges: 2,
+  },
+  // Built to reach a downed pilot and survive the trip back: the only
+  // hull that holds a third Shield charge, at the cost of real weapons.
+  rescue: {
+    label: 'RESCUE',
+    blurb: '3 SHIELDS - WEAK GUNS',
+    thrustForce: 0.000034,
+    maxSpeed: 6,
+    turnRateRadPerSec: Math.PI * 1.1,
+    fireCooldownMs: 360,
+    maxOnScreenShots: 3,
+    maxShieldCharges: 3,
+  },
+};
+
+/**
+ * The ship-to-ship tether (`systems/TetherSystem.ts`) - an elastic link
+ * between two Cooperative ships, for slinging a teammate clear of a
+ * hazard or whipping them toward a downed pilot.
+ *
+ * **Cooperative only** and **attaches/breaks on its own**, both decided
+ * - see that module's doc comment for the reasoning (briefly: dragging
+ * an unwilling opponent is a different game, and all four input verbs
+ * are already bound).
+ *
+ * `stiffness` is set so the spring reaches `maxForce` right around the
+ * breaking point rather than saturating early - a first pass hit the
+ * cap at only 60px of stretch, which made it a constant yank instead of
+ * something that builds (there's a regression test for exactly that).
+ * `maxForce` at 2x `SHIP.thrustForce` is deliberate: a near-breaking
+ * tether is not something you can simply out-thrust.
+ *
+ * Starting guesses, not playtested.
+ */
+export const TETHER = {
+  attachDistancePx: 90, // well under breakDistancePx, so a snapped tether doesn't instantly re-form
+  restLengthPx: 140, // slack inside this - flying close together never feels sticky
+  breakDistancePx: 420,
+  stiffness: 0.00000022,
+  maxForce: 0.00006,
+} as const;
+
+/**
+ * The Assembler (docs/roadmap.md) - Debris's third boss, and the only
+ * one that assembles itself out of the arena mid-stage instead of
+ * arriving finished. *Sinistar*-descended; `systems/AssemblerBuild.ts`
+ * owns the rules and records the design decisions behind them.
+ *
+ * **A normal-stage event, not a boss-stage pick**, decided: it needs a
+ * field of rocks to eat, which a boss stage doesn't have. That also
+ * means it needs no change to the normal/boss alternation at all - it
+ * spawns on its own timer exactly the way the Gravity Well does, and
+ * (like a boss) suppresses the Gravity Well while it's around, so a
+ * stage never runs both.
+ *
+ * Starting guesses, not playtested.
+ */
+export const ASSEMBLER = {
+  radius: 46, // its own body/hit radius
+  coreRadius: 20,
+  plateRadius: 9, // an absorbed rock, drawn welded to the ring
+  pullRadius: 300, // how far it steals asteroids from
+  pullForce: 0.0000075, // gentler than BLACK_HOLE.pullForceMax - rocks drift in rather than being snatched
+  platesToComplete: 6, // asteroids it must eat before it comes alive - deliberately under a mid-stage field's rock count, or it could never finish
+  hpPerPlate: 3, // a better-fed Assembler is a longer fight (see absorbAsteroid)
+  huntSpeed: 0.55, // px/step once alive - slower than any ship, so it's pressure rather than a chase it wins
+  shardCooldownMs: 2600,
+  materializeDurationMs: 900, // matches FRACTURE/CARDINAL's own beat
+  minStageElapsedMs: 25000, // no earlier than this into a normal stage, same "let them fight the rocks first" rule the Gravity Well got
+  spawnChance: 0.5, // not every stage - it should be a thing that happens, not a fixture
+  scrapOnDeath: 6,
+  // Between FRACTURE.score (1000) and the UFO: it can be denied
+  // entirely, so it pays less than a boss you're forced to fight.
+  // Starving it out deliberately pays *nothing* - the reward for
+  // denial is simply not having to fight it.
+  score: 900,
+} as const;
+
+/**
+ * Static arena wreckage (`systems/ArenaTerrain.ts`, `entities/Wreck.ts`)
+ * - geography for an arena that had none, and the first thing in this
+ * game that physically blocks a shot.
+ *
+ * `edgeMarginPx` is the load-bearing one: wreckage only ever generates
+ * in the interior, so it never straddles an arena edge and the
+ * screen-wrap rule never has to reckon with a static body that would
+ * either have to wrap or become a wall. See that module's own note.
+ *
+ * Regenerated per stage rather than per round, so the field changes
+ * shape as you go. Not destructible in this pass, deliberately.
+ *
+ * Starting guesses, not playtested - `minSeparationPx` especially is
+ * set generously, since the real risk here is two pieces forming a
+ * pocket something gets wedged in.
+ */
+export const TERRAIN = {
+  minCount: 2,
+  maxCount: 4,
+  minRadius: 42,
+  maxRadius: 84,
+  edgeMarginPx: 150,
+  keepOutPaddingPx: 140, // clearance from spawn points and the space station
+  minSeparationPx: 190,
+  spawnChance: 0.6, // not every stage - an empty arena should still happen
+} as const;
+
 export const LIVES_PER_PLAYER = 3;
+
+/**
+ * Scales the asteroid field and UFO cadence by how many players are
+ * actually in the round (`systems/StageScaling.ts`) - four players used
+ * to fight exactly the same field as one, so every mode got easier the
+ * more people joined.
+ *
+ * Deliberately sub-linear: `perExtraPlayer` 0.4 means 1 player = 1.0x,
+ * 2 = 1.4x, 3 = 1.8x, 4 = 2.2x, rather than a straight 4x for four
+ * players - four sets of guns clear rocks far faster than four times as
+ * fast, since rocks die before they get the chance to split. A starting
+ * guess, not playtested, same standing caveat as every other tuning
+ * constant in this file.
+ */
+export const CREW_SCALING = {
+  perExtraPlayer: 0.4,
+} as const;
 
 /**
  * Screen shake + particle burst tuning for destruction (docs/art_direction.md,
@@ -294,6 +560,20 @@ export const EFFECTS = {
   ufoBurst: { count: 24, speedRange: [50, 160] as const, lifespanMs: 550, sizePx: 6 },
   majorShake: { durationMs: 250, intensity: 0.012 }, // ship or UFO destroyed
   minorShake: { durationMs: 120, intensity: 0.004 }, // an asteroid destroyed
+  /**
+   * Time dilation on a round-deciding moment - a boss dying, or the
+   * elimination that actually ends a round. Nuclear Throne / Devil May
+   * Cry-style punctuation: the end of a round is the part people
+   * remember, and at full speed it's over before anyone registers it.
+   *
+   * Scales Matter's own physics clock and the per-frame delta this
+   * scene feeds its entities, deliberately *not* `this.time.now` -
+   * every cooldown, rescue window and boss timer in the game is keyed
+   * off wall-clock time, and slowing that for 450ms would quietly
+   * stretch all of them too. Gated by `prefers-reduced-motion`, the
+   * same courtesy the camera shake above already extends.
+   */
+  slowMo: { timeScale: 0.25, durationMs: 450 },
 } as const;
 
 /**
@@ -333,6 +613,27 @@ export const COMMANDER = {
   driftSpeed: 0.25, // px/step (Matter velocity units, not px/sec - see SHIP's doc comment above) - slower than SHIELD.speed (0.4), a tumbling person over a purposeful pickup
   rescueWindowMs: 10000, // "10 second timer," decided
   towOffsetPx: 22, // trails behind the towing ship's heading while carried, not glued exactly on top of it
+  /**
+   * The adrift pilot's own EVA thruster (docs/roadmap.md's "Commander
+   * thruster puff"). Before this, a downed player was fully passive for
+   * the whole 10-second rescue window - ten seconds of nothing to do is
+   * a lot to ask of one of four people standing at a cabinet.
+   *
+   * **A fuel budget, decided** over a fixed number of discrete puffs or
+   * unlimited-but-weak thrust: spend it however you like - burn it all
+   * fleeing one rock, or feather it to close the gap with your rescuer.
+   * Deliberately far weaker than a ship (`puffMaxSpeed` 1.2 vs
+   * `SHIP.maxSpeed` 6): this is for nudging out of the path of an
+   * asteroid or meeting a rescuer halfway, never for saving yourself
+   * unaided. It can absolutely push you *into* a hazard, which is the
+   * point - agency with no risk attached isn't a decision.
+   *
+   * Starting guesses, not playtested.
+   */
+  puffFuelSeconds: 2.5, // total seconds of continuous thrust, spent however the player likes
+  puffTurnRateRadPerSec: Math.PI * 0.9, // slightly slower than SHIP.turnRateRadPerSec (1.2pi) - a tumbling person, not a ship
+  puffAccelPerSec: 1.2, // px/step of velocity gained per second of thrust
+  puffMaxSpeed: 1.2, // px/step ceiling - ~5x driftSpeed, still 5x slower than a ship at full tilt
 } as const;
 
 /**

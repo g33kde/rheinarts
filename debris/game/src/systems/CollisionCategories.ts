@@ -25,4 +25,10 @@ export const CATEGORY = {
   // rest of The Cardinal's body (arms, core) is a plain-math hazard, not
   // Matter-backed at all - see `entities/Cardinal.ts`'s own doc comment.
   CARDINAL: 0x0100,
+  // Static arena wreckage (entities/Wreck.ts) - the first thing in this
+  // game that physically blocks anything. Its own bit so each entity
+  // decides for itself whether terrain stops it; notably the Commander
+  // does not collide with it, so an adrift pilot can't be pinned behind
+  // cover during a rescue window.
+  WRECK: 0x0200,
 } as const;

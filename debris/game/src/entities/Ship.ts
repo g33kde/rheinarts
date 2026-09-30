@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { SHIP, SHIP_HULL, SHIP_HULL_SCALE, COLORS, SHIELD } from '../config/GameConfig';
+import { SHIP, SHIP_HULL, SHIP_HULL_SCALE, COLORS, HULLS, type HullId, type HullStats } from '../config/GameConfig';
 import { CATEGORY } from '../systems/CollisionCategories';
 import { clampSpeed, wrapPosition } from '../systems/MovementSystem';
 import type { Vector2 } from '../utilities/Vector2';
@@ -19,6 +19,8 @@ import type { MatterGameObject } from './MatterGameObject';
 export class Ship {
   readonly visual: MatterGameObject<Phaser.GameObjects.Graphics>;
   readonly color: number;
+  /** This ship's selected hull (config's HULLS) - every stat that used to read SHIP.* directly now comes from here, so two players in the same round can fly genuinely different ships. */
+  readonly hull: HullStats;
   private thrusting = false;
   private alive = true;
   private shieldCharges = 0;
@@ -33,8 +35,16 @@ export class Ship {
    * all), Competitive leaves it in (ramming is a real, mutually-lethal
    * threat in that mode - see GameScene's collision handling).
    */
-  constructor(scene: Phaser.Scene, x: number, y: number, color: number, shipCollisionEnabled: boolean) {
+  constructor(
+    scene: Phaser.Scene,
+    x: number,
+    y: number,
+    color: number,
+    shipCollisionEnabled: boolean,
+    hullId: HullId = 'interceptor',
+  ) {
     this.color = color;
+    this.hull = HULLS[hullId];
 
     const visual = scene.add.graphics();
     scene.matter.add.gameObject(visual, {
@@ -92,9 +102,9 @@ export class Ship {
     return this.shieldCharges > 0;
   }
 
-  /** Stacks up to `SHIELD.maxCharges` (2) - a no-op past the cap, same "wasted pickup" semantics the old single-charge version had at 1. */
+  /** Stacks up to this hull's own `maxShieldCharges` (2 for most, 3 for the Rescue hull) - a no-op past the cap, same "wasted pickup" semantics the old single-charge version had at 1. */
   grantShield(): void {
-    this.shieldCharges = Math.min(this.shieldCharges + 1, SHIELD.maxCharges);
+    this.shieldCharges = Math.min(this.shieldCharges + 1, this.hull.maxShieldCharges);
   }
 
   /** Consumes one charge on an absorbed hit - "absorbs exactly one hit... then breaks," now per-charge rather than all-or-nothing. */
@@ -120,11 +130,11 @@ export class Ship {
     if (this.thrusting) {
       const angle = this.heading;
       this.visual.applyForce(
-        new Phaser.Math.Vector2(Math.cos(angle) * SHIP.thrustForce, Math.sin(angle) * SHIP.thrustForce),
+        new Phaser.Math.Vector2(Math.cos(angle) * this.hull.thrustForce, Math.sin(angle) * this.hull.thrustForce),
       );
     }
 
-    const clamped = clampSpeed(this.visual.getVelocity(), SHIP.maxSpeed);
+    const clamped = clampSpeed(this.visual.getVelocity(), this.hull.maxSpeed);
     this.visual.setVelocity(clamped.x, clamped.y);
 
     const wrapped = wrapPosition(this.position, SHIP.radius, arenaWidth, arenaHeight);
@@ -185,6 +195,16 @@ export class Ship {
       const alpha = 0.45 + 0.3 * (breathe * 0.5 + 0.5);
       g.lineStyle(2, COLORS.shield, alpha);
       g.strokeCircle(0, 0, radius);
+    }
+
+    if (this.shieldCharges > 2) {
+      // Third charge - only the Rescue hull can ever hold one
+      // (HULLS.rescue.maxShieldCharges). A third *static* ring rather
+      // than a second pulsing one: two rings breathing at once reads as
+      // a wobble instead of a count, and keeping this one still means
+      // the pulsing ring stays the thing your eye tracks.
+      g.lineStyle(2, COLORS.shield, 0.55);
+      g.strokeCircle(0, 0, SHIP_HULL_SCALE * 1.6 * 1.68);
     }
   }
 

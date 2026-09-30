@@ -9,13 +9,21 @@ import {
   CARDINAL,
   COLORS,
   COMMANDER,
+  ASSEMBLER,
+  ATTRACT_MODE,
+  COMBO,
   EFFECTS,
   FRACTURE,
+  HYPERSPACE,
   LIVES_PER_PLAYER,
   PROJECTILE,
   SHIELD,
   SHIP,
+  type HullId,
   SPACE_STATION,
+  STAGE_RANK,
+  TERRAIN,
+  TETHER,
   UFO,
   WEAPON_UPGRADES,
 } from '../config/GameConfig';
@@ -38,6 +46,7 @@ import { Ship } from '../entities/Ship';
 import { SpaceStation } from '../entities/SpaceStation';
 import { Ufo } from '../entities/Ufo';
 import { UfoShot } from '../entities/UfoShot';
+import { AiInput } from '../input/AiInput';
 import { GamepadInput } from '../input/GamepadInput';
 import { KeyboardInput, P1_BINDINGS, P2_BINDINGS } from '../input/KeyboardInput';
 import type { PlayerInput } from '../input/PlayerInput';
@@ -62,7 +71,40 @@ import {
   GAMEPLAY_MUSIC_KEY,
   MENU_MUSIC_KEY,
 } from '../systems/Music';
-import { evaluateRoundOutcome, GAME_MODE_LABELS, type GameMode } from '../systems/RoundOutcome';
+import { evaluateRoundOutcome, GAME_MODE_LABELS, type GameMode, type RoundOutcome } from '../systems/RoundOutcome';
+import {
+  breakCombo,
+  comboMultiplier,
+  decayCombo,
+  INITIAL_COMBO_STATE,
+  registerKill,
+  type ComboState,
+} from '../systems/ComboMultiplier';
+import { Assembler } from '../entities/Assembler';
+import { Wreck } from '../entities/Wreck';
+import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
+import { computeBotIntent } from '../systems/DemoBot';
+import { computeStageRank, type StageRankResult } from '../systems/StageRank';
+import {
+  computeTetherForce,
+  distanceBetween,
+  shouldAttach,
+  shouldBreak,
+  tetherTension,
+} from '../systems/TetherSystem';
+import {
+  BOSS_CHOICES,
+  FIELD_CHOICES,
+  FIELD_MODIFIERS,
+  isFieldChoice,
+  nextShopRow,
+  resolveStageVote,
+  type FieldModifiers,
+  type StageChoiceId,
+  type StageChoiceOption,
+} from '../systems/StageChoice';
+import { playUfoDestroyedSfx, playUfoShotSfx, playUfoSpawnSfx } from '../systems/ProceduralSfx';
+import { speakPhonemes, VOICE_LINES } from '../systems/VoiceSynth';
 import { computeAsteroidSpawnCount, computeUfoSpawnIntervalMs } from '../systems/StageScaling';
 import {
   ASTEROID_HIT_SFX_KEY,
@@ -79,9 +121,7 @@ import {
   computeMaxOnScreenShots,
   computeShotSpecs,
   hasUpgrade,
-  nextShopCursor,
   WEAPON_UPGRADE_LABELS,
-  type ShopCursor,
   type ShotSpec,
   type WeaponUpgradeConfig,
   type WeaponUpgradeId,
@@ -101,6 +141,15 @@ interface PlayerSlot {
   ship: Ship;
   input: PlayerInput;
   lastFiredAtMs: number;
+  /** This player's vote for the next stage, reset each transition. `undefined` = abstained, which resolveStageVote simply doesn't count. */
+  stageVote: StageChoiceId | undefined;
+  /** The hull this player picked on the menu (config's HULLS). Lives on the slot, not the Ship, because a Ship is destroyed and rebuilt on every respawn and stage transition - the choice has to outlive all of that, same reasoning as `weapon` and `scrap`. */
+  hullId: HullId;
+  /** This player's own kill chain (COMBO / systems/ComboMultiplier.ts) - per-player even in Cooperative, where score itself is pooled; see COMBO's config comment for why. */
+  combo: ComboState;
+  /** Hyperspace cooldown (HYPERSPACE.cooldownMs) and rising-edge tracking - see the jump handling in update(). Both live on the slot rather than the Ship for the same reason `weapon` does: a Ship is destroyed and replaced on every respawn, and a jump cooldown shouldn't be cleared by dying. */
+  lastHyperspaceAtMs: number;
+  hyperspaceWasHeld: boolean;
   /** Remaining lives (starts at LIVES_PER_PLAYER). Competitive/Single Player only - Cooperative uses `eliminated` instead (see below), lives genuinely don't matter there anymore. */
   lives: number;
   /** True once this player is permanently out for the round. Competitive/Single Player: set when `lives` hits 0. Cooperative: set when a Commander goes unrescued past COMMANDER.rescueWindowMs, or is destroyed by a hazard first - lives are never decremented in that mode at all. */
@@ -198,7 +247,15 @@ const PLAYER_HUD_CORNERS: readonly {
 // for up to 4 panels side by side across the 1920px arena (4*380 +
 // 3*30 = 1610px, well clear of the edges).
 const SHOP_PANEL_WIDTH = 380;
-const SHOP_PANEL_HEIGHT = 240;
+// Sized for a header + 3 upgrade rows + a "NEXT STAGE" label + up to 3
+// stage-vote rows + a READY row. Grew when stage choice moved into this
+// panel; before that it fit the upgrades and READY alone, and adding the
+// vote rows pushed READY straight out through the bottom border.
+// 26 (header) + 40 + 3*32 (upgrades) + 32 (vote label) + 3*32 (the
+// most stage options ever offered) + 14 (ready) + padding. Grew when
+// stage choice moved into this panel; at the old 240 the READY row was
+// pushed straight out through the bottom border.
+const SHOP_PANEL_HEIGHT = 330;
 const SHOP_PANEL_GAP = 30;
 const SHOP_ROW_HEIGHT = 32;
 
@@ -212,13 +269,18 @@ const SHOP_ROW_HEIGHT = 32;
 interface ShopPanel {
   slotIndex: number;
   eliminated: boolean;
-  cursor: ShopCursor;
+  /** Either a `ShopCursor` (weapon upgrade or 'ready') or a `vote:<id>` row - see nextShopRow/shopRowIds. */
+  cursor: string;
   ready: boolean;
   prevTurnDirection: -1 | 0 | 1;
   prevFiring: boolean;
   bg: Phaser.GameObjects.Rectangle;
   headerText: Phaser.GameObjects.Text;
   rowTexts: Phaser.GameObjects.Text[];
+  /** One row per stage-choice option on offer this transition (docs: light stage choice). */
+  voteTexts: Phaser.GameObjects.Text[];
+  /** The "- VOTE: NEXT STAGE -" heading above those rows, kept here purely so exitShop can destroy it with the rest of the panel. */
+  voteLabelText: Phaser.GameObjects.Text | undefined;
   readyText: Phaser.GameObjects.Text | undefined;
 }
 
@@ -284,6 +346,9 @@ interface ShopPanel {
  * ship outright, but only costs the round once it was that player's
  * last life.
  */
+/** A round outcome that actually ends the round - everything `RoundOutcome` can be except 'continue'. Used by the deferred round-end (see `deferredRoundEnd`/`resolveRoundOutcome`), which only ever holds a real ending. */
+type ResolvedRoundOutcome = Exclude<RoundOutcome, { status: 'continue' }>;
+
 export class GameScene extends Phaser.Scene {
   private background!: PlayfieldBackground;
   private mode: GameMode = 'cooperative';
@@ -333,7 +398,36 @@ export class GameScene extends Phaser.Scene {
   // next; true -> it spawns a normal wave instead. Starts false, so the
   // very first stage-clear of the round still triggers a boss first,
   // same as the original behavior.
+  /** Live ship-to-ship tethers (Cooperative only - see TETHER/systems/TetherSystem.ts). Each pair appears at most once. */
+  private tethers: { a: Ship; b: Ship }[] = [];
+  private tetherGraphics: Phaser.GameObjects.Graphics | undefined;
+  /** The Assembler (ASSEMBLER / entities/Assembler.ts) - a normal-stage event, so it lives alongside the hazards rather than in the boss rotation. */
+  /** Static arena wreckage for this stage (TERRAIN / systems/ArenaTerrain.ts) - regenerated per stage, never during a boss fight. */
+  private wrecks: Wreck[] = [];
+  private assembler: Assembler | undefined;
+  private assemblerRolledThisStage = false;
   private lastStageWasBoss = false;
+  /** Options on offer at the current shop (bosses before a boss stage, field flavors before a normal one) - empty outside the shop. */
+  private stageChoiceOptions: readonly StageChoiceOption[] = [];
+  /** The crew's resolved pick, applied by beginNextLevel() and then held for the duration of that stage. */
+  private chosenBoss: StageChoiceId | undefined;
+  private fieldModifiers: FieldModifiers = FIELD_MODIFIERS.standard;
+  /** Attract mode (docs/roadmap.md): the game playing itself on the idle menu. Suppresses everything that only makes sense for a real player - initials entry, leaderboard submission - and bails back to the menu on any input at all. */
+  /** Per-slot hull choice carried in from the menu - see config's HULLS. */
+  private hulls: HullId[] = ['interceptor', 'interceptor', 'interceptor', 'interceptor'];
+  private isDemo = false;
+  private demoStartedAtMs = 0;
+  private demoInputSeen = false;
+  // Wall-clock deadline for the EFFECTS.slowMo time dilation - see
+  // triggerSlowMo() and the top of update().
+  private slowMoUntilMs = -Infinity;
+  // Set when a round-ending outcome lands during a slow-mo beat: the
+  // outcome is snapshotted here and applied once the beat finishes, so
+  // the deciding blow is actually visible before the world freezes.
+  // Snapshotting (rather than re-evaluating on resolve) is deliberate -
+  // the last ship can itself die inside that window, and a round
+  // shouldn't retroactively turn a win into a draw after the fact.
+  private deferredRoundEnd: { outcome: ResolvedRoundOutcome; resolveAtMs: number } | undefined;
   // How many normal (non-boss) stages have begun this round - 1 for the
   // round's first wave (spawned directly in create()), incremented once
   // per subsequent normal-stage transition in beginNextLevel(). Feeds
@@ -373,6 +467,12 @@ export class GameScene extends Phaser.Scene {
   // enteringInitials, gameOver) without needing to track a separate
   // "when did we last resume" timestamp.
   private stageElapsedMs = 0;
+  // Per-stage performance tally behind the stage-clear rank
+  // (systems/StageRank.ts). Reset wherever stageElapsedMs is, since
+  // they measure the same window.
+  private stageShotsFired = 0;
+  private stageShotsHit = 0;
+  private stageHitsTaken = 0;
   private stageTimerText: Phaser.GameObjects.Text | undefined;
   // Whichever track is currently looping for the *current* stage -
   // `GAMEPLAY_MUSIC_KEY` for a normal stage, a boss's own key
@@ -436,6 +536,11 @@ export class GameScene extends Phaser.Scene {
   // updateCardinalAttacks(), and any future boss can feed the same
   // queue either way.
   private pendingBossAsteroidHits: Asteroid[] = [];
+  /** Asteroids the Assembler is about to eat, and shots about to hit it - same deferred shape as every other pending queue here. */
+  /** Shots that hit cover this frame - destroyed rather than ricocheting. */
+  private pendingWreckAbsorbs: Projectile[] = [];
+  private pendingAssemblerFeed: Asteroid[] = [];
+  private pendingAssemblerHits: { projectile: Projectile }[] = [];
   // The plasma ball/shard are consumed on any contact (ship or asteroid
   // alike, same as a UfoShot) - separate typed queues since (unlike
   // pendingBossAsteroidHits above) there's a second object to destroy
@@ -463,9 +568,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Called before create() on every start *and* every scene.restart(data) - the mode/sources-carrying explicit-data restarts elsewhere in this file rely on that. */
-  init(data: { mode?: GameMode; sources?: InputSource[] }): void {
+  init(data: { mode?: GameMode; sources?: InputSource[]; hulls?: HullId[]; demo?: boolean }): void {
     this.mode = data?.mode ?? 'cooperative';
     this.sources = data?.sources ?? ['keyboard', 'keyboard', 'gamepad', 'gamepad'];
+    this.hulls = data?.hulls ?? ['interceptor', 'interceptor', 'interceptor', 'interceptor'];
+    this.isDemo = data?.demo === true;
   }
 
   create(): void {
@@ -502,6 +609,17 @@ export class GameScene extends Phaser.Scene {
     this.fractureShards = [];
     this.lastStageWasBoss = false;
     this.normalStageCount = 1;
+    this.tethers = [];
+    this.clearTerrain();
+    this.assembler?.destroy();
+    this.assembler = undefined;
+    this.assemblerRolledThisStage = false;
+    this.slowMoUntilMs = -Infinity;
+    this.stageChoiceOptions = [];
+    this.chosenBoss = undefined;
+    this.fieldModifiers = FIELD_MODIFIERS.standard;
+    this.deferredRoundEnd = undefined;
+    this.matter.world.engine.timing.timeScale = 1;
     this.cardinal = undefined;
     this.cardinalPlasmaBalls = [];
     this.cardinalHealthBarBorder = undefined;
@@ -511,6 +629,7 @@ export class GameScene extends Phaser.Scene {
     this.scrapCountdownText = undefined;
     this.lastEliminatedSlotIndex = undefined;
     this.stageElapsedMs = 0;
+    this.resetStageRankStats();
     this.scores = [0, 0, 0, 0]; // fixed, indexed by slotIndex - not sized to how many players are actually active
     this.state = 'playing';
     this.lastShieldSpawnAtMs = this.time.now;
@@ -530,6 +649,9 @@ export class GameScene extends Phaser.Scene {
     this.pendingCardinalCoreHits = [];
     this.pendingCardinalPlasmaHits = [];
     this.pendingBossAsteroidHits = [];
+    this.pendingWreckAbsorbs = [];
+    this.pendingAssemblerFeed = [];
+    this.pendingAssemblerHits = [];
     this.pendingCardinalPlasmaAsteroidHits = [];
     this.pendingFractureShardAsteroidHits = [];
     this.pendingScrapPickups = [];
@@ -539,8 +661,16 @@ export class GameScene extends Phaser.Scene {
     this.pendingCommanderHazardHits = [];
     this.overlayTexts = [];
     this.pauseMenuObjects = [];
-    this.spawnWave(computeAsteroidSpawnCount(this.normalStageCount));
+    this.generateStageTerrain();
+    this.spawnWave(this.modifiedAsteroidCount());
     this.refreshAllPlayerHud();
+
+    if (this.isDemo) {
+      this.demoStartedAtMs = this.time.now;
+      this.demoInputSeen = false;
+      this.armDemoExitListeners();
+      this.showDemoBanner();
+    }
 
     this.add
       .text(ARENA_WIDTH / 2, 8, GAME_MODE_LABELS[this.mode], {
@@ -606,11 +736,15 @@ export class GameScene extends Phaser.Scene {
       const active = source === 'keyboard' || assignment.ready;
       if (!active) return;
 
-      const input: PlayerInput =
-        source === 'keyboard'
+      // Attract mode flies every ship itself - whatever the menu had
+      // selected for this slot is irrelevant when nobody's holding it.
+      const input: PlayerInput = this.isDemo
+        ? new AiInput()
+        : source === 'keyboard'
           ? new KeyboardInput(slotIndex === 0 ? P1_BINDINGS : P2_BINDINGS)
           : new GamepadInput(connectedGamepads[assignment.gamepadIndex!]!);
 
+      const hullId: HullId = this.hulls[slotIndex] ?? 'interceptor';
       const offset = this.spawnOffsetFor(slotIndex);
       const corner = PLAYER_HUD_CORNERS[slotIndex]!;
       const hudText = this.add
@@ -630,9 +764,15 @@ export class GameScene extends Phaser.Scene {
           ARENA_HEIGHT / 2 + offset.y,
           COLORS.players[slotIndex]!,
           shipCollisionEnabled,
+          hullId,
         ),
+        hullId,
         input,
         lastFiredAtMs: -Infinity,
+        combo: INITIAL_COMBO_STATE,
+        stageVote: undefined,
+        lastHyperspaceAtMs: -Infinity,
+        hyperspaceWasHeld: false,
         lives: LIVES_PER_PLAYER,
         eliminated: false,
         towedCommander: null,
@@ -663,8 +803,31 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, deltaMs: number): void {
-    const deltaSeconds = deltaMs / 1000;
     const nowMs = this.time.now;
+
+    // Slow-motion on a round-deciding moment (EFFECTS.slowMo). Applied
+    // to Matter's own physics clock and to the delta every entity's
+    // update() below is driven by, so the two stay in step - a
+    // half-slowed world where the rocks crawl but the ship's animation
+    // doesn't would read as a frame hitch, not an effect. Wall-clock
+    // `nowMs` is deliberately untouched (see the config comment).
+    const timeScale = nowMs < this.slowMoUntilMs ? EFFECTS.slowMo.timeScale : 1;
+    this.matter.world.engine.timing.timeScale = timeScale;
+    const deltaSeconds = (deltaMs / 1000) * timeScale;
+
+    if (this.isDemo) {
+      this.updateDemoBots();
+      if (this.checkDemoExit(nowMs)) return;
+    }
+
+    // A round-ending blow holds the world open for the slow-mo beat
+    // before actually freezing it and raising the overlay - see
+    // checkRoundOutcome(), which snapshots the outcome and defers here.
+    if (this.deferredRoundEnd && nowMs >= this.deferredRoundEnd.resolveAtMs) {
+      const { outcome } = this.deferredRoundEnd;
+      this.deferredRoundEnd = undefined;
+      this.resolveRoundOutcome(outcome);
+    }
 
     this.processPendingHits();
     this.processPendingShieldPickups();
@@ -678,6 +841,9 @@ export class GameScene extends Phaser.Scene {
     this.processPendingCardinalArmHits(nowMs);
     this.processPendingCardinalCoreHits(nowMs);
     this.processPendingCardinalPlasmaHits(nowMs);
+    this.processPendingWreckAbsorbs();
+    this.processPendingAssemblerFeed();
+    this.processPendingAssemblerHits(nowMs);
     this.processPendingBossAsteroidHits();
     this.processPendingCardinalPlasmaAsteroidHits();
     this.processPendingFractureShardAsteroidHits();
@@ -746,13 +912,14 @@ export class GameScene extends Phaser.Scene {
     const pulledAsteroids = new Set<Asteroid>();
     this.applyBlackHoleGravityForces(pulledAsteroids);
     this.applyFractureGravityForces(pulledAsteroids);
+    this.updateTethers();
 
     this.players.forEach((player) => {
       if (!player.ship.isAlive) return;
 
       const turn = player.input.turnDirection;
       if (turn !== 0) {
-        player.ship.setRotation(player.ship.heading + turn * SHIP.turnRateRadPerSec * deltaSeconds);
+        player.ship.setRotation(player.ship.heading + turn * player.ship.hull.turnRateRadPerSec * deltaSeconds);
       }
       player.ship.setThrusting(player.input.isThrusting);
 
@@ -761,9 +928,16 @@ export class GameScene extends Phaser.Scene {
       // disabled (WEAPON_UPGRADES.rapidFire.heat.enabled).
       player.weapon.heat = decayHeat(player.weapon.heat, deltaSeconds, WEAPON_UPGRADES.rapidFire.heat);
 
+      // Kill chain lapses on its own if nothing's died recently - the
+      // HUD reads it every frame, so this has to run even for a player
+      // who isn't currently shooting.
+      const previousMultiplier = comboMultiplier(player.combo, COMBO);
+      player.combo = decayCombo(player.combo, nowMs, COMBO);
+      if (comboMultiplier(player.combo, COMBO) !== previousMultiplier) this.refreshAllPlayerHud();
+
       const weaponConfig = this.weaponUpgradeConfig();
-      const cooldownMs = computeFireCooldownMs(player.weapon, SHIP.fireCooldownMs, weaponConfig);
-      const maxOnScreenShots = computeMaxOnScreenShots(player.weapon, SHIP.maxOnScreenShots);
+      const cooldownMs = computeFireCooldownMs(player.weapon, player.ship.hull.fireCooldownMs, weaponConfig);
+      const maxOnScreenShots = computeMaxOnScreenShots(player.weapon, player.ship.hull.maxOnScreenShots);
       const ownProjectileCount = this.projectiles.filter((p) => p.ownerIndex === player.slotIndex).length;
 
       if (
@@ -783,6 +957,17 @@ export class GameScene extends Phaser.Scene {
           player.weapon.heat = applyShotHeat(player.weapon.heat, nowMs, WEAPON_UPGRADES.rapidFire.heat);
         }
       }
+
+      // Hyperspace: rising edge only (holding the key must not chain
+      // jumps), plus its own cooldown. Edge detection lives here rather
+      // than in the input adapters, same division of labour as firing -
+      // adapters report a held level, the scene owns the timing rules.
+      const hyperspaceHeld = player.input.isHyperspacing;
+      if (hyperspaceHeld && !player.hyperspaceWasHeld && nowMs - player.lastHyperspaceAtMs >= HYPERSPACE.cooldownMs) {
+        this.jumpHyperspace(player);
+        player.lastHyperspaceAtMs = nowMs;
+      }
+      player.hyperspaceWasHeld = hyperspaceHeld;
 
       player.ship.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
     });
@@ -809,9 +994,18 @@ export class GameScene extends Phaser.Scene {
     this.shields.forEach((shield) => shield.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
     this.updateUfos(deltaSeconds, nowMs);
     this.ufoShots.forEach((shot) => shot.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
-    this.commanders.forEach((commander) => commander.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
+    // A downed player still steers their own adrift pilot, on their own
+    // existing turn/thrust bindings (COMMANDER.puff*) - applied before
+    // update() so the puff's velocity change lands in the same frame's
+    // movement, the same ordering the ship's own thrust already uses.
+    this.commanders.forEach((commander) => {
+      const owner = this.players.find((p) => p.slotIndex === commander.slotIndex);
+      if (owner) commander.applyControl(owner.input.turnDirection, owner.input.isThrusting, deltaSeconds);
+      commander.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT);
+    });
     this.processCommanderExpiry(nowMs);
     this.processStationDropOffs(nowMs);
+    this.updateAssembler(nowMs);
     this.blackHole?.update(nowMs, deltaSeconds);
     this.fracture?.update(nowMs, ARENA_HEIGHT);
     this.fractureFragments.forEach((fragment) => fragment.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
@@ -855,7 +1049,7 @@ export class GameScene extends Phaser.Scene {
     // if the interval had already elapsed, rather than waiting a fresh
     // full interval from whenever the cap happened to clear.
     const ufoSpawnCapped = this.isBossEncounterActive() && this.ufos.length >= UFO.maxConcurrentDuringBoss;
-    if (!ufoSpawnCapped && nowMs - this.lastUfoSpawnAtMs >= computeUfoSpawnIntervalMs(this.normalStageCount)) {
+    if (!ufoSpawnCapped && nowMs - this.lastUfoSpawnAtMs >= this.modifiedUfoIntervalMs()) {
       this.spawnUfo();
       this.lastUfoSpawnAtMs = nowMs;
     }
@@ -920,11 +1114,245 @@ export class GameScene extends Phaser.Scene {
       this.fracture !== undefined ||
       this.fractureFragments.length > 0 ||
       this.scrapCountdownEndsAtMs !== undefined ||
-      this.cardinal !== undefined
+      this.cardinal !== undefined ||
+      // The Assembler is a normal-stage event rather than a boss stage,
+      // but every rule this gates applies to it identically: the stage
+      // isn't clear while it's alive, no Gravity Well on top of it, and
+      // the UFO cap holds. Counting it here is how it inherits all
+      // three without a single special case elsewhere.
+      this.assembler !== undefined
     );
   }
 
   /** Moves every UFO, then has each one fire independently if its own cooldown and a live target both allow it. */
+  /**
+   * Forms, breaks and applies the ship-to-ship tether
+   * (`systems/TetherSystem.ts`). Cooperative only - see TETHER's config
+   * comment for why Competitive is deliberately excluded.
+   *
+   * Runs before the per-ship `update()` pass for the same reason the
+   * Gravity Well's own forces do: `Ship.update()` re-clamps velocity
+   * every frame, so a force applied after it would be partly discarded.
+   */
+  /**
+   * The Assembler's whole per-frame life (ASSEMBLER / entities/Assembler.ts).
+   *
+   * Spawning mirrors the Gravity Well's own rules exactly - a minimum
+   * time into the stage so the crew gets to fight rocks first, never
+   * during a boss encounter, and only on a chance roll so it's an event
+   * rather than a fixture. Rolled once per stage, not once per frame.
+   */
+  private updateAssembler(nowMs: number): void {
+    const assembler = this.assembler;
+
+    if (!assembler) {
+      if (this.assemblerRolledThisStage) return;
+      if (this.isBossEncounterActive() || this.blackHole) return;
+      if (this.stageElapsedMs < ASSEMBLER.minStageElapsedMs) return;
+      // Needs a field to eat - seeding one into an almost-cleared stage
+      // would just collapse it immediately.
+      if (this.asteroids.length < ASSEMBLER.platesToComplete) return;
+      this.assemblerRolledThisStage = true;
+      if (Math.random() > ASSEMBLER.spawnChance) return;
+      this.spawnAssembler(nowMs);
+      return;
+    }
+
+    if (assembler.isMaterializing(nowMs)) {
+      assembler.update(nowMs, undefined, ARENA_WIDTH, ARENA_HEIGHT);
+      return;
+    }
+
+    // Starved: it ran the field dry without finishing, so it falls
+    // apart. This is the counter that makes clearing rocks quickly the
+    // right answer rather than a distraction.
+    if (!assembler.isActive && this.asteroids.length === 0) {
+      if (assembler.starve()) this.collapseAssembler(nowMs, false);
+      return;
+    }
+
+    if (!assembler.isActive) this.pullAsteroidsToAssembler(assembler);
+
+    const target = this.nearestAliveShip(assembler.position)?.ship.position;
+    assembler.update(nowMs, target, ARENA_WIDTH, ARENA_HEIGHT);
+
+    if (assembler.canFireShard(nowMs) && target) {
+      const heading = Math.atan2(target.y - assembler.position.y, target.x - assembler.position.x);
+      this.fractureShards.push(new FractureShard(this, assembler.position, heading, nowMs));
+      assembler.recordShardFired(nowMs);
+    }
+  }
+
+  private spawnAssembler(nowMs: number): void {
+    // Reuses the Black Hole's own "not on top of a ship or the station"
+    // placement search - the same courtesy applies to something that's
+    // about to start dragging the field around.
+    this.assembler = new Assembler(this, this.pickBlackHoleSpawnPosition(), nowMs);
+    this.shakeCamera(EFFECTS.minorShake);
+    // It announces itself. Sinistar's whole reputation rests on the
+    // fact that it talked, and the voice is synthesized rather than
+    // sampled (systems/VoiceSynth.ts) so it's identical everywhere.
+    speakPhonemes(this, VOICE_LINES.assemblerSeed, getSfxVolume());
+  }
+
+  /** Drags nearby rocks in, reusing the Gravity Well's own force math - this is the same kind of pull, just gentler and with an appetite. */
+  private pullAsteroidsToAssembler(assembler: Assembler): void {
+    for (const asteroid of this.asteroids) {
+      if (!asteroid.isAlive) continue;
+      const force = computeGravityForce(
+        asteroid.position,
+        assembler.position,
+        ASSEMBLER.pullRadius,
+        // No event horizon of its own - its body radius is the inner
+        // cutoff, so a rock already touching it stops being pulled and
+        // is simply eaten by the collision instead.
+        ASSEMBLER.radius,
+        ASSEMBLER.pullForce,
+      );
+      if (force.x === 0 && force.y === 0) continue;
+      asteroid.visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
+    }
+  }
+
+  /** An absorbed rock: it feeds the build and leaves the field, which is the trade at the heart of this fight. */
+  private feedAssembler(asteroid: Asteroid): void {
+    const assembler = this.assembler;
+    if (!assembler || assembler.isActive) return;
+    this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
+    asteroid.destroy();
+    if (assembler.absorb()) {
+      // It just came alive.
+      this.shakeCamera(EFFECTS.majorShake);
+      speakPhonemes(this, VOICE_LINES.assemblerComplete, getSfxVolume());
+      this.showBossAnnouncement('THE ASSEMBLER');
+    }
+  }
+
+  /**
+   * Death, either way it can happen - killed while alive, or starved
+   * out before it ever woke up.
+   *
+   * Only a kill pays anything. Starving it out pays nothing at all, and
+   * deliberately so: the reward for denial is that you never had to
+   * fight it. (There's also no such thing as a *shot* that collapses an
+   * unfinished one - `takeHit` knocks plates off while assembling and
+   * can't reduce it past zero - so `killerSlotIndex` being present
+   * always implies `wasActive`.)
+   */
+  private collapseAssembler(nowMs: number, wasActive: boolean, killerSlotIndex?: number): void {
+    const assembler = this.assembler;
+    if (!assembler) return;
+    const position = assembler.position;
+
+    this.spawnBurst(position, wasActive ? COLORS.ufo : COLORS.asteroid, EFFECTS.ufoBurst);
+    this.shakeCamera(wasActive ? EFFECTS.majorShake : EFFECTS.minorShake);
+    if (wasActive) this.triggerSlowMo(nowMs);
+    // Two different endings deserve two different last words.
+    speakPhonemes(this, wasActive ? VOICE_LINES.assemblerKilled : VOICE_LINES.assemblerStarved, getSfxVolume());
+
+    if (wasActive) {
+      // Everything it ate comes back as scrap - the field's mass
+      // returning to the arena in a form the crew can actually use.
+      for (let i = 0; i < ASSEMBLER.scrapOnDeath; i += 1) {
+        this.fractureSwarm.push(new FractureSwarmBit(this, position, Math.random() * Math.PI * 2, nowMs));
+      }
+    }
+
+    if (killerSlotIndex !== undefined) {
+      this.awardScore(killerSlotIndex, ASSEMBLER.score, position);
+    }
+
+    assembler.destroy();
+    this.assembler = undefined;
+  }
+
+  private clearTerrain(): void {
+    this.wrecks.forEach((wreck) => wreck.destroy());
+    this.wrecks = [];
+  }
+
+  /**
+   * Lays out this stage's wreckage, keeping clear of every player spawn
+   * point and (in Cooperative) the space station - dropping a solid
+   * body on a respawn point or the one place a rescue has to reach
+   * would be a genuinely unfair way to lose a life.
+   */
+  private generateStageTerrain(): void {
+    if (Math.random() > TERRAIN.spawnChance) return;
+
+    const keepOuts: KeepOut[] = [];
+    for (let slot = 0; slot < 4; slot += 1) {
+      const offset = this.spawnOffsetFor(slot);
+      keepOuts.push({
+        position: { x: ARENA_WIDTH / 2 + offset.x, y: ARENA_HEIGHT / 2 + offset.y },
+        radius: SHIP.radius * 4,
+      });
+      const bossCorner = BOSS_RESPAWN_OFFSETS[slot]!;
+      keepOuts.push({
+        position: { x: ARENA_WIDTH / 2 + bossCorner.x, y: ARENA_HEIGHT / 2 + bossCorner.y },
+        radius: SHIP.radius * 4,
+      });
+    }
+    if (this.spaceStation) {
+      keepOuts.push({ position: this.spaceStation.position, radius: SPACE_STATION.dropOffRadius });
+    }
+
+    for (const placement of generateTerrain(ARENA_WIDTH, ARENA_HEIGHT, keepOuts, TERRAIN)) {
+      this.wrecks.push(new Wreck(this, placement.position, placement.radius, placement.shapeSeed));
+    }
+  }
+
+  private updateTethers(): void {
+    if (this.mode !== 'cooperative') return;
+
+    const living = this.players.filter((p) => p.ship.isAlive).map((p) => p.ship);
+
+    // Drop any tether whose ends died or drifted too far apart.
+    this.tethers = this.tethers.filter(({ a, b }) => {
+      if (!a.isAlive || !b.isAlive) return false;
+      return !shouldBreak(distanceBetween(a.position, b.position), TETHER);
+    });
+
+    // Form new ones between untethered ships flying close together.
+    const alreadyTethered = (ship: Ship): boolean =>
+      this.tethers.some(({ a, b }) => a === ship || b === ship);
+    for (let i = 0; i < living.length; i += 1) {
+      for (let j = i + 1; j < living.length; j += 1) {
+        const a = living[i]!;
+        const b = living[j]!;
+        // One tether per ship, so a crowded crew doesn't end up in a web
+        // that can't be flown out of.
+        if (alreadyTethered(a) || alreadyTethered(b)) continue;
+        if (shouldAttach(distanceBetween(a.position, b.position), TETHER)) {
+          this.tethers.push({ a, b });
+        }
+      }
+    }
+
+    for (const { a, b } of this.tethers) {
+      const force = computeTetherForce(a.position, b.position, TETHER);
+      if (force.x === 0 && force.y === 0) continue;
+      a.visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
+      b.visual.applyForce(new Phaser.Math.Vector2(-force.x, -force.y));
+    }
+
+    this.drawTethers();
+  }
+
+  /** A line per tether, brightening and thickening as it approaches breaking - so a pair can see the snap coming rather than just feeling it. */
+  private drawTethers(): void {
+    const g = (this.tetherGraphics ??= this.add.graphics());
+    g.clear();
+    for (const { a, b } of this.tethers) {
+      const tension = tetherTension(distanceBetween(a.position, b.position), TETHER);
+      g.lineStyle(1 + tension * 2.5, COLORS.shield, 0.25 + tension * 0.6);
+      g.beginPath();
+      g.moveTo(a.position.x, a.position.y);
+      g.lineTo(b.position.x, b.position.y);
+      g.strokePath();
+    }
+  }
+
   private updateUfos(deltaSeconds: number, nowMs: number): void {
     for (const ufo of this.ufos) {
       ufo.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
@@ -935,6 +1363,7 @@ export class GameScene extends Phaser.Scene {
       const lead = computeLeadAimHeading(ufo.position, target.ship.position, target.ship.velocity, UFO.shotSpeed);
       const heading = applyAimSpread(lead, UFO.aimSpreadRad);
       this.ufoShots.push(new UfoShot(this, ufo.position, heading, nowMs));
+      playUfoShotSfx(this, getSfxVolume());
       ufo.recordFired(nowMs);
     }
   }
@@ -958,6 +1387,7 @@ export class GameScene extends Phaser.Scene {
   /** One weapon discharge - one shot for the base weapon, up to 3 for Splitshot (see WeaponUpgrades.computeShotSpecs), all spawned from the same ship position/frame. One SHOT_SFX_KEY play per discharge, not per pellet - a Splitshot volley is one weapon firing, not three. */
   private fireProjectile(player: PlayerSlot, nowMs: number, shots: ShotSpec[]): void {
     this.sound.play(SHOT_SFX_KEY, { volume: getSfxVolume() });
+    this.stageShotsFired += shots.length; // per projectile, not per trigger-pull - fair accuracy for Splitshot
     for (const shot of shots) {
       this.projectiles.push(
         new Projectile(
@@ -1061,6 +1491,9 @@ export class GameScene extends Phaser.Scene {
     }
     const heading = baseHeadingRad + (Math.random() * 2 - 1) * (Math.PI / 4);
     this.ufos.push(new Ufo(this, x, y, heading));
+    // A UFO used to arrive in complete silence - the one hazard in the
+    // game that announces itself now does.
+    playUfoSpawnSfx(this, getSfxVolume());
   }
 
   private spawnBlackHole(nowMs: number): void {
@@ -1526,6 +1959,8 @@ export class GameScene extends Phaser.Scene {
       entityA instanceof FractureShard ? entityA : entityB instanceof FractureShard ? entityB : undefined;
     const cardinalPlasma =
       entityA instanceof CardinalPlasmaBall ? entityA : entityB instanceof CardinalPlasmaBall ? entityB : undefined;
+    const assembler = entityA instanceof Assembler ? entityA : entityB instanceof Assembler ? entityB : undefined;
+    const wreck = entityA instanceof Wreck ? entityA : entityB instanceof Wreck ? entityB : undefined;
 
     // Core and Fragment: shootable (CATEGORY.PROJECTILE) and now also
     // "behave like rocks," decided - CATEGORY.SHIP too, resolved via the
@@ -1557,6 +1992,38 @@ export class GameScene extends Phaser.Scene {
     // an asteroid that drifts into the Core or a Fragment is destroyed
     // whole (no split, no score - same precedent the Gravity Well's own
     // lethal center set), the boss takes no damage from it either way.
+    // Cover absorbs shots rather than bouncing them. A static body
+    // would otherwise ricochet them unpredictably, which reads as a
+    // bug rather than a mechanic - and "I can't shoot through that" is
+    // the entire point of putting it there.
+    if (projectile?.isAlive && wreck?.isAlive) {
+      if (!this.pendingWreckAbsorbs.includes(projectile)) this.pendingWreckAbsorbs.push(projectile);
+      return;
+    }
+
+    // The Assembler eats the field while it's still building; once it's
+    // alive the rocks stop mattering to it and simply bounce off (it's
+    // a sensor, so "bounce off" means pass through).
+    if (asteroid?.isAlive && assembler?.isAlive && !assembler.isActive) {
+      if (!this.pendingAssemblerFeed.includes(asteroid)) this.pendingAssemblerFeed.push(asteroid);
+      return;
+    }
+
+    // Ship contact behaves like every other boss body.
+    if (ship?.isAlive && assembler?.isAlive) {
+      if (!ship.isInvulnerable(nowMs) && !this.pendingShipHits.includes(ship)) {
+        this.pendingShipHits.push(ship);
+      }
+      return;
+    }
+
+    if (projectile?.isAlive && assembler?.isAlive) {
+      if (!this.pendingAssemblerHits.some((hit) => hit.projectile === projectile)) {
+        this.pendingAssemblerHits.push({ projectile });
+      }
+      return;
+    }
+
     if (asteroid?.isAlive && (fracture?.isAlive || fractureFragment?.isAlive)) {
       if (!this.pendingBossAsteroidHits.includes(asteroid)) {
         this.pendingBossAsteroidHits.push(asteroid);
@@ -1760,6 +2227,8 @@ export class GameScene extends Phaser.Scene {
     | FractureSwarmBit
     | FractureShard
     | CardinalPlasmaBall
+    | Assembler
+    | Wreck
     | undefined {
     const gameObject = body.gameObject as Phaser.GameObjects.GameObject | undefined;
     return gameObject?.getData('entity') as
@@ -1775,6 +2244,8 @@ export class GameScene extends Phaser.Scene {
       | FractureSwarmBit
       | FractureShard
       | CardinalPlasmaBall
+      | Assembler
+      | Wreck
       | undefined;
   }
 
@@ -1833,8 +2304,18 @@ export class GameScene extends Phaser.Scene {
     for (const ship of hits) {
       if (!ship.isAlive) continue;
 
+      // Any hit breaks the kill chain, decided - including one a Shield
+      // absorbs. The shield saves the ship, not the streak: letting a
+      // shielded player barge through hazards with an intact multiplier
+      // would make the safest way to play also the highest-scoring one,
+      // which is backwards.
+      const hitPlayer = this.players.find((p) => p.ship === ship);
+      if (hitPlayer) hitPlayer.combo = breakCombo();
+      this.stageHitsTaken += 1;
+
       if (ship.hasShield) {
         ship.consumeShield();
+        this.refreshAllPlayerHud();
         continue;
       }
 
@@ -1889,6 +2370,9 @@ export class GameScene extends Phaser.Scene {
    */
   private checkRoundOutcome(): void {
     if (this.state !== 'playing') return;
+    // Already inside the slow-mo beat of a round that's ending - the
+    // outcome is snapshotted, don't re-evaluate or double-resolve it.
+    if (this.deferredRoundEnd) return;
 
     // A full 4-slot array indexed by slotIndex, not `this.players.map()`
     // (which would be indexed by array position - wrong the moment any
@@ -1897,6 +2381,26 @@ export class GameScene extends Phaser.Scene {
     // right for round-outcome purposes - it was never in the fight.
     const outcome = evaluateRoundOutcome(this.aliveFlagsBySlot(), this.mode);
     if (outcome.status === 'continue') return;
+
+    // The blow that ends a round gets the slow-mo beat before the world
+    // actually freezes - otherwise the deciding moment is over before
+    // anyone sees it. triggerSlowMo() no-ops under prefers-reduced-motion,
+    // in which case this resolves on the very next frame instead.
+    const nowMs = this.time.now;
+    this.triggerSlowMo(nowMs);
+    this.deferredRoundEnd = { outcome, resolveAtMs: Math.max(nowMs, this.slowMoUntilMs) };
+  }
+
+  /** The actual round-end transition, split out of checkRoundOutcome() so the slow-mo beat above can defer it by a few hundred ms without duplicating any of it. */
+  private resolveRoundOutcome(outcome: ResolvedRoundOutcome): void {
+    // A demo that manages to lose just hands the screen back to the
+    // menu - no GAME OVER overlay waiting on a keypress nobody's there
+    // to press, no initials entry, and above all nothing submitted to a
+    // real leaderboard on a bot's behalf.
+    if (this.isDemo) {
+      this.goToMainMenu();
+      return;
+    }
 
     // The round is over - drop any respawns still in flight so a
     // just-eliminated player's earlier death doesn't pop a ghost ship
@@ -2206,6 +2710,7 @@ export class GameScene extends Phaser.Scene {
       stationPosition.y + jitterY,
       COLORS.players[slotIndex]!,
       false, // Cooperative-only - ship-vs-ship collision is always off here
+      player.hullId,
     );
     player.ship.grantInvulnerability(nowMs, SHIP.respawnInvulnerabilityMs);
   }
@@ -2228,6 +2733,7 @@ export class GameScene extends Phaser.Scene {
         ARENA_HEIGHT / 2 + offset.y,
         COLORS.players[slotIndex]!,
         this.mode === 'competitive',
+        player.hullId,
       );
       player.ship.grantInvulnerability(nowMs, SHIP.respawnInvulnerabilityMs);
     }
@@ -2298,10 +2804,10 @@ export class GameScene extends Phaser.Scene {
       const position = ufo.position;
       projectile?.destroy();
       ufo.destroy();
-      // No dedicated UFO-destruction SFX yet (docs/roadmap.md's one
-      // remaining SFX gap) - reusing the ship's own explosion since a
-      // downed UFO is a bigger deal than a regular asteroid.
-      this.sound.play(SHIP_DESTROYED_SFX_KEY, { volume: getSfxVolume() });
+      // Its own synthesized death, no longer the ship's explosion on
+      // loan - see systems/ProceduralSfx.ts for why these three are
+      // generated rather than bundled as assets.
+      playUfoDestroyedSfx(this, getSfxVolume());
       this.spawnBurst(position, COLORS.ufo, EFFECTS.ufoBurst);
       this.shakeCamera(EFFECTS.majorShake);
       if (awardScore && projectile) {
@@ -2388,6 +2894,7 @@ export class GameScene extends Phaser.Scene {
       // this fragment is still physically in fractureFragments until
       // update()'s cleanup runs later this same frame.
       if (this.fractureFragments.every((f) => !f.isAlive)) {
+        this.triggerSlowMo(nowMs); // the blow that ends the fight - see EFFECTS.slowMo
         this.beginScrapCountdown(nowMs);
       }
     }
@@ -2479,6 +2986,46 @@ export class GameScene extends Phaser.Scene {
    * ram - see the ship-contact branches in handleCollision()/
    * updateCardinalAttacks() this mirrors.
    */
+  /** Rocks the Assembler reached this frame - each one becomes a plate. */
+  private processPendingWreckAbsorbs(): void {
+    if (this.pendingWreckAbsorbs.length === 0) return;
+    const absorbed = this.pendingWreckAbsorbs;
+    this.pendingWreckAbsorbs = [];
+    for (const projectile of absorbed) {
+      if (projectile.isAlive) projectile.destroy();
+    }
+  }
+
+  private processPendingAssemblerFeed(): void {
+    if (this.pendingAssemblerFeed.length === 0) return;
+    const feed = this.pendingAssemblerFeed;
+    this.pendingAssemblerFeed = [];
+    for (const asteroid of feed) {
+      if (asteroid.isAlive) this.feedAssembler(asteroid);
+    }
+  }
+
+  /** Shots hitting it: plates knocked off while building, damage once alive - AssemblerBuild owns which. */
+  private processPendingAssemblerHits(nowMs: number): void {
+    if (this.pendingAssemblerHits.length === 0) return;
+    const hits = this.pendingAssemblerHits;
+    this.pendingAssemblerHits = [];
+    const assembler = this.assembler;
+    for (const { projectile } of hits) {
+      const wasActive = assembler?.isActive ?? false;
+      const ownerIndex = projectile.ownerIndex;
+      projectile.destroy();
+      if (!assembler?.isAlive) continue;
+
+      const killed = assembler.takeHit(nowMs, projectile.damage);
+      if (killed) {
+        this.collapseAssembler(nowMs, wasActive, ownerIndex);
+      } else {
+        this.spawnBurst(assembler.position, wasActive ? COLORS.ufo : COLORS.asteroid, EFFECTS.asteroidBurst);
+      }
+    }
+  }
+
   private processPendingBossAsteroidHits(): void {
     if (this.pendingBossAsteroidHits.length === 0) return;
     const hits = this.pendingBossAsteroidHits;
@@ -2535,6 +3082,7 @@ export class GameScene extends Phaser.Scene {
 
       this.spawnBurst(cardinal.position, COLORS.ufo, EFFECTS.ufoBurst);
       this.shakeCamera(EFFECTS.majorShake);
+      this.triggerSlowMo(nowMs); // the blow that ends the fight - see EFFECTS.slowMo
       this.awardScore(projectile.ownerIndex, CARDINAL.coreScore, cardinal.position);
     }
   }
@@ -2659,7 +3207,10 @@ export class GameScene extends Phaser.Scene {
     this.spawnBurst(position, COLORS.asteroid, EFFECTS.asteroidBurst);
     this.shakeCamera(EFFECTS.minorShake);
 
-    this.awardScore(projectile.ownerIndex, ASTEROID[size].score, position);
+    // DENSE FIELD pays double on rocks specifically (StageChoice's
+    // FIELD_MODIFIERS) - the reward half of its risk/reward trade.
+    const asteroidScore = Math.round(ASTEROID[size].score * this.fieldModifiers.asteroidScoreMultiplier);
+    this.awardScore(projectile.ownerIndex, asteroidScore, position);
 
     const childSize: AsteroidSize | null = nextAsteroidSize(size);
     if (childSize) {
@@ -2730,18 +3281,175 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * Attract mode's pilots (`systems/DemoBot.ts`). Every live hazard on
+   * screen is a candidate target, so the demo shoots at whatever the
+   * stage actually contains - rocks on a normal stage, the boss's own
+   * pieces on a boss stage - rather than only ever plinking asteroids.
+   */
+  private updateDemoBots(): void {
+    const targets: Vector2[] = [
+      ...this.asteroids.filter((a) => a.isAlive).map((a) => a.position),
+      ...this.ufos.filter((u) => u.isAlive).map((u) => u.position),
+      ...this.fractureFragments.filter((f) => f.isAlive).map((f) => f.position),
+    ];
+    if (this.fracture?.isAlive) targets.push(this.fracture.position);
+    if (this.cardinal?.isAlive) targets.push(this.cardinal.position);
+
+    this.players.forEach((player) => {
+      const input = player.input;
+      if (!(input instanceof AiInput) || !player.ship.isAlive) return;
+      const intent = computeBotIntent(player.ship.position, player.ship.heading, targets);
+      input.turnDirection = intent.turnDirection;
+      input.isThrusting = intent.isThrusting;
+      input.isFiring = intent.isFiring;
+    });
+  }
+
+  /**
+   * Ends the attract loop, either because somebody touched a control -
+   * the entire point of an attract screen is that it gets out of the way
+   * the instant a person shows up - or because the demo has run its
+   * course and it's the leaderboards' turn again. Returns true once it's
+   * handed off, so update() can stop touching a scene that's shutting
+   * down.
+   */
+  private checkDemoExit(nowMs: number): boolean {
+    const elapsed = nowMs - this.demoStartedAtMs;
+    if (!this.demoInputSeen && elapsed < ATTRACT_MODE.demoDurationMs) return false;
+    this.goToMainMenu();
+    return true;
+  }
+
+  /** The one piece of UI the demo adds - without it an attract loop just looks like a game already in progress that ignores you. */
+  private showDemoBanner(): void {
+    this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT - 60, 'ATTRACT MODE  -  PRESS ANY KEY', {
+        fontFamily: 'monospace',
+        fontSize: '22px',
+        fontStyle: 'bold',
+        color: toCssHex(COLORS.players[0]!),
+      })
+      .setOrigin(0.5, 0.5)
+      .setAlpha(0.75);
+  }
+
+  /**
+   * Arms the "somebody's here, stop demoing" listeners. One-shot
+   * listeners rather than polling every frame: a demo has no other
+   * reason to look at the keyboard at all, and `once` means a single
+   * flag flip instead of per-frame key scanning. Registered on every
+   * input route a person could plausibly touch first - key, pointer, or
+   * a gamepad button.
+   */
+  private armDemoExitListeners(): void {
+    const noticeInput = (): void => {
+      this.demoInputSeen = true;
+    };
+    this.input.keyboard?.once('keydown', noticeInput);
+    this.input.once('pointerdown', noticeInput);
+    this.input.gamepad?.once('down', noticeInput);
+  }
+
+  /**
+   * The 1979 Asteroids panic teleport (`HYPERSPACE` in GameConfig.ts):
+   * vanish, reappear somewhere uniformly random in the arena, and
+   * occasionally don't survive the trip. Velocity is deliberately
+   * **not** preserved - the whole point is that you come out of it
+   * stationary and disoriented, which is what makes it a real decision
+   * rather than a free dodge.
+   *
+   * A misjump feeds `pendingShipHits` rather than destroying the ship
+   * directly, so every mode-specific consequence (Cooperative ejects a
+   * Commander, Competitive/Single Player spend a life, a Shield absorbs
+   * it) comes along for free - see HYPERSPACE's own config comment for
+   * why a Shield saving you here is deliberate rather than an oversight.
+   */
+  private jumpHyperspace(player: PlayerSlot): void {
+    const ship = player.ship;
+    if (!ship.isAlive) return;
+
+    const origin = ship.position;
+    this.spawnBurst(origin, ship.color, EFFECTS.asteroidBurst);
+
+    const margin = HYPERSPACE.edgeMarginPx;
+    const destination = {
+      x: margin + Math.random() * (ARENA_WIDTH - margin * 2),
+      y: margin + Math.random() * (ARENA_HEIGHT - margin * 2),
+    };
+    ship.visual.setPosition(destination.x, destination.y);
+    ship.visual.setVelocity(0, 0);
+    this.spawnBurst(destination, ship.color, EFFECTS.asteroidBurst);
+    this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume: getSfxVolume() }); // no dedicated jump SFX yet - closest existing "something teleported/appeared" cue
+
+    if (Math.random() < HYPERSPACE.deathChance && !this.pendingShipHits.includes(ship)) {
+      this.pendingShipHits.push(ship);
+    }
+  }
+
+  /** Clears the per-stage tally behind the stage-clear rank - called wherever stageElapsedMs resets, since both measure the same window. */
+  private resetStageRankStats(): void {
+    this.stageShotsFired = 0;
+    this.stageShotsHit = 0;
+    this.stageHitsTaken = 0;
+  }
+
+  /** The stage's rank as of right now (systems/StageRank.ts) - crew-wide rather than per-player, so the stage-clear screen shows one letter instead of up to four competing ones. */
+  private currentStageRank(): StageRankResult {
+    return computeStageRank(
+      {
+        shotsFired: this.stageShotsFired,
+        shotsHit: this.stageShotsHit,
+        hitsTaken: this.stageHitsTaken,
+        elapsedMs: this.stageElapsedMs,
+      },
+      STAGE_RANK,
+    );
+  }
+
   /** Honors the OS "reduce motion" setting, same courtesy HyperOut's own screen shake already extends - decorative particle bursts aren't gated, only camera motion is. */
   private shakeCamera(config: { durationMs: number; intensity: number }): void {
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     this.cameras.main.shake(config.durationMs, config.intensity);
   }
 
+  /**
+   * Starts the EFFECTS.slowMo beat (see the top of update() for where it
+   * actually applies). Gated by "reduce motion" exactly like
+   * shakeCamera() above - a whole-screen time distortion is a stronger
+   * motion effect than the shake is, so if anything it's the more
+   * important of the two to honor. Leaves `slowMoUntilMs` in the past
+   * when gated, so callers that schedule work off it (checkRoundOutcome)
+   * simply resolve immediately instead of needing their own branch.
+   */
+  private triggerSlowMo(nowMs: number): void {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    this.slowMoUntilMs = nowMs + EFFECTS.slowMo.durationMs;
+  }
+
   /** `position` is where the hit landed - the score popup spawns there, in the scoring player's own HUD color. */
+  /**
+   * Every scoring kill in the game funnels through here, which is
+   * exactly why the kill chain hooks in at this one place rather than
+   * at each individual destruction site - an asteroid, a UFO, a
+   * Fracture tier and a Cardinal arm all count toward the same chain
+   * without any of them needing to know the chain exists.
+   *
+   * The popup shows the *awarded* (already multiplied) figure, so what
+   * floats off the wreck is what actually landed on the scoreboard.
+   */
   private awardScore(ownerIndex: number, amount: number, position: Vector2): void {
-    this.scores[ownerIndex] = (this.scores[ownerIndex] ?? 0) + amount;
+    const nowMs = this.time.now;
+    this.stageShotsHit += 1;
+    const scorer = this.players.find((p) => p.slotIndex === ownerIndex);
+    if (scorer) scorer.combo = registerKill(scorer.combo, nowMs, COMBO);
+    const multiplier = scorer ? comboMultiplier(scorer.combo, COMBO) : 1;
+    const awarded = amount * multiplier;
+
+    this.scores[ownerIndex] = (this.scores[ownerIndex] ?? 0) + awarded;
     this.refreshAllPlayerHud();
     const color = COLORS.players[ownerIndex] ?? COLORS.players[0];
-    this.scorePopups.push(new ScorePopup(this, position, color, amount, this.time.now));
+    this.scorePopups.push(new ScorePopup(this, position, color, awarded, nowMs));
   }
 
   /**
@@ -2766,6 +3474,12 @@ export class GameScene extends Phaser.Scene {
     this.players.forEach((player) => {
       const score = this.mode === 'competitive' ? (this.scores[player.slotIndex] ?? 0) : pooledScore;
       const lines = [`P${player.slotIndex + 1}`, `SCORE ${score}`];
+
+      // Kill chain, shown only while it's actually worth something -
+      // same "no line at all until it matters" rule SCRAP below already
+      // follows, so a player who isn't chaining sees no extra clutter.
+      const multiplier = comboMultiplier(player.combo, COMBO);
+      if (multiplier > 1) lines.push(`x${multiplier} COMBO`);
 
       if (this.mode === 'cooperative') {
         const status = this.cooperativeStatusLine(player);
@@ -2851,9 +3565,11 @@ export class GameScene extends Phaser.Scene {
 
   private enterShop(): void {
     this.state = 'shop';
+    this.stageChoiceOptions = this.stageChoicesForNextStage();
 
+    const rank = this.currentStageRank();
     const headlineText = this.add
-      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 220, 'STAGE CLEARED', {
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 220, `STAGE CLEARED   -   RANK ${rank.letter}`, {
         fontFamily: 'monospace',
         fontSize: '48px',
         fontStyle: 'bold',
@@ -2868,7 +3584,7 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const hintText = this.add
-      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + 230, 'TURN: select   FIRE: buy / toggle ready', {
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + 230, 'TURN: select   FIRE: buy / vote / toggle ready', {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#6a6a80',
@@ -2913,6 +3629,8 @@ export class GameScene extends Phaser.Scene {
         bg,
         headerText,
         rowTexts: [],
+        voteTexts: [],
+        voteLabelText: undefined,
         readyText: undefined,
       };
       this.refreshShopPanel(eliminatedPanel);
@@ -2928,8 +3646,33 @@ export class GameScene extends Phaser.Scene {
         })
         .setOrigin(0, 0.5),
     );
+    // One row per stage-choice option, directly under the upgrades -
+    // the crew votes on what's next from the same panel they're already
+    // navigating, rather than on a separate screen with its own input
+    // loop (docs/roadmap.md's light stage choice).
+    const voteLabelY = rowStartY + ALL_WEAPON_UPGRADE_IDS.length * SHOP_ROW_HEIGHT + 6;
+    const voteLabelText =
+      this.stageChoiceOptions.length > 0
+        ? this.add
+            .text(x, voteLabelY, '- VOTE: NEXT STAGE -', {
+              fontFamily: 'monospace',
+              fontSize: '14px',
+              color: '#6a6a80',
+            })
+            .setOrigin(0.5)
+        : undefined;
+    const voteStartY = voteLabelY + 26;
+    const voteTexts = this.stageChoiceOptions.map((_, i) =>
+      this.add
+        .text(x - SHOP_PANEL_WIDTH / 2 + 24, voteStartY + i * SHOP_ROW_HEIGHT, '', {
+          fontFamily: 'monospace',
+          fontSize: '15px',
+        })
+        .setOrigin(0, 0.5),
+    );
+
     const readyText = this.add
-      .text(x, rowStartY + ALL_WEAPON_UPGRADE_IDS.length * SHOP_ROW_HEIGHT + 14, '', {
+      .text(x, voteStartY + this.stageChoiceOptions.length * SHOP_ROW_HEIGHT + 14, '', {
         fontFamily: 'monospace',
         fontSize: '17px',
         fontStyle: 'bold',
@@ -2946,6 +3689,8 @@ export class GameScene extends Phaser.Scene {
       bg,
       headerText,
       rowTexts,
+      voteTexts,
+      voteLabelText,
       readyText,
     };
     this.refreshShopPanel(panel);
@@ -2965,7 +3710,7 @@ export class GameScene extends Phaser.Scene {
 
       const turn = input.turnDirection;
       if (turn !== 0 && panel.prevTurnDirection === 0) {
-        panel.cursor = nextShopCursor(panel.cursor, turn);
+        panel.cursor = nextShopRow(panel.cursor, turn, this.shopRowIds());
         this.refreshShopPanel(panel);
       }
       panel.prevTurnDirection = turn;
@@ -2974,8 +3719,13 @@ export class GameScene extends Phaser.Scene {
       if (firing && !panel.prevFiring) {
         if (panel.cursor === 'ready') {
           panel.ready = !panel.ready;
+        } else if (panel.cursor.startsWith('vote:')) {
+          // Radio-style: selecting a vote row replaces this player's
+          // previous vote rather than accumulating.
+          player.stageVote = panel.cursor.slice('vote:'.length) as StageChoiceId;
+          this.refreshAllShopPanels();
         } else {
-          this.purchaseWeaponUpgrade(player.slotIndex, panel.cursor);
+          this.purchaseWeaponUpgrade(player.slotIndex, panel.cursor as WeaponUpgradeId);
         }
         this.refreshShopPanel(panel);
       }
@@ -2984,6 +3734,66 @@ export class GameScene extends Phaser.Scene {
 
     const allReady = shop.panels.every((panel) => panel.eliminated || panel.ready);
     if (allReady) this.exitShopAndAdvance();
+  }
+
+  /** Stage-scaled asteroid count with this stage's chosen field flavor applied on top (StageChoice.FIELD_MODIFIERS). */
+  private modifiedAsteroidCount(): number {
+    const base = computeAsteroidSpawnCount(this.normalStageCount, this.players.length);
+    return Math.max(1, Math.round(base * this.fieldModifiers.asteroidCountMultiplier));
+  }
+
+  /** Same, for UFO cadence - a lower interval means they arrive more often. */
+  private modifiedUfoIntervalMs(): number {
+    const base = computeUfoSpawnIntervalMs(this.normalStageCount, this.players.length);
+    return Math.round(base * this.fieldModifiers.ufoIntervalMultiplier);
+  }
+
+  /** The full ordered row list a shop panel cursor cycles through: upgrades, then this transition's stage-choice votes, then READY. */
+  private shopRowIds(): string[] {
+    return [
+      ...ALL_WEAPON_UPGRADE_IDS,
+      ...this.stageChoiceOptions.map((option) => `vote:${option.id}`),
+      'ready',
+    ];
+  }
+
+  /**
+   * What's on offer at this stage transition. The normal/boss
+   * alternation still decides *which kind* of stage comes next (item
+   * 22) - this only decides its flavor, so `lastStageWasBoss` is read
+   * exactly the way beginNextLevel() reads it.
+   */
+  private stageChoicesForNextStage(): readonly StageChoiceOption[] {
+    return this.lastStageWasBoss ? FIELD_CHOICES : BOSS_CHOICES;
+  }
+
+  private refreshAllShopPanels(): void {
+    this.shop?.panels.forEach((panel) => this.refreshShopPanel(panel));
+  }
+
+  /**
+   * Turns the crew's votes into the next stage's flavor. Votes are
+   * gathered by slot index so `resolveStageVote`'s "lowest-numbered
+   * voter breaks a tie" rule means the actual P1-P4 ordering, not
+   * whatever order players happen to sit in `this.players`.
+   */
+  private resolveStageChoice(): void {
+    if (this.stageChoiceOptions.length === 0) return;
+    const votesBySlot: (StageChoiceId | undefined)[] = [0, 1, 2, 3].map(
+      (slot) => this.players.find((p) => p.slotIndex === slot)?.stageVote,
+    );
+    const winner = resolveStageVote(votesBySlot, this.stageChoiceOptions);
+
+    if (isFieldChoice(winner)) {
+      this.fieldModifiers = FIELD_MODIFIERS[winner];
+      this.chosenBoss = undefined;
+    } else {
+      this.chosenBoss = winner;
+      this.fieldModifiers = FIELD_MODIFIERS.standard;
+    }
+    this.players.forEach((player) => {
+      player.stageVote = undefined;
+    });
   }
 
   private refreshShopPanel(panel: ShopPanel): void {
@@ -3009,6 +3819,21 @@ export class GameScene extends Phaser.Scene {
       text.setColor(owned ? toCssHex(COLORS.scrap) : affordable ? (selected ? toCssHex(COLORS.players[panel.slotIndex]!) : '#dfe1ef') : '#5a5a6e');
     });
 
+    this.stageChoiceOptions.forEach((option, i) => {
+      const text = panel.voteTexts[i];
+      if (!text) return;
+      const rowId = `vote:${option.id}`;
+      const selected = panel.cursor === rowId;
+      const votedForThis = player.stageVote === option.id;
+      // A filled marker is this player's own vote; the count after it is
+      // the whole crew's, so everyone can see the vote forming.
+      const votes = this.players.filter((p) => p.stageVote === option.id).length;
+      const marker = selected ? '>' : ' ';
+      const chosen = votedForThis ? '*' : ' ';
+      text.setText(`${marker}${chosen}${option.label.padEnd(14)}${votes > 0 ? votes : ''}`);
+      text.setColor(votedForThis ? toCssHex(COLORS.players[panel.slotIndex]!) : selected ? '#dfe1ef' : '#6a6a80');
+    });
+
     if (panel.readyText) {
       const readySelected = panel.cursor === 'ready';
       panel.readyText.setText(panel.ready ? 'READY' : readySelected ? '> READY? <' : 'READY?');
@@ -3017,6 +3842,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private exitShopAndAdvance(): void {
+    this.resolveStageChoice();
     this.exitShop();
     this.beginNextLevel();
   }
@@ -3031,6 +3857,8 @@ export class GameScene extends Phaser.Scene {
       panel.bg.destroy();
       panel.headerText.destroy();
       panel.rowTexts.forEach((text) => text.destroy());
+      panel.voteTexts.forEach((text) => text.destroy());
+      panel.voteLabelText?.destroy();
       panel.readyText?.destroy();
     });
     this.shop = undefined;
@@ -3050,7 +3878,12 @@ export class GameScene extends Phaser.Scene {
     this.hideOverlay();
     if (!this.lastStageWasBoss) {
       this.lastStageWasBoss = true;
-      this.beginBossAnnouncement(this.pickRandomBoss());
+      // The crew's own pick if they made one, otherwise the original
+      // coin flip - which still covers the very first transition of a
+      // round, before any shop has been seen.
+      const boss = this.chosenBoss === 'fracture' ? 'fracture' : this.chosenBoss === 'cardinal' ? 'cardinal' : this.pickRandomBoss();
+      this.chosenBoss = undefined;
+      this.beginBossAnnouncement(boss);
       return;
     }
     this.lastStageWasBoss = false;
@@ -3058,9 +3891,10 @@ export class GameScene extends Phaser.Scene {
     this.state = 'playing';
     this.matter.world.resume();
     this.stageElapsedMs = 0;
+    this.resetStageRankStats();
     this.playStageMusic(GAMEPLAY_MUSIC_KEY);
     this.resetStageHazards(this.time.now, false);
-    this.spawnWave(computeAsteroidSpawnCount(this.normalStageCount));
+    this.spawnWave(this.modifiedAsteroidCount());
   }
 
   /**
@@ -3114,6 +3948,13 @@ export class GameScene extends Phaser.Scene {
    */
   private resetStageHazards(nowMs: number, isBossStageStart: boolean): void {
     this.asteroids = [];
+    // Terrain is per-stage: cleared here, and regenerated below for a
+    // normal stage only. A boss fight keeps the arena empty - both
+    // bosses are built around open space (a rotating laser cross and a
+    // thing that drifts to center), and cover would quietly undermine
+    // fights that were designed and tuned without it.
+    this.clearTerrain();
+    if (!isBossStageStart) this.generateStageTerrain();
     if (this.blackHole) this.despawnBlackHole(nowMs);
     // "Not before 2 min into any stage," decided - stageElapsedMs resets
     // to 0 right after this call (beginNextLevel()/materializeFracture()/
@@ -3137,6 +3978,7 @@ export class GameScene extends Phaser.Scene {
         ARENA_HEIGHT / 2 + offset.y,
         COLORS.players[player.slotIndex]!,
         this.mode === 'competitive',
+        player.hullId,
       );
       const invulnerabilityMs = isBossStageStart ? BOSS_STAGE_START.invulnerabilityMs : SHIP.respawnInvulnerabilityMs;
       player.ship.grantInvulnerability(nowMs, invulnerabilityMs);
@@ -3209,6 +4051,7 @@ export class GameScene extends Phaser.Scene {
     this.state = 'playing';
     this.matter.world.resume();
     this.stageElapsedMs = 0;
+    this.resetStageRankStats();
     this.playStageMusic(FRACTURE_MUSIC_KEY);
     const nowMs = this.time.now;
     this.resetStageHazards(nowMs, true);
@@ -3227,6 +4070,7 @@ export class GameScene extends Phaser.Scene {
     this.state = 'playing';
     this.matter.world.resume();
     this.stageElapsedMs = 0;
+    this.resetStageRankStats();
     this.playStageMusic(CARDINAL_MUSIC_KEY);
     const nowMs = this.time.now;
     this.resetStageHazards(nowMs, true);
