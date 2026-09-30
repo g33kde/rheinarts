@@ -129,7 +129,6 @@ import {
 import { applyShotHeat, decayHeat, INITIAL_HEAT_STATE, isOverheated, type HeatState } from '../systems/WeaponHeat';
 import { purchaseUpgrade } from '../systems/WeaponShop';
 import { toCssHex } from '../utilities/Color';
-import { formatStageTimer } from '../utilities/StageTimer';
 import { fromAngle, normalize, type Vector2 } from '../utilities/Vector2';
 import type { MatterGameObject } from '../entities/MatterGameObject';
 
@@ -457,15 +456,23 @@ export class GameScene extends Phaser.Scene {
   // to fall instead, updated at every Cooperative elimination site
   // (processCommanderExpiry, processPendingCommanderHazardHits).
   private lastEliminatedSlotIndex: number | undefined;
-  // Dev-only stage timer - "add a timer during stages on the top center
-  // screen, shows minutes, seconds, milliseconds of current stage,
-  // resets every stage," decided; roadmap.md flags this for removal
-  // before the final version. Accumulated only while `state === 'playing'`
-  // (see update()'s early-return above this point) rather than read off
+  // Time spent actually playing the current stage.
+  //
+  // This started life as a dev-only on-screen timer, which roadmap.md
+  // flagged for removal before release - and the display is indeed gone
+  // now. **The accumulator itself deliberately stays**: three systems
+  // grew to depend on it after that removal note was written, and
+  // deleting it (as the note literally instructed) would silently break
+  // all three - the Gravity Well's spawn gate
+  // (BLACK_HOLE.minStageElapsedMs), The Assembler's
+  // (ASSEMBLER.minStageElapsedMs), and the stage-clear rank's own
+  // elapsed-time component (systems/StageRank.ts).
+  //
+  // Accumulated only while `state === 'playing'` rather than read off
   // wall-clock `this.time.now`, so it pauses for free across every
   // non-playing state (paused, stageClear, bossAnnouncement,
-  // enteringInitials, gameOver) without needing to track a separate
-  // "when did we last resume" timestamp.
+  // enteringInitials, gameOver) without tracking a separate "when did
+  // we last resume" timestamp.
   private stageElapsedMs = 0;
   // Per-stage performance tally behind the stage-clear rank
   // (systems/StageRank.ts). Reset wherever stageElapsedMs is, since
@@ -473,7 +480,6 @@ export class GameScene extends Phaser.Scene {
   private stageShotsFired = 0;
   private stageShotsHit = 0;
   private stageHitsTaken = 0;
-  private stageTimerText: Phaser.GameObjects.Text | undefined;
   // Whichever track is currently looping for the *current* stage -
   // `GAMEPLAY_MUSIC_KEY` for a normal stage, a boss's own key
   // (`FRACTURE_MUSIC_KEY` today) once its announcement lands. Tracked
@@ -677,17 +683,6 @@ export class GameScene extends Phaser.Scene {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#9a9ab0',
-      })
-      .setOrigin(0.5, 0);
-
-    // Dev-only, see `stageElapsedMs`'s own comment - sits just below the
-    // mode label rather than sharing its line, so neither ever has to
-    // fight the other for center-x space.
-    this.stageTimerText = this.add
-      .text(ARENA_WIDTH / 2, 26, formatStageTimer(this.stageElapsedMs), {
-        fontFamily: 'monospace',
-        fontSize: '14px',
-        color: '#6a6a80',
       })
       .setOrigin(0.5, 0);
 
@@ -896,7 +891,6 @@ export class GameScene extends Phaser.Scene {
     if (this.state !== 'playing') return;
 
     this.stageElapsedMs += deltaMs;
-    this.stageTimerText?.setText(formatStageTimer(this.stageElapsedMs));
 
     // Must run before this frame's per-entity update() calls below, not
     // just before next frame - Ship.update() re-clamps/re-sets velocity

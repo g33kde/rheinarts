@@ -7,6 +7,20 @@ starting work, then check `docs/roadmap.md` for the next planned item.
 Add a new entry — newest at the top — whenever you complete a feature or
 milestone, same convention as Godspeed's `CHANGELOG.md`.
 
+## Releases
+
+Entries below are dated rather than versioned, since they're written per
+milestone rather than per release. This index maps them onto the tags:
+
+| Version | Tag | Covers |
+| --- | --- | --- |
+| **2.0.0** | *unreleased* | The four entries from "Sprint 1" up to "The game gets a voice" — roadmap items 29-42, plus the dev-timer removal. Built and merged; **not yet tuned** (see the roadmap's own note). |
+| **1.0.0** | `debris-v1.0.0` | Everything from "Stage-scaled asteroid/UFO counts" (2026-09-21) backwards — roadmap items 1-28, the complete v1 scope. |
+
+**Scores do not carry across the boundary**: v2 adds a kill chain that
+multiplies score up to 8x, so a v1 leaderboard entry and a v2 one are
+not comparable. Decide how to handle that before tagging 2.0.0.
+
 ---
 
 ## 2026-09-30 — The game gets a voice

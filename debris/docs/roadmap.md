@@ -1,7 +1,16 @@
 # Roadmap
 
-Nothing here is built yet — this is the plan, not a status report. Update
-checkboxes as work actually lands, same convention as Godspeed's roadmap.
+Update checkboxes as work actually lands, same convention as Godspeed's
+roadmap. (This file opened with "nothing here is built yet" for a long
+time; that stopped being true somewhere around item 13 and is now
+comprehensively false - both scopes below are complete.)
+
+**Where things stand**: v1 scope (items 1-28) shipped and is frozen at
+the `debris-v1.0.0` tag. v2 scope (items 29-42) is built and merged but
+**not yet tuned** - roughly forty constants across it are marked
+"starting guess, not playtested", and each feature was verified in
+isolation rather than in combination. That tuning pass is the remaining
+work before a `debris-v2.0.0` tag.
 
 ## v1 scope
 
@@ -659,6 +668,26 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     transitions and confirmed the actual spawned count at each stage
     matches the proposed table exactly, not just the unit tests in
     isolation.
+## v2 scope
+
+The twelve "v2 candidates" plus the voice synthesizer, built across
+three sprints:
+
+- **Sprint 1** (29-34) - crew-size spawn scaling, Commander thruster
+  puff, hyperspace, slow-motion, UFO sound effects, attract mode.
+- **Sprint 2** (35-38) - combo multiplier, stage rank, crew-role hulls,
+  light stage choice.
+- **Sprint 3** (39-41) - ship-to-ship tether, The Assembler, arena
+  terrain.
+- **Then** (42) - the game's procedural voice, which is also what
+  retired item 40's "it does not taunt" caveat.
+
+These came out of a "how do we take Debris to the next level" pass,
+weighted by `docs/vision.md`'s own stated main driver (*"that rescue is
+the game's main hook"*) rather than by raw content volume. All merged;
+see the note at the top of this file about tuning still being
+outstanding.
+
 29. [x] Crew-size spawn scaling - four players used to fight exactly the
     same field as one, so every mode quietly got easier the more people
     joined. `CREW_SCALING.perExtraPlayer` (0.4) scales both the asteroid
@@ -847,27 +876,6 @@ checkboxes as work actually lands, same convention as Godspeed's roadmap.
     formant-structured output and by rendering a spectrogram showing
     the formants actually moving across an utterance - **but not by
     ear**, which is the one check this environment can't do.
-
-## v2 candidates — all shipped
-
-This list held twelve scoped-but-unbuilt candidates from a "how do we
-take Debris to the next level" pass, weighted by `docs/vision.md`'s own
-stated main driver (*"that rescue is the game's main hook"*) rather than
-by raw content volume. **All twelve have since landed**, across three
-sprints:
-
-- **Sprint 1** (items 29-34) - crew-size spawn scaling, Commander
-  thruster puff, hyperspace, slow-motion, UFO sound effects, attract
-  mode.
-- **Sprint 2** (items 35-38) - combo multiplier, stage rank, crew-role
-  hulls, light stage choice.
-- **Sprint 3** (items 39-41) - ship-to-ship tether, The Assembler,
-  arena terrain.
-
-Nothing remains here. The unbuilt work now lives entirely in "Future
-ideas" below (The Chaos Meter, the rest of the enemy roster, the
-Salvage Engines tree, Debris Delivery) and in "Explicitly deferred past
-v1".
 
 ## Future ideas
 
@@ -1615,11 +1623,17 @@ extraction zone, under real pressure the whole way there.
 
 ## Not yet started
 
-- **Remove the dev stage timer before the final version** — explicit
-  instruction from whoever requested item 21 above. The top-center
-  `MM:SS.mmm` display is a dev aid only, never intended to ship;
-  removing it means deleting `GameScene`'s `stageElapsedMs`/
-  `stageTimerText` fields, the three reset sites, the `update()` accumulate-
-  and-render lines, the `formatStageTimer` import, and (unless something
-  else starts using it by then) `utilities/StageTimer.ts` +
-  `tests/stageTimer.test.ts` themselves.
+Nothing. The one entry that lived here - removing the dev stage timer
+before release - is **done**, as part of the v2.0 release prep.
+
+Worth recording how, because that entry's own instructions had gone
+stale and following them literally would have broken three systems: it
+said to delete `GameScene.stageElapsedMs`, but between the note being
+written and the removal happening, that accumulator became load-bearing
+for the Gravity Well's spawn gate (`BLACK_HOLE.minStageElapsedMs`), The
+Assembler's (`ASSEMBLER.minStageElapsedMs`) and the stage-clear rank's
+elapsed-time component. What was actually removed was the *display* -
+`stageTimerText`, its per-frame render, the `formatStageTimer` import,
+and `utilities/StageTimer.ts` with its test. The accumulator stays, and
+its doc comment now explains why so nobody deletes it on a later
+reading of the same instruction.
