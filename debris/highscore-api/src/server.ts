@@ -4,6 +4,7 @@ import {
   insertEntry,
   isValidInitials,
   isValidMode,
+  parseMajorVersion,
   isValidScore,
   MAX_ENTRIES,
   normalizeInitials,
@@ -53,12 +54,18 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 }
 
 async function handleGetHighScores(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const mode = new URL(req.url ?? '', 'http://localhost').searchParams.get('mode');
+  const query = new URL(req.url ?? '', 'http://localhost').searchParams;
+  const mode = query.get('mode');
+  // Boards are kept per *major* game version: v2's kill chain multiplies
+  // scores up to 8x, so a v1 and a v2 run are not comparable and must
+  // not share a top ten. Unversioned requests fall back to v1, which is
+  // exactly what already-deployed clients send.
+  const majorVersion = parseMajorVersion(query.get('version'));
   if (!isValidMode(mode)) {
     sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive' });
     return;
   }
-  const entries = await loadEntries(filePathForMode(FILE_PATH, mode));
+  const entries = await loadEntries(filePathForMode(FILE_PATH, mode, majorVersion));
   sendJson(res, 200, entries);
 }
 
@@ -74,6 +81,7 @@ async function handlePostHighScores(req: IncomingMessage, res: ServerResponse): 
   const initialsRaw = (body as { initials?: unknown } | null)?.initials;
   const score = (body as { score?: unknown } | null)?.score;
   const mode = (body as { mode?: unknown } | null)?.mode;
+  const majorVersion = parseMajorVersion((body as { version?: unknown } | null)?.version);
 
   if (!isValidMode(mode)) {
     sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive' });
@@ -93,7 +101,7 @@ async function handlePostHighScores(req: IncomingMessage, res: ServerResponse): 
     return;
   }
 
-  const filePath = filePathForMode(FILE_PATH, mode);
+  const filePath = filePathForMode(FILE_PATH, mode, majorVersion);
   const entries = await loadEntries(filePath);
   const entry: LeaderboardEntry = { initials, score };
 

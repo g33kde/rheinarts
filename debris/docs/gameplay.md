@@ -452,6 +452,14 @@ scrap.
 
 ## Global high scores
 
+**Boards are kept separate per major game version.** v2's kill chain
+multiplies scores by up to 8x, so a v1 run and a v2 run simply aren't
+comparable - sharing one top ten would bury every pre-2.0 score
+permanently. The client sends its `LEADERBOARD_VERSION` with every read
+and write, and the API stores one file per version per mode. Nothing is
+deleted or migrated: the v1 files keep the exact paths they already
+have on disk, and v2 writes alongside them.
+
 Server-side (`debris-highscore-api`, Rhein Arts' first backend service),
 so it survives a browser change or a server restart, unlike the
 `localStorage`-based personal best Single Player's board originally

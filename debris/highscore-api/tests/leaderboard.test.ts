@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filePathForMode,
+  parseMajorVersion,
   insertEntry,
   isValidInitials,
   isValidMode,
@@ -132,5 +133,76 @@ describe('filePathForMode', () => {
     expect(filePathForMode('./data/debris-highscores', 'cooperative')).toBe(
       './data/debris-highscores-cooperative.json',
     );
+  });
+});
+
+describe('filePathForMode - version separation', () => {
+  const base = './data/debris-highscores.json';
+
+  it('leaves every v1 path byte-identical to the pre-versioning behaviour', () => {
+    // The whole point: the live v1 boards must not need migrating.
+    expect(filePathForMode(base, 'singlePlayer', 1)).toBe(base);
+    expect(filePathForMode(base, 'cooperative', 1)).toBe('./data/debris-highscores-cooperative.json');
+    expect(filePathForMode(base, 'competitive', 1)).toBe('./data/debris-highscores-competitive.json');
+  });
+
+  it('defaults to v1 when no version is given, matching already-deployed clients', () => {
+    expect(filePathForMode(base, 'singlePlayer')).toBe(filePathForMode(base, 'singlePlayer', 1));
+    expect(filePathForMode(base, 'cooperative')).toBe(filePathForMode(base, 'cooperative', 1));
+  });
+
+  it('gives v2 its own file per mode', () => {
+    expect(filePathForMode(base, 'singlePlayer', 2)).toBe('./data/debris-highscores-v2.json');
+    expect(filePathForMode(base, 'cooperative', 2)).toBe('./data/debris-highscores-cooperative-v2.json');
+    expect(filePathForMode(base, 'competitive', 2)).toBe('./data/debris-highscores-competitive-v2.json');
+  });
+
+  it('never collides a v1 and v2 board for the same mode', () => {
+    for (const mode of ['singlePlayer', 'cooperative', 'competitive'] as const) {
+      expect(filePathForMode(base, mode, 1)).not.toBe(filePathForMode(base, mode, 2));
+    }
+  });
+
+  it('still works when the base path has no .json extension', () => {
+    expect(filePathForMode('./data/scores', 'cooperative', 2)).toBe('./data/scores-cooperative-v2.json');
+  });
+});
+
+describe('parseMajorVersion', () => {
+  it('defaults to 1 for anything missing', () => {
+    expect(parseMajorVersion(undefined)).toBe(1);
+    expect(parseMajorVersion(null)).toBe(1);
+    expect(parseMajorVersion('')).toBe(1);
+  });
+
+  it('accepts small positive integers, as string or number', () => {
+    expect(parseMajorVersion('2')).toBe(2);
+    expect(parseMajorVersion(2)).toBe(2);
+    expect(parseMajorVersion('17')).toBe(17);
+  });
+
+  it('refuses anything that could escape into a file path', () => {
+    // This value is interpolated into a filename, so these must all
+    // collapse to the safe default rather than being passed through.
+    for (const hostile of [
+      '../../etc/passwd',
+      '1/../../secret',
+      '2; rm -rf /',
+      'v2',
+      '1.0',
+      '-1',
+      '1e3',
+      '٢',
+      '2\n../x',
+      {},
+      [],
+    ]) {
+      expect(parseMajorVersion(hostile)).toBe(1);
+    }
+  });
+
+  it('rejects out-of-range values rather than trusting them', () => {
+    expect(parseMajorVersion('0')).toBe(1);
+    expect(parseMajorVersion('100')).toBe(1);
   });
 });

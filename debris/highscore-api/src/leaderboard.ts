@@ -75,9 +75,31 @@ export function isValidMode(value: unknown): value is Mode {
  * exists in production. Cooperative/Competitive get sibling files next
  * to it instead of new env vars/PVC mounts to configure.
  */
-export function filePathForMode(basePath: string, mode: Mode): string {
-  if (mode === 'singlePlayer') return basePath;
+export function filePathForMode(basePath: string, mode: Mode, majorVersion = 1): string {
   const ext = '.json';
-  const base = basePath.endsWith(ext) ? basePath.slice(0, -ext.length) : basePath;
-  return `${base}-${mode}${ext}`;
+  const stem = basePath.endsWith(ext) ? basePath.slice(0, -ext.length) : basePath;
+  const modePart = mode === 'singlePlayer' ? '' : `-${mode}`;
+  // v1 keeps every path exactly as it already is on disk, so the
+  // existing live boards need no migration - same reasoning that kept
+  // singlePlayer on the bare basePath when per-mode files were added.
+  const versionPart = majorVersion <= 1 ? '' : `-v${majorVersion}`;
+  if (!modePart && !versionPart) return basePath;
+  return `${stem}${modePart}${versionPart}${ext}`;
+}
+
+/**
+ * Parses a client-supplied major version.
+ *
+ * **This value reaches a filesystem path**, so it is validated to a
+ * small positive integer rather than merely coerced - a string like
+ * `../../etc` or `1;rm` must never survive this function. Anything
+ * missing or unparseable falls back to 1, which is both the pre-
+ * versioning behaviour and the safest default.
+ */
+export function parseMajorVersion(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === '') return 1;
+  const text = String(raw);
+  if (!/^[0-9]{1,2}$/.test(text)) return 1;
+  const value = Number(text);
+  return value >= 1 && value <= 99 ? value : 1;
 }

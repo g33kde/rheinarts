@@ -23,6 +23,40 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-09-30 — Leaderboards split per major version
+
+Resolves the one v2 issue that touched live data. v2's kill chain
+multiplies scores by up to 8x, so every v1 leaderboard entry would have
+been buried permanently the moment 2.0 shipped - the top ten would
+quietly have become "everyone who played after the update". **Decided:
+keep a separate board per major version**, so both stay meaningful and
+nothing is deleted.
+
+`filePathForMode` now takes a major version, and **every v1 path is
+byte-identical to what it was** - the live boards need no migration at
+all. That's the same reasoning that kept `singlePlayer` on the bare
+base path when per-mode boards were first added. v2 writes alongside:
+`debris-highscores-v2.json`, `debris-highscores-cooperative-v2.json`
+and so on, in the same directory the backup job already covers.
+
+The client sends `LEADERBOARD_VERSION` (a hand-maintained constant, not
+read from package.json - it must change only on a *major* release, not
+follow patch bumps) on both reads and writes. A request without a
+version falls back to v1, which is exactly what already-deployed
+clients send, so an un-updated cabinet keeps talking to the board it
+always did.
+
+**The version reaches a filesystem path**, so `parseMajorVersion`
+validates it to a one-or-two-digit integer in 1-99 rather than merely
+coercing it; anything else collapses to 1. Tested against `../../etc/
+passwd`, `2; rm -rf /`, `1/../../secret` and friends, and verified
+end-to-end against a running server that a hostile value creates no
+file outside the data directory.
+
+Also verified end-to-end that a 40,000-point v2 score and a
+5,000-point v1 score land in different files and neither board can see
+the other.
+
 ## 2026-09-30 — The game gets a voice
 
 Requested directly after the Sprint 3 write-up noted The Assembler

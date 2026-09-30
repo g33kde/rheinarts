@@ -24,9 +24,25 @@ export const MAX_LEADERBOARD_ENTRIES = 10;
 
 const HIGHSCORES_URL = '/api/debris/highscores';
 
+/**
+ * Which leaderboard generation this build writes to and reads from.
+ *
+ * Boards are kept separate per *major* game version because v2's kill
+ * chain multiplies scores by up to 8x - a v1 run and a v2 run are not
+ * comparable, and sharing a top ten would bury every pre-2.0 score
+ * permanently. Keeping them apart means both stay meaningful and
+ * nothing is deleted.
+ *
+ * Deliberately a hand-maintained constant rather than something read
+ * out of package.json: it must change only on a *major* release, not
+ * follow every patch bump, and the server stores one file per value of
+ * it. Bump this in the same commit that bumps the major version.
+ */
+export const LEADERBOARD_VERSION = 2;
+
 export async function fetchLeaderboard(mode: GameMode): Promise<LeaderboardEntry[]> {
   try {
-    const response = await fetch(`${HIGHSCORES_URL}?mode=${mode}`);
+    const response = await fetch(`${HIGHSCORES_URL}?mode=${mode}&version=${LEADERBOARD_VERSION}`);
     if (!response.ok) return [];
     const parsed: unknown = await response.json();
     return Array.isArray(parsed) ? (parsed as LeaderboardEntry[]) : [];
@@ -44,7 +60,7 @@ export async function submitHighScore(
     const response = await fetch(HIGHSCORES_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initials, score, mode }),
+      body: JSON.stringify({ initials, score, mode, version: LEADERBOARD_VERSION }),
     });
     if (!response.ok) return { accepted: false, highscores: [] };
     const parsed = (await response.json()) as { accepted: boolean; highscores: LeaderboardEntry[] };
