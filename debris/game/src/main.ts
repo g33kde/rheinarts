@@ -6,6 +6,7 @@ import { HighScoreScene } from './scenes/HighScoreScene';
 import { MenuScene } from './scenes/MenuScene';
 import { SplashScene } from './scenes/SplashScene';
 import { patchPhaserGamepadHoleBug } from './systems/PhaserGamepadPatch';
+import { mountTuningPanel } from './systems/TuningPanel';
 
 // Must run before the Game instance (and therefore any Scene's own
 // GamepadPlugin) is created - see PhaserGamepadPatch.ts for the crash this
@@ -39,3 +40,9 @@ new Phaser.Game({
   },
   scene: [BootScene, SplashScene, MenuScene, GameScene, HighScoreScene],
 });
+
+// Dev-only balance overlay for the v2 tuning pass - a no-op unless the
+// page is loaded with `?tune=1`, so it can never appear in normal play.
+// See systems/TuningPanel.ts, including its note about reviewing this
+// before the 2.0.0 tag.
+mountTuningPanel();
