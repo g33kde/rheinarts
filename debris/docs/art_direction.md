@@ -115,6 +115,36 @@ hull itself, above, is completely unchanged:
   - the confirmed look here is the plain outlined hull plus the surface
     detail above, no glow.
 
+### Three hulls, three silhouettes
+
+The v2.0 hull picker (`HULLS` in `GameConfig.ts`) gave players a real
+choice between an Interceptor, a Gunship and a Rescue - but all three
+flew the one path above, so the choice was invisible. Each hull now
+carries its own `path`, `rearNotch` and `detail` block, chosen from a
+live-rendered mockup sheet showing every hull thrusting at 6x, at true
+22px, and wearing the shield rings it can actually hold:
+
+- **Interceptor** - unchanged, the 8-point swept-wing fighter above.
+  Reads as fast because it's long and narrow.
+- **Gunship** - 14 points, blunt and wide, with two forward prongs that
+  end in muzzle bores (rings at `[0.72, +/-0.24]`). Rear notch at
+  `[-0.36, 0]`. A gun platform, not a fighter: the canopy sits well
+  back at `[0.16, 0]` rather than up at the nose.
+- **Rescue** - 15 points, a stubby hauler with side pods (pod-face rings
+  at `[-0.16, +/-0.56]`) and a deep rear notch at `[-0.44, 0]`. Reads as
+  a tug: heavy, blunt-nosed, nothing swept.
+
+Two rejected passes worth recording, both caught by rendering the sheet
+rather than by reading the coordinates: a first Rescue that read as a
+tuning fork, and a second whose outline collided with the Gunship's at
+true size - the side pods are what finally separates them at 22px.
+
+The flame is still one triangle in one warm orange, now drawn from
+whichever `rearNotch` the hull declares, and the surface detail is still
+additive low-alpha linework in the player's color - only the
+coordinates moved into the hull data, because the hand-placed
+Interceptor canopy would have sat through a wing on the other two.
+
 ## Background: "Twin Planets," decided
 
 **Lives on the play field (`GameScene`), not the menu.** Originally
@@ -480,8 +510,15 @@ treatment mentioned above is now built (`docs/roadmap.md` item 12) — a
 viewport-level overlay (`debris/game/index.html`'s `.crt` div), so it
 applies here on the menu too, not just the play field.
 
-- **4 player-status cards**, one per slot, each showing a small
-  Interceptor-hull icon (see ship section above) in that player's color.
+- **4 player-status cards**, one per slot, each showing a small icon of
+  *that slot's selected hull* (see ship section above) in that player's
+  color, redrawn whenever the player cycles the picker - the card
+  previews what you'll actually fly. Two concessions to the ~60px icon:
+  each hull is scaled to a common 30px half-extent rather than a shared
+  constant (the hull paths are normalized differently, so one scale drew
+  the stubby two as blobs beside the Interceptor), and only the canopy
+  of the surface detail is drawn - the panel lines and muzzle bores are
+  sub-pixel here and read as dirt.
   **P1 and P2 each have a source toggle** (keyboard ⇄ gamepad, defaulting
   to keyboard) — the one place this screen is a control the player sets,
   not just a status display. **P3/P4 have no toggle**, gamepad-only per

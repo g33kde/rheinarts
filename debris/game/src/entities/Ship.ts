@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { SHIP, SHIP_HULL, SHIP_HULL_SCALE, COLORS, HULLS, type HullId, type HullStats } from '../config/GameConfig';
+import { SHIP, SHIP_HULL_SCALE, COLORS, HULLS, type HullId, type HullStats } from '../config/GameConfig';
 import { CATEGORY } from '../systems/CollisionCategories';
 import { clampSpeed, wrapPosition } from '../systems/MovementSystem';
 import type { Vector2 } from '../utilities/Vector2';
@@ -158,7 +158,7 @@ export class Ship {
     }
 
     if (this.thrusting) {
-      const [rearX, rearY] = SHIP_HULL[4]!; // rear notch
+      const [rearX, rearY] = this.hull.rearNotch;
       const flameLen = SHIP_HULL_SCALE * 0.9;
       const flameWidth = SHIP_HULL_SCALE * 0.35;
       g.fillStyle(COLORS.flame, 0.9);
@@ -210,7 +210,7 @@ export class Ship {
 
   private drawHullPath(g: Phaser.GameObjects.Graphics): void {
     g.beginPath();
-    SHIP_HULL.forEach(([x, y], i) => {
+    this.hull.path.forEach(([x, y], i) => {
       const px = x * SHIP_HULL_SCALE;
       const py = y * SHIP_HULL_SCALE;
       if (i === 0) g.moveTo(px, py);
@@ -227,26 +227,33 @@ export class Ship {
    * outline. A canopy lens near the nose, two wing panel lines, and an
    * engine intake ring near the rear notch.
    */
+  /**
+   * Additive surface linework, read from this hull's own `detail` block
+   * rather than hard-coded. The original coordinates were placed by
+   * hand against the Interceptor's silhouette, so reusing them on the
+   * Gunship or Rescue would have put a canopy through a wing - each
+   * hull carries its own now (see HULLS in GameConfig.ts).
+   */
   private drawSurfaceDetail(g: Phaser.GameObjects.Graphics): void {
     const s = SHIP_HULL_SCALE;
+    const { canopy, lines, rings } = this.hull.detail;
 
+    const [cx, cy, cw, ch] = canopy;
     g.fillStyle(this.color, 0.22);
     g.lineStyle(1, this.color, 0.6);
-    g.fillEllipse(0.25 * s, 0, 0.32 * s, 0.16 * s);
-    g.strokeEllipse(0.25 * s, 0, 0.32 * s, 0.16 * s);
+    g.fillEllipse(cx * s, cy * s, cw * s, ch * s);
+    g.strokeEllipse(cx * s, cy * s, cw * s, ch * s);
 
     g.lineStyle(1, this.color, 0.35);
-    g.beginPath();
-    g.moveTo(-0.1 * s, 0.08 * s);
-    g.lineTo(-0.7 * s, 0.5 * s);
-    g.strokePath();
-    g.beginPath();
-    g.moveTo(-0.1 * s, -0.08 * s);
-    g.lineTo(-0.7 * s, -0.5 * s);
-    g.strokePath();
+    lines.forEach(([x1, y1, x2, y2]) => {
+      g.beginPath();
+      g.moveTo(x1 * s, y1 * s);
+      g.lineTo(x2 * s, y2 * s);
+      g.strokePath();
+    });
 
     g.lineStyle(1, this.color, 0.45);
-    g.strokeCircle(-0.32 * s, 0, 0.05 * s);
+    rings.forEach(([x, y, r]) => g.strokeCircle(x * s, y * s, r * s));
   }
 
   destroy(): void {

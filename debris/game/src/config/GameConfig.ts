@@ -380,6 +380,24 @@ export const STAGE_RANK = {
  */
 export type HullId = 'interceptor' | 'gunship' | 'rescue';
 
+export type HullPoint = readonly [number, number];
+
+/**
+ * Additive surface linework drawn on top of a hull's silhouette, in the
+ * same normalized space as the hull path. Per-hull rather than shared:
+ * the original detail was placed by hand against the Interceptor's
+ * shape, and reusing those coordinates on a blunt hauler or a gun
+ * platform puts a canopy through a wing.
+ */
+export interface HullDetail {
+  /** Cockpit glass: x, y, width, height. */
+  readonly canopy: readonly [number, number, number, number];
+  /** Panel seams and plate lines: x1, y1, x2, y2. */
+  readonly lines: readonly (readonly [number, number, number, number])[];
+  /** Small circles - muzzle bores, pod faces, engine intake: x, y, radius. */
+  readonly rings: readonly (readonly [number, number, number])[];
+}
+
 export interface HullStats {
   readonly label: string;
   /** One-line "what am I good at" for the menu card. */
@@ -390,12 +408,18 @@ export interface HullStats {
   readonly fireCooldownMs: number;
   readonly maxOnScreenShots: number;
   readonly maxShieldCharges: number;
+  /** Silhouette, nose along local +x, same convention as the original SHIP_HULL. */
+  readonly path: readonly HullPoint[];
+  /** Where the engine flame attaches - each hull's own rear notch. */
+  readonly rearNotch: HullPoint;
+  readonly detail: HullDetail;
 }
 
 export const HULL_IDS: readonly HullId[] = ['interceptor', 'gunship', 'rescue'];
 
 export const HULLS: Record<HullId, HullStats> = {
-  // The original ship, unchanged - the baseline.
+  // The original ship, unchanged - the baseline, silhouette and
+  // surface detail exactly as docs/art_direction.md decided them.
   interceptor: {
     label: 'INTERCEPTOR',
     blurb: 'FAST - BALANCED GUNS',
@@ -405,6 +429,16 @@ export const HULLS: Record<HullId, HullStats> = {
     fireCooldownMs: 250,
     maxOnScreenShots: 4,
     maxShieldCharges: 2,
+    path: SHIP_HULL,
+    rearNotch: [-0.3, 0],
+    detail: {
+      canopy: [0.25, 0, 0.32, 0.16],
+      lines: [
+        [-0.1, 0.08, -0.7, 0.5],
+        [-0.1, -0.08, -0.7, -0.5],
+      ],
+      rings: [[-0.32, 0, 0.05]],
+    },
   },
   // Trades agility for firepower - noticeably heavier to point at
   // something, much better once you have.
@@ -417,6 +451,39 @@ export const HULLS: Record<HullId, HullStats> = {
     fireCooldownMs: 170,
     maxOnScreenShots: 6,
     maxShieldCharges: 2,
+    // Wide, blunt and forward-heavy, with twin muzzles either side of a
+    // shallow notch. Reads as mass rather than a dart. The notch is
+    // deliberately shallow - a deeper one made it look insectoid.
+    path: [
+      [0.8, 0.14],
+      [0.8, 0.34],
+      [0.52, 0.38],
+      [0.44, 0.6],
+      [-0.3, 0.66],
+      [-0.52, 0.34],
+      [-0.36, 0],
+      [-0.52, -0.34],
+      [-0.3, -0.66],
+      [0.44, -0.6],
+      [0.52, -0.38],
+      [0.8, -0.34],
+      [0.8, -0.14],
+      [0.6, 0],
+    ],
+    rearNotch: [-0.36, 0],
+    detail: {
+      canopy: [0.16, 0, 0.24, 0.19], // small, set well back - a gun platform, not a fighter
+      lines: [
+        [0.44, 0.44, -0.24, 0.5],
+        [0.44, -0.44, -0.24, -0.5],
+        [-0.08, 0.22, -0.08, -0.22],
+      ],
+      rings: [
+        [0.72, 0.24, 0.06], // muzzle bore
+        [0.72, -0.24, 0.06], // muzzle bore
+        [-0.42, 0, 0.06],
+      ],
+    },
   },
   // Built to reach a downed pilot and survive the trip back: the only
   // hull that holds a third Shield charge, at the cost of real weapons.
@@ -429,6 +496,43 @@ export const HULLS: Record<HullId, HullStats> = {
     fireCooldownMs: 360,
     maxOnScreenShots: 3,
     maxShieldCharges: 3,
+    // A blunt hauler with two side pods. An earlier tow-claw version
+    // was rejected in review: at true 22px it collapsed into the same
+    // "wide blob with a notch" as the Gunship, and two of three hulls
+    // reading alike in flight defeats the point. This differs on a
+    // different axis - smooth front, pods at the flanks.
+    path: [
+      [0.66, 0.18],
+      [0.46, 0.4],
+      [0.1, 0.46],
+      [0.02, 0.66],
+      [-0.34, 0.66],
+      [-0.3, 0.4],
+      [-0.58, 0.34],
+      [-0.44, 0],
+      [-0.58, -0.34],
+      [-0.3, -0.4],
+      [-0.34, -0.66],
+      [0.02, -0.66],
+      [0.1, -0.46],
+      [0.46, -0.4],
+      [0.66, -0.18],
+    ],
+    rearNotch: [-0.44, 0],
+    detail: {
+      canopy: [0.38, 0, 0.24, 0.17],
+      lines: [
+        [0.3, 0.3, -0.26, 0.34],
+        [0.3, -0.3, -0.26, -0.34],
+        [-0.16, 0.46, -0.16, 0.62],
+        [-0.16, -0.46, -0.16, -0.62],
+      ],
+      rings: [
+        [-0.16, 0.56, 0.07], // pod face
+        [-0.16, -0.56, 0.07], // pod face
+        [-0.5, 0, 0.06],
+      ],
+    },
   },
 };
 

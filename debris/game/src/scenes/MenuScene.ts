@@ -8,7 +8,6 @@ import {
   HULL_IDS,
   HULLS,
   type HullId,
-  SHIP_HULL,
 } from '../config/GameConfig';
 import { computeGamepadReadiness, type InputSource } from '../systems/GamepadAssignment';
 import { getMusicVolume, getSfxVolume, setMusicVolume, setSfxVolume } from '../systems/AudioSettings';
@@ -105,6 +104,9 @@ export class MenuScene extends Phaser.Scene {
   private lastInteractionAtMs = 0;
   /** Per-slot hull choice (config's HULLS), carried into GameScene at start. Defaults to the pre-hull ship so an untouched menu behaves exactly as it always did. */
   private hulls: HullId[] = ['interceptor', 'interceptor', 'interceptor', 'interceptor'];
+  private cardShipIcons: Phaser.GameObjects.Graphics[] = [];
+  /** What each icon currently shows, so refreshCardStatus only redraws on an actual change. */
+  private cardIconHulls: HullId[] = [];
   private cardHullTexts: Phaser.GameObjects.Text[] = [];
   private cardHullBlurbs: Phaser.GameObjects.Text[] = [];
   private quitConfirmObjects: Phaser.GameObjects.GameObject[] = [];
@@ -137,6 +139,8 @@ export class MenuScene extends Phaser.Scene {
     this.cardStatusTexts = [];
     this.cardBorders = [];
     this.cardToggleTexts = [];
+    this.cardShipIcons = [];
+    this.cardIconHulls = [];
     this.cardHullTexts = [];
     this.cardHullBlurbs = [];
 
@@ -368,7 +372,9 @@ export class MenuScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
 
-      this.drawShipIcon(centerX, CARDS_TOP + 104, color);
+      const hullId = this.hulls[slot] ?? 'interceptor';
+      this.cardShipIcons.push(this.drawShipIcon(centerX, CARDS_TOP + 104, color, hullId));
+      this.cardIconHulls.push(hullId);
 
       const statusText = this.add
         .text(centerX, CARDS_TOP + 168, '', {
@@ -431,13 +437,33 @@ export class MenuScene extends Phaser.Scene {
     this.refreshCardStatus();
   }
 
-  private drawShipIcon(x: number, y: number, color: number): void {
-    const scale = 24;
+  /**
+   * The card's ship icon, drawn as whichever hull that slot has picked
+   * so the card actually previews what you'll fly. Returns the
+   * Graphics so it can be redrawn when the choice changes - it used to
+   * draw the one fixed silhouette once and never again.
+   */
+  private drawShipIcon(x: number, y: number, color: number, hullId: HullId): Phaser.GameObjects.Graphics {
     const g = this.add.graphics({ x, y });
+    this.redrawShipIcon(g, color, hullId);
+    return g;
+  }
+
+  private redrawShipIcon(g: Phaser.GameObjects.Graphics, color: number, hullId: HullId): void {
+    const hull = HULLS[hullId];
+    // Scale each hull to a common extent rather than to a shared
+    // constant. The hulls are normalized differently - the Interceptor
+    // is long and narrow (reaching 1.0 at the nose), the Gunship and
+    // Rescue are stubby (0.80 and 0.66) - so one fixed scale drew the
+    // latter two as unreadable blobs next to it. 26px of half-extent
+    // fits the card's icon band either way.
+    const extent = Math.max(...hull.path.flatMap(([x, y]) => [Math.abs(x), Math.abs(y)]));
+    const scale = 30 / extent;
+    g.clear();
     g.lineStyle(3, color, 1);
     g.fillStyle(0x0d0d16, 1);
     g.beginPath();
-    SHIP_HULL.forEach(([hx, hy], i) => {
+    hull.path.forEach(([hx, hy], i) => {
       const px = hx * scale;
       const py = hy * scale;
       if (i === 0) g.moveTo(px, py);
@@ -446,6 +472,16 @@ export class MenuScene extends Phaser.Scene {
     g.closePath();
     g.fillPath();
     g.strokePath();
+
+    // A touch of the hull's own surface detail, so the card reads as
+    // the same ship the round will actually spawn.
+    // Canopy only - the hulls' panel lines and muzzle-bore rings are
+    // barely a pixel across at this size and read as dirt on the icon.
+    const [cx, cy, cw, ch] = hull.detail.canopy;
+    g.fillStyle(color, 0.22);
+    g.lineStyle(1, color, 0.55);
+    g.fillEllipse(cx * scale, cy * scale, cw * scale, ch * scale);
+    g.strokeEllipse(cx * scale, cy * scale, cw * scale, ch * scale);
   }
 
   private refreshCardStatus(): void {
@@ -462,7 +498,13 @@ export class MenuScene extends Phaser.Scene {
       // Single Player is locked to P1 only (decided) - every other card
       // reads as locked out regardless of its own source/readiness, since
       // GameScene.buildPlayers() won't spawn a ship for it in this mode.
-      const hull = HULLS[this.hulls[slot] ?? 'interceptor'];
+      const hullId = this.hulls[slot] ?? 'interceptor';
+      const hull = HULLS[hullId];
+      if (this.cardIconHulls[slot] !== hullId) {
+        const icon = this.cardShipIcons[slot];
+        if (icon) this.redrawShipIcon(icon, COLORS.players[slot]!, hullId);
+        this.cardIconHulls[slot] = hullId;
+      }
       this.cardHullTexts[slot]?.setText(`< ${hull.label} >`);
       this.cardHullBlurbs[slot]?.setText(hull.blurb);
 

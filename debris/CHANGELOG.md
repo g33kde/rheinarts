@@ -23,6 +23,40 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-09-30 — Each hull gets its own silhouette
+
+v2.0 shipped a hull picker with three genuinely different ships -
+Interceptor, Gunship, Rescue - that all looked identical. Every stat
+differed; the only visible difference was the label under the menu
+card. Now each hull owns its shape.
+
+- **`HULLS` carries geometry, not just stats** (`GameConfig.ts`): new
+  `path`, `rearNotch` and `detail` fields, with `HullPoint`/`HullDetail`
+  types. Interceptor reuses the shipped `SHIP_HULL` unchanged; Gunship
+  is a 14-point blunt twin-muzzle gun platform; Rescue is a 15-point
+  hauler with side pods.
+- **`Ship.ts` draws from the hull** rather than from the module-level
+  constant - path, flame origin, and all surface detail (canopy, panel
+  lines, rings). The hand-placed Interceptor canopy would have sat
+  through a wing on the other two, which is why the detail moved into
+  the data too.
+- **Menu cards preview the chosen hull** (`MenuScene.ts`): the icon is
+  retained and redrawn when the picker cycles, instead of being drawn
+  once as an Interceptor forever. Each hull scales to a common 30px
+  half-extent (the paths are normalized differently) and drops the
+  sub-pixel linework.
+
+Shapes were chosen from a rendered mockup sheet, not from coordinates -
+which is how two bad Rescue passes got caught: one read as a tuning
+fork, the next collided with the Gunship's outline at true 22px size.
+See `docs/art_direction.md` for the silhouettes and the rejected ones.
+
+Verified live: cycling a hull updates the card icon, and a Cooperative
+round with P1 on Gunship and P2 on Rescue renders two distinct ships
+with their flames at the correct rear notches.
+
+---
+
 ## 2026-09-30 — Leaderboards split per major version
 
 Resolves the one v2 issue that touched live data. v2's kill chain
