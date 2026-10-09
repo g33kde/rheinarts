@@ -879,6 +879,7 @@ export class GameScene extends Phaser.Scene {
 
     this.background.update(deltaSeconds);
     this.spaceStation?.update(nowMs);
+    this.spaceStation?.render(nowMs);
 
     this.bursts.forEach((burst) => burst.update(nowMs, deltaSeconds));
     this.bursts = this.bursts.filter((burst) => burst.isAlive);
@@ -971,6 +972,7 @@ export class GameScene extends Phaser.Scene {
       player.hyperspaceWasHeld = hyperspaceHeld;
 
       player.ship.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
+      player.ship.render();
     });
 
     // One shared engine sound for however many ships are thrusting right
@@ -992,7 +994,10 @@ export class GameScene extends Phaser.Scene {
       asteroid.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT, pulledAsteroids.has(asteroid)),
     );
     this.projectiles.forEach((projectile) => projectile.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
-    this.shields.forEach((shield) => shield.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
+    this.shields.forEach((shield) => {
+      shield.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
+      shield.render();
+    });
     this.updateUfos(deltaSeconds, nowMs);
     this.ufoShots.forEach((shot) => shot.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
     // A downed player still steers their own adrift pilot, on their own
@@ -1002,22 +1007,35 @@ export class GameScene extends Phaser.Scene {
     this.commanders.forEach((commander) => {
       const owner = this.players.find((p) => p.slotIndex === commander.slotIndex);
       if (owner) commander.applyControl(owner.input.turnDirection, owner.input.isThrusting, deltaSeconds);
-      commander.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT);
+      commander.update(ARENA_WIDTH, ARENA_HEIGHT);
+      commander.render(nowMs);
     });
     this.processCommanderExpiry(nowMs);
     this.processStationDropOffs(nowMs);
     this.updateSaboteurs(nowMs, deltaSeconds);
     this.updateDriftMines(nowMs, ARENA_WIDTH, ARENA_HEIGHT);
     this.processPendingChainDetonations(nowMs);
-    this.blackHole?.update(nowMs, deltaSeconds);
+    this.blackHole?.update(deltaSeconds);
+    this.blackHole?.render(nowMs);
     this.fracture?.update(nowMs, ARENA_HEIGHT);
-    this.fractureFragments.forEach((fragment) => fragment.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
-    this.fractureSwarm.forEach((swarmBit) => swarmBit.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
+    this.fracture?.render(nowMs);
+    this.fractureFragments.forEach((fragment) => {
+      fragment.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
+      fragment.render(nowMs);
+    });
+    this.fractureSwarm.forEach((swarmBit) => {
+      swarmBit.update(ARENA_WIDTH, ARENA_HEIGHT);
+      swarmBit.render(nowMs);
+    });
     this.fractureShards.forEach((shard) => shard.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
-    this.fractureLasers.forEach((laser) => laser.update(nowMs));
+    this.fractureLasers.forEach((laser) => {
+      laser.update(nowMs);
+      laser.render(nowMs);
+    });
     this.updateFractureAttacks(nowMs);
     this.updateScrapCountdown(nowMs);
     this.cardinal?.update(nowMs);
+    this.cardinal?.render(nowMs);
     this.cardinalPlasmaBalls.forEach((plasma) => plasma.update(nowMs, ARENA_WIDTH, ARENA_HEIGHT));
     this.updateCardinalAttacks(nowMs);
     this.updateCardinalHealthBar();
@@ -1178,6 +1196,7 @@ export class GameScene extends Phaser.Scene {
   private updateUfos(deltaSeconds: number, nowMs: number): void {
     for (const ufo of this.ufos) {
       ufo.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
+      ufo.render();
 
       const target = this.nearestAliveShip(ufo.position);
       if (!target || !ufo.canFire(nowMs)) continue;
@@ -1370,6 +1389,7 @@ export class GameScene extends Phaser.Scene {
           SABOTEUR.clusterMinNeighbors,
         ),
       );
+      saboteur.render(nowMs);
 
       if (saboteur.readyToDrop(nowMs)) {
         this.spawnDriftMine(saboteur, nowMs);
@@ -1390,7 +1410,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateDriftMines(nowMs: number, arenaWidth: number, arenaHeight: number): void {
-    this.driftMines.forEach((mine) => mine.update(nowMs, arenaWidth, arenaHeight));
+    this.driftMines.forEach((mine) => {
+      mine.update(arenaWidth, arenaHeight);
+      mine.render(nowMs);
+    });
   }
 
   /** Mines caught in another mine's own blast detonate `DRIFT_MINE.chainPropagationMs` later, not instantly - see the DRIFT_MINE config doc comment on why that delay matters. */

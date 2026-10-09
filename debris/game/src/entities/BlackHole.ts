@@ -50,7 +50,7 @@ export class BlackHole {
     return this.alive;
   }
 
-  update(nowMs: number, deltaSeconds: number): void {
+  update(deltaSeconds: number): void {
     if (!this.alive) return;
 
     for (const particle of this.particles) {
@@ -61,6 +61,10 @@ export class BlackHole {
       }
     }
 
+  }
+
+  /** Split from update() (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 3) - a host-only simulation never touches Graphics. */
+  render(nowMs: number): void {
     this.draw(nowMs);
   }
 

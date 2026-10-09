@@ -155,19 +155,22 @@ export class FractureSwarmBit {
     return nowMs - this.spawnedAtMs < FRACTURE.materializeDurationMs;
   }
 
-  // deltaSeconds is unused now that rotation is derived from nowMs directly
-  // (see `draw`'s spin calculation) rather than accumulated per frame, but
-  // the signature stays - GameScene calls every hazard's update() the same
-  // way, and changing just this one would be a worse inconsistency than an
-  // unused parameter.
-  update(nowMs: number, _deltaSeconds: number, arenaWidth: number, arenaHeight: number): void {
+  // Pure position/wrap simulation now - rotation is derived from nowMs
+  // directly in render() (see draw()'s spin calculation) rather than
+  // accumulated here, and that's also where nowMs/deltaSeconds actually
+  // got used before the simulate/render split (docs/roadmap.md's
+  // "Windows + LAN multiplayer," Sprint 3).
+  update(arenaWidth: number, arenaHeight: number): void {
     if (!this.alive) return;
 
     const wrapped = wrapPosition(this.position, FRACTURE.swarmRadius, arenaWidth, arenaHeight);
     if (wrapped.x !== this.position.x || wrapped.y !== this.position.y) {
       this.visual.setPosition(wrapped.x, wrapped.y);
     }
+  }
 
+  /** Split from update() (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 3) - a host-only simulation never touches Graphics. */
+  render(nowMs: number): void {
     this.draw(nowMs);
   }
 

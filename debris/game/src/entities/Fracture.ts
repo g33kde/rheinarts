@@ -109,7 +109,10 @@ export class Fracture {
       this.stopped = true;
       this.lastLaserAtMs = nowMs; // first laser is laserCooldownMs after arrival, not instant
     }
+  }
 
+  /** Split from update() (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 3) - a host-only simulation never touches Graphics. */
+  render(nowMs: number): void {
     this.draw(nowMs);
   }
 

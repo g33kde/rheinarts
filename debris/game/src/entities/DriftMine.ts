@@ -69,14 +69,17 @@ export class DriftMine {
     return nowMs - this.droppedAtMs >= DRIFT_MINE.armDelayMs;
   }
 
-  update(nowMs: number, arenaWidth: number, arenaHeight: number): void {
+  update(arenaWidth: number, arenaHeight: number): void {
     if (!this.alive) return;
 
     const wrapped = wrapPosition(this.position, DRIFT_MINE.radius, arenaWidth, arenaHeight);
     if (wrapped.x !== this.position.x || wrapped.y !== this.position.y) {
       this.visual.setPosition(wrapped.x, wrapped.y);
     }
+  }
 
+  /** Split from update() (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 3) - a host-only simulation never touches Graphics. */
+  render(nowMs: number): void {
     this.draw(nowMs);
   }
 

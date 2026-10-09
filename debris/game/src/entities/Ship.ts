@@ -141,7 +141,10 @@ export class Ship {
     if (wrapped.x !== this.position.x || wrapped.y !== this.position.y) {
       this.visual.setPosition(wrapped.x, wrapped.y);
     }
+  }
 
+  /** The drawing half of update() - split out (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 3) so a host-only simulation never has to touch Graphics at all. Reads this.lastNowMs rather than taking its own nowMs, since it always wants whatever update() most recently simulated. */
+  render(): void {
     this.draw();
   }
 

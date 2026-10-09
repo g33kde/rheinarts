@@ -55,12 +55,16 @@ export class Shield {
   update(deltaSeconds: number, arenaWidth: number, arenaHeight: number): void {
     this.elapsedSec += deltaSeconds;
     this.visual.setRotation(this.visual.rotation + SPIN_RAD_PER_SEC * deltaSeconds);
-    this.draw();
 
     const wrapped = wrapPosition(this.position, SHIELD.radius, arenaWidth, arenaHeight);
     if (wrapped.x !== this.position.x || wrapped.y !== this.position.y) {
       this.visual.setPosition(wrapped.x, wrapped.y);
     }
+  }
+
+  /** Split from update() (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 3) - a host-only simulation never touches Graphics. */
+  render(): void {
+    this.draw();
   }
 
   private draw(): void {

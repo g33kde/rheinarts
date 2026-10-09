@@ -189,7 +189,10 @@ export class Cardinal {
       if (currentPhase === 'critical') this.criticalStartedAtMs = nowMs;
       this.previousPhase = currentPhase;
     }
+  }
 
+  /** Split from update() (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 3) - a host-only simulation never touches Graphics. */
+  render(nowMs: number): void {
     this.draw(nowMs);
   }
 

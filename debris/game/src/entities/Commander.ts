@@ -178,7 +178,7 @@ export class Commander {
     this.visual.setVelocity(Math.cos(headingRad) * COMMANDER.driftSpeed, Math.sin(headingRad) * COMMANDER.driftSpeed);
   }
 
-  update(nowMs: number, arenaWidth: number, arenaHeight: number): void {
+  update(arenaWidth: number, arenaHeight: number): void {
     if (!this.alive) return;
 
     if (this.state === 'carried' && this.towedBy) {
@@ -189,11 +189,22 @@ export class Commander {
       if (wrapped.x !== this.position.x || wrapped.y !== this.position.y) {
         this.visual.setPosition(wrapped.x, wrapped.y);
       }
+    }
+  }
 
-      if (!this.hasBeenRescued) {
-        const remainingMs = Math.max(0, COMMANDER.rescueWindowMs - (nowMs - this.ejectedAtMs));
-        this.timerText.setText(`${Math.ceil(remainingMs / 1000)}`);
-      }
+  /**
+   * Split from update() (docs/roadmap.md's "Windows + LAN multiplayer,"
+   * Sprint 3) - a host-only simulation never touches Graphics *or* the
+   * countdown's Phaser Text object, so both move here. The countdown
+   * display itself is a pure read of already-simulated state
+   * (ejectedAtMs/hasBeenRescued), not a simulation step of its own.
+   */
+  render(nowMs: number): void {
+    if (!this.alive) return;
+
+    if (this.state !== 'carried' && !this.hasBeenRescued) {
+      const remainingMs = Math.max(0, COMMANDER.rescueWindowMs - (nowMs - this.ejectedAtMs));
+      this.timerText.setText(`${Math.ceil(remainingMs / 1000)}`);
     }
 
     this.timerText.setPosition(this.position.x, this.position.y + COMMANDER.visualScale * 1.7);
