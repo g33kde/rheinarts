@@ -15,6 +15,7 @@ import { filterStandardGamepads } from '../systems/GamepadDetection';
 import { fetchLeaderboard, type LeaderboardEntry } from '../systems/HighScoreApi';
 import { MENU_MUSIC_KEY } from '../systems/Music';
 import { GAME_MODE_LABELS, type GameMode } from '../systems/RoundOutcome';
+import { isLanAvailable } from '../systems/LanDiscovery';
 import { toCssHex } from '../utilities/Color';
 
 const MODE_ORDER: readonly GameMode[] = ['cooperative', 'competitive', 'singlePlayer'];
@@ -150,6 +151,7 @@ export class MenuScene extends Phaser.Scene {
     this.createPlayerCards();
     this.createVolumeSliders();
     this.createStartButton();
+    this.createLanLobbyLink();
 
     this.input.keyboard?.on('keydown-ENTER', () => {
       if (!this.confirmingQuit) this.startGame();
@@ -625,6 +627,21 @@ export class MenuScene extends Phaser.Scene {
 
   private startGame(): void {
     this.scene.start('Game', { mode: this.mode, sources: this.sources, hulls: this.hulls });
+  }
+
+  /** Desktop-only entry point for docs/roadmap.md's "Windows + LAN multiplayer" - absent entirely in a plain browser tab, same `isLanAvailable()` check `LanLobbyScene.ts` itself falls back on. */
+  private createLanLobbyLink(): void {
+    if (!isLanAvailable()) return;
+
+    this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT - 40, 'LAN MULTIPLAYER', {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: '#6b6f82',
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.scene.start('LanLobby'));
   }
 
   /**

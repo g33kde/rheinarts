@@ -41,7 +41,9 @@ export class RtcConnection {
   private reliableListeners: RtcMessageListener[] = [];
   private unreliableListeners: RtcMessageListener[] = [];
   private connectedListeners: (() => void)[] = [];
+  private closedListeners: (() => void)[] = [];
   private localIceCandidateListeners: ((candidate: RTCIceCandidateInit) => void)[] = [];
+  private hasFiredClosed = false;
 
   /**
    * `isInitiator` is the host's side of the connection - WebRTC requires
@@ -53,16 +55,42 @@ export class RtcConnection {
     this.peer = new RTCPeerConnection({ iceServers: [] });
 
     this.peer.onicecandidate = (event) => {
-      if (event.candidate) this.localIceCandidateListeners.forEach((listener) => listener(event.candidate!.toJSON()));
+      if (event.candidate)
+        this.localIceCandidateListeners.forEach((listener) => listener(event.candidate!.toJSON()));
     };
 
     this.peer.ondatachannel = (event) => {
       this.wireChannel(event.channel);
     };
 
+    // Disconnect detection (docs/roadmap.md's "Windows + LAN
+    // multiplayer," Sprint 7) - 'disconnected' can still self-recover on
+    // a flaky link, but 'failed'/'closed' can't, and this codebase's own
+    // decided rule doesn't wait around to find out either way: a dropped
+    // connection is a dropped connection. Fires at most once per
+    // connection, including when this side's own close() causes it -
+    // callers that close a connection deliberately as part of a normal
+    // teardown are expected to already know not to treat their own
+    // listener firing as a surprise.
+    this.peer.onconnectionstatechange = () => {
+      const state = this.peer.connectionState;
+      if (
+        (state === 'disconnected' || state === 'failed' || state === 'closed') &&
+        !this.hasFiredClosed
+      ) {
+        this.hasFiredClosed = true;
+        this.closedListeners.forEach((listener) => listener());
+      }
+    };
+
     if (isInitiator) {
       this.wireChannel(this.peer.createDataChannel(RELIABLE_CHANNEL_LABEL));
-      this.wireChannel(this.peer.createDataChannel(UNRELIABLE_CHANNEL_LABEL, { ordered: false, maxRetransmits: 0 }));
+      this.wireChannel(
+        this.peer.createDataChannel(UNRELIABLE_CHANNEL_LABEL, {
+          ordered: false,
+          maxRetransmits: 0,
+        }),
+      );
     }
   }
 
@@ -80,7 +108,10 @@ export class RtcConnection {
       // "Connected" once both channels are open, not just one - a
       // caller shouldn't start sending snapshots over a half-ready
       // connection.
-      if (this.reliableChannel?.readyState === 'open' && this.unreliableChannel?.readyState === 'open') {
+      if (
+        this.reliableChannel?.readyState === 'open' &&
+        this.unreliableChannel?.readyState === 'open'
+      ) {
         this.connectedListeners.forEach((listener) => listener());
       }
     };
@@ -113,6 +144,10 @@ export class RtcConnection {
 
   onConnected(listener: () => void): void {
     this.connectedListeners.push(listener);
+  }
+
+  onClosed(listener: () => void): void {
+    this.closedListeners.push(listener);
   }
 
   onReliableMessage(listener: RtcMessageListener): void {

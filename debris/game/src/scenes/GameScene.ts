@@ -65,7 +65,11 @@ import { distanceToSegment, isPointOnBeam } from '../systems/BeamGeometry';
 import { hasRescueWindowExpired, isWithinDropOffRange } from '../systems/CommanderRescue';
 import { computeSlotAssignments, type InputSource } from '../systems/GamepadAssignment';
 import { filterStandardGamepads } from '../systems/GamepadDetection';
-import { fetchLeaderboard, qualifiesForLeaderboard, submitHighScore } from '../systems/HighScoreApi';
+import {
+  fetchLeaderboard,
+  qualifiesForLeaderboard,
+  submitHighScore,
+} from '../systems/HighScoreApi';
 import {
   BLACK_HOLE_APPROACHING_SFX_KEY,
   CARDINAL_MUSIC_KEY,
@@ -73,7 +77,12 @@ import {
   GAMEPLAY_MUSIC_KEY,
   MENU_MUSIC_KEY,
 } from '../systems/Music';
-import { evaluateRoundOutcome, GAME_MODE_LABELS, type GameMode, type RoundOutcome } from '../systems/RoundOutcome';
+import {
+  evaluateRoundOutcome,
+  GAME_MODE_LABELS,
+  type GameMode,
+  type RoundOutcome,
+} from '../systems/RoundOutcome';
 import {
   breakCombo,
   comboMultiplier,
@@ -101,6 +110,14 @@ import { playUfoDestroyedSfx, playUfoShotSfx, playUfoSpawnSfx } from '../systems
 import { computeAsteroidSpawnCount, computeUfoSpawnIntervalMs } from '../systems/StageScaling';
 import { pickDropTarget } from '../systems/SaboteurAI';
 import { isWithinBlast } from '../systems/DriftMineBlast';
+import { NetworkClientSession, NetworkHostSession } from '../systems/NetworkSession';
+import type { RtcConnection } from '../systems/RtcConnection';
+import {
+  isNewerTick,
+  type GameSnapshot,
+  type ShipSnapshot,
+} from '../systems/NetworkSnapshotProtocol';
+import { RemoteInput } from '../input/RemoteInput';
 import {
   ASTEROID_HIT_SFX_KEY,
   SHIELD_PICKUP_SFX_KEY,
@@ -121,13 +138,26 @@ import {
   type WeaponUpgradeConfig,
   type WeaponUpgradeId,
 } from '../systems/WeaponUpgrades';
-import { applyShotHeat, decayHeat, INITIAL_HEAT_STATE, isOverheated, type HeatState } from '../systems/WeaponHeat';
+import {
+  applyShotHeat,
+  decayHeat,
+  INITIAL_HEAT_STATE,
+  isOverheated,
+  type HeatState,
+} from '../systems/WeaponHeat';
 import { purchaseUpgrade } from '../systems/WeaponShop';
 import { toCssHex } from '../utilities/Color';
 import { fromAngle, normalize, type Vector2 } from '../utilities/Vector2';
 import type { MatterGameObject } from '../entities/MatterGameObject';
 
-type SessionState = 'playing' | 'stageClear' | 'shop' | 'gameOver' | 'paused' | 'enteringInitials' | 'bossAnnouncement';
+type SessionState =
+  | 'playing'
+  | 'stageClear'
+  | 'shop'
+  | 'gameOver'
+  | 'paused'
+  | 'enteringInitials'
+  | 'bossAnnouncement';
 
 interface PlayerSlot {
   /** The original P1-P4 slot number (0-3) - NOT this player's position in the (possibly sparse, inactive-slots-skipped) `players` array. Everything that needs a stable "which player" identity (scoring, ship color, self-hit immunity) keys off this, never array position. */
@@ -407,6 +437,43 @@ export class GameScene extends Phaser.Scene {
   /** Attract mode (docs/roadmap.md): the game playing itself on the idle menu. Suppresses everything that only makes sense for a real player - initials entry, leaderboard submission - and bails back to the menu on any input at all. */
   /** Per-slot hull choice carried in from the menu - see config's HULLS. */
   private hulls: HullId[] = ['interceptor', 'interceptor', 'interceptor', 'interceptor'];
+  /**
+   * LAN multiplayer (docs/roadmap.md's "Windows + LAN multiplayer,"
+   * Sprint 6) - `undefined` for every existing mode (local Cooperative/
+   * Competitive/Single Player), so none of the branches this gates can
+   * even run unless something explicitly started a networked match
+   * (`LanLobbyScene.ts`). Scoped to ship positions only for now -
+   * asteroids/hazards/scoring aren't synced yet, deliberately, same
+   * "prove the core loop first" reasoning the sim/render split (item
+   * Sprint 3) and the host/dedicated-server reordering both already
+   * used.
+   *
+   * - **host**: runs the exact same simulation as a local match
+   *   (`update()` is unmodified for it beyond appending remote player
+   *   slots and broadcasting a snapshot at the very end) - the host's
+   *   own screen is just a normal game, as far as this class is
+   *   concerned.
+   * - **client**: a wholly separate, much smaller code path
+   *   (`createNetworkClient()`/`updateNetworkClient()`) - no local
+   *   physics for any ship, including its own (the "pure renderer, no
+   *   prediction yet" decision) - just applies whatever `GameSnapshot`
+   *   most recently arrived and sends its own local input upstream.
+   */
+  private networkRole: 'host' | 'client' | undefined;
+  /** Which slotIndex is this machine's own local player - 0 for the host always, whatever the host assigned for a client. */
+  private localSlotIndex = 0;
+  private hostSession: NetworkHostSession | undefined;
+  private clientSession: NetworkClientSession | undefined;
+  /** Host only - slotIndex -> the RemoteInput a connected client's own InputMessages get written into. Populated as clients connect, in LanLobbyScene, before this scene ever starts. */
+  private remoteInputsBySlot: Map<number, RemoteInput> = new Map();
+  /** Host only - slotIndex -> that client's own RtcConnection, purely so this scene (not the now-stopped LanLobbyScene) can register its own onClosed handler once it's actually running - see registerRemoteDisconnectHandlers(). */
+  private remoteConnectionsBySlot: Map<number, RtcConnection> = new Map();
+  /** Host only - increments once per broadcast, never reset mid-round; lets a client's own isNewerTick check discard an out-of-order snapshot. */
+  private snapshotTick = 0;
+  /** Client only - the most recently received snapshot, applied once per frame in updateNetworkClient() rather than the instant it arrives (messages and frames aren't synchronized). */
+  private latestSnapshot: GameSnapshot | undefined;
+  /** Client only - this machine's own real input device, always the full P1 binding set (not split P1/P2 the way local co-op shares one keyboard) since a dedicated network client has nobody else to share it with. */
+  private localInput: KeyboardInput | undefined;
   private isDemo = false;
   private demoStartedAtMs = 0;
   private demoInputSeen = false;
@@ -506,10 +573,12 @@ export class GameScene extends Phaser.Scene {
   private pendingHits: { asteroid: Asteroid; projectile: Projectile }[] = [];
   private pendingShieldPickups: { ship: Ship; shield: Shield }[] = [];
   private pendingShipHits: Ship[] = [];
-  private pendingUfoHits: { ufo: Ufo; projectile: Projectile | undefined; awardScore: boolean }[] = [];
+  private pendingUfoHits: { ufo: Ufo; projectile: Projectile | undefined; awardScore: boolean }[] =
+    [];
   private pendingUfoShotHits: UfoShot[] = [];
   private pendingFractureCoreHits: { projectile: Projectile }[] = [];
-  private pendingFractureFragmentHits: { fragment: FractureFragment; projectile: Projectile }[] = [];
+  private pendingFractureFragmentHits: { fragment: FractureFragment; projectile: Projectile }[] =
+    [];
   private pendingFractureShardHits: { ship: Ship; shard: FractureShard }[] = [];
   // The Cardinal isn't Matter-backed at all (see its own doc comment), so
   // these two are populated by a manual per-frame distance/segment check
@@ -541,7 +610,8 @@ export class GameScene extends Phaser.Scene {
   // pendingBossAsteroidHits above) there's a second object to destroy
   // alongside the asteroid, same shape as pendingCardinalPlasmaHits/
   // pendingFractureShardHits' own ship-side queues.
-  private pendingCardinalPlasmaAsteroidHits: { asteroid: Asteroid; plasma: CardinalPlasmaBall }[] = [];
+  private pendingCardinalPlasmaAsteroidHits: { asteroid: Asteroid; plasma: CardinalPlasmaBall }[] =
+    [];
   private pendingFractureShardAsteroidHits: { asteroid: Asteroid; shard: FractureShard }[] = [];
   // Swarm pickups are never lethal (decided) - a separate queue from
   // every other pendingX hit array above, same shape as
@@ -559,7 +629,11 @@ export class GameScene extends Phaser.Scene {
   private pendingCommanderHazardHits: Commander[] = [];
   // A shot- or ram-killed Saboteur, same shape as pendingUfoHits -
   // either way it still drops its own parting mine (destroySaboteur()).
-  private pendingSaboteurHits: { saboteur: Saboteur; projectile: Projectile | undefined; awardScore: boolean }[] = [];
+  private pendingSaboteurHits: {
+    saboteur: Saboteur;
+    projectile: Projectile | undefined;
+    awardScore: boolean;
+  }[] = [];
   // Two separate trigger queues rather than one, since only the
   // shot-triggered path has a projectile to destroy and an ownerIndex to
   // credit the chain to - a collision trigger is anonymous, same
@@ -570,21 +644,49 @@ export class GameScene extends Phaser.Scene {
   // A mine caught in another mine's own blast doesn't detonate instantly -
   // DRIFT_MINE.chainPropagationMs later, so a chain reads as a chain
   // rather than one simultaneous flash. Checked every frame in update().
-  private pendingChainDetonations: { mine: DriftMine; atMs: number; ownerIndex: number | undefined }[] = [];
+  private pendingChainDetonations: {
+    mine: DriftMine;
+    atMs: number;
+    ownerIndex: number | undefined;
+  }[] = [];
 
   constructor() {
     super('Game');
   }
 
   /** Called before create() on every start *and* every scene.restart(data) - the mode/sources-carrying explicit-data restarts elsewhere in this file rely on that. */
-  init(data: { mode?: GameMode; sources?: InputSource[]; hulls?: HullId[]; demo?: boolean }): void {
+  init(data: {
+    mode?: GameMode;
+    sources?: InputSource[];
+    hulls?: HullId[];
+    demo?: boolean;
+    networkRole?: 'host' | 'client';
+    localSlotIndex?: number;
+    hostSession?: NetworkHostSession;
+    clientSession?: NetworkClientSession;
+    remoteInputsBySlot?: Map<number, RemoteInput>;
+    remoteConnectionsBySlot?: Map<number, RtcConnection>;
+  }): void {
     this.mode = data?.mode ?? 'cooperative';
     this.sources = data?.sources ?? ['keyboard', 'keyboard', 'gamepad', 'gamepad'];
     this.hulls = data?.hulls ?? ['interceptor', 'interceptor', 'interceptor', 'interceptor'];
     this.isDemo = data?.demo === true;
+    this.networkRole = data?.networkRole;
+    this.localSlotIndex = data?.localSlotIndex ?? 0;
+    this.hostSession = data?.hostSession;
+    this.clientSession = data?.clientSession;
+    this.remoteInputsBySlot = data?.remoteInputsBySlot ?? new Map();
+    this.remoteConnectionsBySlot = data?.remoteConnectionsBySlot ?? new Map();
+    this.snapshotTick = 0;
+    this.latestSnapshot = undefined;
   }
 
   create(): void {
+    if (this.networkRole === 'client') {
+      this.createNetworkClient();
+      return;
+    }
+
     this.cameras.main.setBackgroundColor(COLORS.background);
     this.background = new PlayfieldBackground(this);
     stopSound(this, MENU_MUSIC_KEY);
@@ -596,6 +698,10 @@ export class GameScene extends Phaser.Scene {
     // not just the arrays below - needs an explicit reset here now that
     // restart is an actual reachable path (game over -> press key).
     this.buildPlayers();
+    if (this.networkRole === 'host') {
+      this.addRemotePlayerSlots();
+      this.registerRemoteDisconnectHandlers();
+    }
 
     this.asteroids = [];
     this.projectiles = [];
@@ -608,7 +714,9 @@ export class GameScene extends Phaser.Scene {
     // Only Cooperative has a rescue mechanic to send anyone to - see the
     // class doc comment's mode breakdown.
     this.spaceStation =
-      this.mode === 'cooperative' ? new SpaceStation(this, { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }) : undefined;
+      this.mode === 'cooperative'
+        ? new SpaceStation(this, { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 })
+        : undefined;
     this.spaceStationRelocated = false;
     this.blackHole = undefined;
     this.fracture = undefined;
@@ -692,9 +800,12 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0);
 
-    this.matter.world.on('collisionstart', (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
-      event.pairs.forEach((pair) => this.handleCollision(pair));
-    });
+    this.matter.world.on(
+      'collisionstart',
+      (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
+        event.pairs.forEach((pair) => this.handleCollision(pair));
+      },
+    );
 
     // Same Escape toggle as HyperOut: PLAYING <-> PAUSED. Persistent
     // listener (not `.once`), unlike stageClear/gameOver's "any key"
@@ -785,6 +896,236 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * Host only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 6) -
+   * one PlayerSlot per connected client, appended after buildPlayers()'s
+   * own local-only slots rather than folded into that method's
+   * source-assignment logic, which knows nothing about the network and
+   * doesn't need to. Each slot's `input` is the exact same `RemoteInput`
+   * instance `LanLobbyScene` already wired `hostSession`'s own
+   * `onClientInput` callback to write into - this method doesn't
+   * register anything of its own, it just plugs those instances into
+   * `this.players` so the ordinary per-frame loop drives their ships
+   * precisely like any local player's.
+   */
+  private addRemotePlayerSlots(): void {
+    const shipCollisionEnabled = this.mode === 'competitive';
+
+    this.remoteInputsBySlot.forEach((input, slotIndex) => {
+      const hullId: HullId = this.hulls[slotIndex] ?? 'interceptor';
+      const offset = this.spawnOffsetFor(slotIndex);
+      const corner = PLAYER_HUD_CORNERS[slotIndex]!;
+      const hudText = this.add
+        .text(corner.x, corner.y, '', {
+          fontFamily: 'monospace',
+          fontSize: '18px',
+          color: toCssHex(COLORS.players[slotIndex]!),
+          align: corner.align,
+        })
+        .setOrigin(corner.origin[0], corner.origin[1]);
+
+      this.players.push({
+        slotIndex,
+        ship: new Ship(
+          this,
+          ARENA_WIDTH / 2 + offset.x,
+          ARENA_HEIGHT / 2 + offset.y,
+          COLORS.players[slotIndex]!,
+          shipCollisionEnabled,
+          hullId,
+        ),
+        hullId,
+        input,
+        lastFiredAtMs: -Infinity,
+        combo: INITIAL_COMBO_STATE,
+        stageVote: undefined,
+        lastHyperspaceAtMs: -Infinity,
+        hyperspaceWasHeld: false,
+        lives: LIVES_PER_PLAYER,
+        eliminated: false,
+        towedCommander: null,
+        scrap: 0,
+        weapon: { active: new Set(), heat: INITIAL_HEAT_STATE },
+        hudText,
+      });
+    });
+  }
+
+  /**
+   * Host only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+   * 7's decided disconnect rules) - one `RtcConnection.onClosed` handler
+   * per connected client, registered here rather than back in
+   * `LanLobbyScene` (which has already stopped by the time this scene
+   * is even running) so the closure that fires actually belongs to the
+   * scene that's live when it does.
+   */
+  private registerRemoteDisconnectHandlers(): void {
+    this.remoteConnectionsBySlot.forEach((connection, slotIndex) => {
+      connection.onClosed(() => this.handleRemotePlayerDisconnected(slotIndex));
+    });
+  }
+
+  /** "That player's ship is removed; everyone else keeps playing" - the decided rule for a non-host disconnect. Reuses the exact same eliminated/checkRoundOutcome path a Competitive loss-of-lives already takes, rather than a parallel mechanism just for this. */
+  private handleRemotePlayerDisconnected(slotIndex: number): void {
+    const player = this.players.find((p) => p.slotIndex === slotIndex);
+    if (!player || player.eliminated) return;
+
+    player.eliminated = true;
+    if (player.ship.isAlive) player.ship.destroy();
+    this.refreshAllPlayerHud();
+    this.checkRoundOutcome();
+  }
+
+  /**
+   * Host only - one `GameSnapshot` (ships only, see
+   * `NetworkSnapshotProtocol.ts`'s own doc comment on why) per frame,
+   * sent to every connected client. Reads whatever this frame's own,
+   * completely ordinary simulation just produced - this method doesn't
+   * run any gameplay logic of its own, only serializes the result.
+   */
+  private broadcastHostSnapshot(nowMs: number): void {
+    if (!this.hostSession) return;
+
+    this.snapshotTick += 1;
+    // Excludes an eliminated (including disconnected - see
+    // handleRemotePlayerDisconnected) player's slot entirely, not just
+    // alive: false - their Ship has been destroy()'d, so reading
+    // .position/.heading off it here would reach into a dead object.
+    const ships: ShipSnapshot[] = this.players
+      .filter((player) => !player.eliminated)
+      .map((player) => ({
+        slotIndex: player.slotIndex,
+        x: player.ship.position.x,
+        y: player.ship.position.y,
+        heading: player.ship.heading,
+        alive: player.ship.isAlive,
+        thrusting: player.input.isThrusting,
+        invulnerableUntilMs: player.ship.isInvulnerable(nowMs) ? nowMs + 1 : -Infinity,
+      }));
+
+    this.hostSession.broadcastSnapshot({
+      type: 'debris-snapshot',
+      tick: this.snapshotTick,
+      nowMs,
+      ships,
+    });
+  }
+
+  /**
+   * Client only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+   * 6) - a wholly separate, much smaller `create()` path. No asteroids,
+   * no terrain, no hazards, no HUD beyond what's listed below - this
+   * sprint is scoped to ship positions only, deliberately (see the
+   * `networkRole` field's own doc comment). Builds one Ship per slot
+   * the host's welcome message described and otherwise does nothing
+   * until the first snapshot arrives.
+   */
+  private createNetworkClient(): void {
+    this.cameras.main.setBackgroundColor(COLORS.background);
+    this.background = new PlayfieldBackground(this);
+    stopSound(this, MENU_MUSIC_KEY);
+    playLoopingSound(this, GAMEPLAY_MUSIC_KEY, getMusicVolume());
+    this.currentStageMusicKey = GAMEPLAY_MUSIC_KEY;
+    this.localInput = new KeyboardInput(P1_BINDINGS);
+    this.clientSession?.onSnapshot((snapshot) => {
+      // Unreliable + unordered means a snapshot can arrive out of
+      // sequence - only ever move forward, never back to a stale tick.
+      if (!this.latestSnapshot || isNewerTick(snapshot.tick, this.latestSnapshot.tick)) {
+        this.latestSnapshot = snapshot;
+      }
+    });
+    this.clientSession?.onDisconnected(() => this.handleHostDisconnected());
+
+    this.players = this.hulls.map((hullId, slotIndex) => {
+      const offset = this.spawnOffsetFor(slotIndex);
+      const corner = PLAYER_HUD_CORNERS[slotIndex]!;
+      const hudText = this.add
+        .text(corner.x, corner.y, '', {
+          fontFamily: 'monospace',
+          fontSize: '18px',
+          color: toCssHex(COLORS.players[slotIndex]!),
+          align: corner.align,
+        })
+        .setOrigin(corner.origin[0], corner.origin[1]);
+
+      return {
+        slotIndex,
+        // false: a client never simulates ship-vs-ship contact (or
+        // anything else) locally at all, so Competitive's own collision
+        // toggle is irrelevant here - only the host's copy of this flag
+        // ever actually matters.
+        ship: new Ship(
+          this,
+          ARENA_WIDTH / 2 + offset.x,
+          ARENA_HEIGHT / 2 + offset.y,
+          COLORS.players[slotIndex]!,
+          false,
+          hullId,
+        ),
+        hullId,
+        input: new RemoteInput(), // unused for simulation - this slot's PlayerInput is never read client-side, only the shape is needed
+        lastFiredAtMs: -Infinity,
+        combo: INITIAL_COMBO_STATE,
+        stageVote: undefined,
+        lastHyperspaceAtMs: -Infinity,
+        hyperspaceWasHeld: false,
+        lives: LIVES_PER_PLAYER,
+        eliminated: false,
+        towedCommander: null,
+        scrap: 0,
+        weapon: { active: new Set(), heat: INITIAL_HEAT_STATE },
+        hudText,
+      };
+    });
+
+    this.state = 'playing';
+  }
+
+  /**
+   * Client only - the entire per-frame loop for a network client,
+   * standing in for the ordinary `update()` below exactly once (see
+   * `update()`'s own early-return). Sends this machine's own local
+   * input upstream, then applies whatever `GameSnapshot` most recently
+   * arrived - no local physics for any ship runs here at all.
+   */
+  private updateNetworkClient(deltaSeconds: number): void {
+    const localPlayer = this.players.find((player) => player.slotIndex === this.localSlotIndex);
+    if (localPlayer && this.localInput) {
+      this.clientSession?.sendInput({
+        type: 'debris-input',
+        slotIndex: this.localSlotIndex,
+        turnDirection: this.localInput.turnDirection,
+        isThrusting: this.localInput.isThrusting,
+        isFiring: this.localInput.isFiring,
+        isHyperspacing: this.localInput.isHyperspacing,
+      });
+    }
+
+    const snapshot = this.latestSnapshot;
+    if (snapshot) {
+      snapshot.ships.forEach((shipSnapshot) => {
+        const player = this.players.find((p) => p.slotIndex === shipSnapshot.slotIndex);
+        player?.ship.applyNetworkSnapshot(shipSnapshot, snapshot.nowMs);
+      });
+    }
+
+    this.background.update(deltaSeconds);
+  }
+
+  /**
+   * Client only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+   * 7's decided rule: the host disconnecting ends the round immediately
+   * for everyone, no pause-and-wait, no host migration). There's
+   * nothing to clean up on the host's own side from here - a host
+   * disconnecting is simply the host's process going away, not a
+   * message this scene could ever receive in that direction.
+   */
+  private handleHostDisconnected(): void {
+    this.clientSession?.stop();
+    stopSound(this, GAMEPLAY_MUSIC_KEY);
+    this.scene.start('Menu');
+  }
+
+  /**
    * Solo play spawns dead-center - the 4-point diamond exists to keep
    * simultaneous players apart, which is moot with only one ship ever on
    * screen. Shared by buildPlayers() and processPendingRespawns() so a
@@ -805,6 +1146,11 @@ export class GameScene extends Phaser.Scene {
 
   update(_time: number, deltaMs: number): void {
     const nowMs = this.time.now;
+
+    if (this.networkRole === 'client') {
+      this.updateNetworkClient(deltaMs / 1000);
+      return;
+    }
 
     // Slow-motion on a round-deciding moment (EFFECTS.slowMo). Applied
     // to Matter's own physics clock and to the delta every entity's
@@ -921,14 +1267,20 @@ export class GameScene extends Phaser.Scene {
 
       const turn = player.input.turnDirection;
       if (turn !== 0) {
-        player.ship.setRotation(player.ship.heading + turn * player.ship.hull.turnRateRadPerSec * deltaSeconds);
+        player.ship.setRotation(
+          player.ship.heading + turn * player.ship.hull.turnRateRadPerSec * deltaSeconds,
+        );
       }
       player.ship.setThrusting(player.input.isThrusting);
 
       // Passive heat decay runs every frame regardless of firing - "slowly
       // decreases while not firing," decided. No-ops if the heat system is
       // disabled (WEAPON_UPGRADES.rapidFire.heat.enabled).
-      player.weapon.heat = decayHeat(player.weapon.heat, deltaSeconds, WEAPON_UPGRADES.rapidFire.heat);
+      player.weapon.heat = decayHeat(
+        player.weapon.heat,
+        deltaSeconds,
+        WEAPON_UPGRADES.rapidFire.heat,
+      );
 
       // Kill chain lapses on its own if nothing's died recently - the
       // HUD reads it every frame, so this has to run even for a player
@@ -938,9 +1290,18 @@ export class GameScene extends Phaser.Scene {
       if (comboMultiplier(player.combo, COMBO) !== previousMultiplier) this.refreshAllPlayerHud();
 
       const weaponConfig = this.weaponUpgradeConfig();
-      const cooldownMs = computeFireCooldownMs(player.weapon, player.ship.hull.fireCooldownMs, weaponConfig);
-      const maxOnScreenShots = computeMaxOnScreenShots(player.weapon, player.ship.hull.maxOnScreenShots);
-      const ownProjectileCount = this.projectiles.filter((p) => p.ownerIndex === player.slotIndex).length;
+      const cooldownMs = computeFireCooldownMs(
+        player.weapon,
+        player.ship.hull.fireCooldownMs,
+        weaponConfig,
+      );
+      const maxOnScreenShots = computeMaxOnScreenShots(
+        player.weapon,
+        player.ship.hull.maxOnScreenShots,
+      );
+      const ownProjectileCount = this.projectiles.filter(
+        (p) => p.ownerIndex === player.slotIndex,
+      ).length;
 
       if (
         player.input.isFiring &&
@@ -956,7 +1317,11 @@ export class GameScene extends Phaser.Scene {
         if (ownProjectileCount + shots.length <= maxOnScreenShots) {
           this.fireProjectile(player, nowMs, shots);
           player.lastFiredAtMs = nowMs;
-          player.weapon.heat = applyShotHeat(player.weapon.heat, nowMs, WEAPON_UPGRADES.rapidFire.heat);
+          player.weapon.heat = applyShotHeat(
+            player.weapon.heat,
+            nowMs,
+            WEAPON_UPGRADES.rapidFire.heat,
+          );
         }
       }
 
@@ -965,7 +1330,11 @@ export class GameScene extends Phaser.Scene {
       // than in the input adapters, same division of labour as firing -
       // adapters report a held level, the scene owns the timing rules.
       const hyperspaceHeld = player.input.isHyperspacing;
-      if (hyperspaceHeld && !player.hyperspaceWasHeld && nowMs - player.lastHyperspaceAtMs >= HYPERSPACE.cooldownMs) {
+      if (
+        hyperspaceHeld &&
+        !player.hyperspaceWasHeld &&
+        nowMs - player.lastHyperspaceAtMs >= HYPERSPACE.cooldownMs
+      ) {
         this.jumpHyperspace(player);
         player.lastHyperspaceAtMs = nowMs;
       }
@@ -977,7 +1346,9 @@ export class GameScene extends Phaser.Scene {
 
     // One shared engine sound for however many ships are thrusting right
     // now, not a per-ship instance - see the `wasAnyThrusting` field doc.
-    const isAnyThrusting = this.players.some((player) => player.ship.isAlive && player.input.isThrusting);
+    const isAnyThrusting = this.players.some(
+      (player) => player.ship.isAlive && player.input.isThrusting,
+    );
     if (isAnyThrusting && !this.wasAnyThrusting) {
       // stopSound first: sound.play() on an already-playing looping sound
       // just no-ops rather than restarting it, and "from the beginning
@@ -1006,7 +1377,8 @@ export class GameScene extends Phaser.Scene {
     // movement, the same ordering the ship's own thrust already uses.
     this.commanders.forEach((commander) => {
       const owner = this.players.find((p) => p.slotIndex === commander.slotIndex);
-      if (owner) commander.applyControl(owner.input.turnDirection, owner.input.isThrusting, deltaSeconds);
+      if (owner)
+        commander.applyControl(owner.input.turnDirection, owner.input.isThrusting, deltaSeconds);
       commander.update(ARENA_WIDTH, ARENA_HEIGHT);
       commander.render(nowMs);
     });
@@ -1027,7 +1399,9 @@ export class GameScene extends Phaser.Scene {
       swarmBit.update(ARENA_WIDTH, ARENA_HEIGHT);
       swarmBit.render(nowMs);
     });
-    this.fractureShards.forEach((shard) => shard.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
+    this.fractureShards.forEach((shard) =>
+      shard.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT),
+    );
     this.fractureLasers.forEach((laser) => {
       laser.update(nowMs);
       laser.render(nowMs);
@@ -1071,7 +1445,8 @@ export class GameScene extends Phaser.Scene {
     // instant a slot frees up (a UFO dies) a new one spawns right away
     // if the interval had already elapsed, rather than waiting a fresh
     // full interval from whenever the cap happened to clear.
-    const ufoSpawnCapped = this.isBossEncounterActive() && this.ufos.length >= UFO.maxConcurrentDuringBoss;
+    const ufoSpawnCapped =
+      this.isBossEncounterActive() && this.ufos.length >= UFO.maxConcurrentDuringBoss;
     if (!ufoSpawnCapped && nowMs - this.lastUfoSpawnAtMs >= this.modifiedUfoIntervalMs()) {
       this.spawnUfo();
       this.lastUfoSpawnAtMs = nowMs;
@@ -1135,6 +1510,8 @@ export class GameScene extends Phaser.Scene {
     if (this.asteroids.length === 0 && !this.isBossEncounterActive()) {
       this.enterStageClear();
     }
+
+    if (this.networkRole === 'host') this.broadcastHostSnapshot(nowMs);
   }
 
   /**
@@ -1201,7 +1578,12 @@ export class GameScene extends Phaser.Scene {
       const target = this.nearestAliveShip(ufo.position);
       if (!target || !ufo.canFire(nowMs)) continue;
 
-      const lead = computeLeadAimHeading(ufo.position, target.ship.position, target.ship.velocity, UFO.shotSpeed);
+      const lead = computeLeadAimHeading(
+        ufo.position,
+        target.ship.position,
+        target.ship.velocity,
+        UFO.shotSpeed,
+      );
       const heading = applyAimSpread(lead, UFO.aimSpreadRad);
       this.ufoShots.push(new UfoShot(this, ufo.position, heading, nowMs));
       playUfoShotSfx(this, getSfxVolume());
@@ -1275,7 +1657,12 @@ export class GameScene extends Phaser.Scene {
     const player = this.players.find((p) => p.slotIndex === slotIndex);
     if (!player) return false;
 
-    const result = purchaseUpgrade(player.scrap, player.weapon.active, upgradeId, WEAPON_UPGRADES.costs);
+    const result = purchaseUpgrade(
+      player.scrap,
+      player.weapon.active,
+      upgradeId,
+      WEAPON_UPGRADES.costs,
+    );
     if (!result.success) return false;
 
     player.scrap = result.scrap;
@@ -1375,7 +1762,9 @@ export class GameScene extends Phaser.Scene {
   private updateSaboteurs(nowMs: number, deltaSeconds: number): void {
     if (this.saboteurs.length === 0) return;
 
-    const adriftCommanderPositions = this.commanders.filter((c) => c.isAdrift).map((c) => c.position);
+    const adriftCommanderPositions = this.commanders
+      .filter((c) => c.isAdrift)
+      .map((c) => c.position);
     const asteroidPositions = this.asteroids.filter((a) => a.isAlive).map((a) => a.position);
 
     this.saboteurs.forEach((saboteur) => {
@@ -1421,7 +1810,9 @@ export class GameScene extends Phaser.Scene {
     if (this.pendingChainDetonations.length === 0) return;
     const ready = this.pendingChainDetonations.filter((entry) => nowMs >= entry.atMs);
     if (ready.length === 0) return;
-    this.pendingChainDetonations = this.pendingChainDetonations.filter((entry) => nowMs < entry.atMs);
+    this.pendingChainDetonations = this.pendingChainDetonations.filter(
+      (entry) => nowMs < entry.atMs,
+    );
     for (const { mine, ownerIndex } of ready) {
       if (mine.isAlive) this.detonateMine(mine, nowMs, ownerIndex);
     }
@@ -1447,7 +1838,10 @@ export class GameScene extends Phaser.Scene {
     this.players.forEach((player) => {
       const ship = player.ship;
       if (!ship.isAlive || ship.isInvulnerable(nowMs)) return;
-      if (isWithinBlast(ship.position, position, DRIFT_MINE.blastRadius) && !this.pendingShipHits.includes(ship)) {
+      if (
+        isWithinBlast(ship.position, position, DRIFT_MINE.blastRadius) &&
+        !this.pendingShipHits.includes(ship)
+      ) {
         this.pendingShipHits.push(ship);
       }
     });
@@ -1455,7 +1849,8 @@ export class GameScene extends Phaser.Scene {
     this.commanders.forEach((commander) => {
       if (!commander.isAlive || !commander.isAdrift) return;
       if (isWithinBlast(commander.position, position, DRIFT_MINE.blastRadius)) {
-        if (!this.pendingCommanderHazardHits.includes(commander)) this.pendingCommanderHazardHits.push(commander);
+        if (!this.pendingCommanderHazardHits.includes(commander))
+          this.pendingCommanderHazardHits.push(commander);
       }
     });
 
@@ -1468,7 +1863,9 @@ export class GameScene extends Phaser.Scene {
       // a mine clearing a cluster you aimed it at is the entire point.
       this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
       if (ownerIndex !== undefined) {
-        const asteroidScore = Math.round(ASTEROID[asteroid.size].score * this.fieldModifiers.asteroidScoreMultiplier);
+        const asteroidScore = Math.round(
+          ASTEROID[asteroid.size].score * this.fieldModifiers.asteroidScoreMultiplier,
+        );
         this.awardScore(ownerIndex, asteroidScore, asteroid.position);
       }
       asteroid.destroy();
@@ -1494,7 +1891,11 @@ export class GameScene extends Phaser.Scene {
       if (!other.isAlive || other === mine) return;
       if (!isWithinBlast(other.position, position, DRIFT_MINE.blastRadius)) return;
       if (this.pendingChainDetonations.some((entry) => entry.mine === other)) return;
-      this.pendingChainDetonations.push({ mine: other, atMs: nowMs + DRIFT_MINE.chainPropagationMs, ownerIndex });
+      this.pendingChainDetonations.push({
+        mine: other,
+        atMs: nowMs + DRIFT_MINE.chainPropagationMs,
+        ownerIndex,
+      });
     });
   }
 
@@ -1539,8 +1940,10 @@ export class GameScene extends Phaser.Scene {
 
       const farFromStation =
         !this.spaceStation ||
-        Math.hypot(candidate.x - this.spaceStation.position.x, candidate.y - this.spaceStation.position.y) >=
-          BLACK_HOLE.minDistanceFromStation;
+        Math.hypot(
+          candidate.x - this.spaceStation.position.x,
+          candidate.y - this.spaceStation.position.y,
+        ) >= BLACK_HOLE.minDistanceFromStation;
 
       const farFromShips = this.players.every(
         (player) =>
@@ -1574,7 +1977,10 @@ export class GameScene extends Phaser.Scene {
     const hole = this.blackHole;
     if (!hole) return;
 
-    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): boolean => {
+    const applyGravity = (
+      visual: MatterGameObject<Phaser.GameObjects.Graphics>,
+      position: Vector2,
+    ): boolean => {
       const force = computeGravityForce(
         position,
         hole.position,
@@ -1604,7 +2010,8 @@ export class GameScene extends Phaser.Scene {
       if (shield.isAlive) applyGravity(shield.visual, shield.position);
     });
     this.commanders.forEach((commander) => {
-      if (commander.isAlive && commander.isAdrift) applyGravity(commander.visual, commander.position);
+      if (commander.isAlive && commander.isAdrift)
+        applyGravity(commander.visual, commander.position);
     });
   }
 
@@ -1620,11 +2027,16 @@ export class GameScene extends Phaser.Scene {
    * doc/purpose as that method's own parameter.
    */
   private applyFractureGravityForces(pulledAsteroids: Set<Asteroid>): void {
-    const gravityFragments = this.fractureFragments.filter((f) => f.role === 'gravity' && f.isAlive);
+    const gravityFragments = this.fractureFragments.filter(
+      (f) => f.role === 'gravity' && f.isAlive,
+    );
     if (gravityFragments.length === 0) return;
 
     const pullRadius = FRACTURE.fragmentRadius * FRACTURE.gravityPullRadiusMultiplier;
-    const applyGravity = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): boolean => {
+    const applyGravity = (
+      visual: MatterGameObject<Phaser.GameObjects.Graphics>,
+      position: Vector2,
+    ): boolean => {
       let pulled = false;
       gravityFragments.forEach((fragment) => {
         const force = computeGravityForce(
@@ -1657,7 +2069,8 @@ export class GameScene extends Phaser.Scene {
       if (shield.isAlive) applyGravity(shield.visual, shield.position);
     });
     this.commanders.forEach((commander) => {
-      if (commander.isAlive && commander.isAdrift) applyGravity(commander.visual, commander.position);
+      if (commander.isAlive && commander.isAdrift)
+        applyGravity(commander.visual, commander.position);
     });
   }
 
@@ -1682,7 +2095,14 @@ export class GameScene extends Phaser.Scene {
       this.players.forEach((player) => {
         if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
         if (
-          isPointOnBeam(player.ship.position, laser.origin, laser.angleRad, FRACTURE.laserLength, FRACTURE.laserWidth, SHIP.radius) &&
+          isPointOnBeam(
+            player.ship.position,
+            laser.origin,
+            laser.angleRad,
+            FRACTURE.laserLength,
+            FRACTURE.laserWidth,
+            SHIP.radius,
+          ) &&
           !this.pendingShipHits.includes(player.ship)
         ) {
           this.pendingShipHits.push(player.ship);
@@ -1706,7 +2126,10 @@ export class GameScene extends Phaser.Scene {
             // fix as the laser/core-ram checks - the expanding ring is a
             // solid disk, not a thin corridor, so this was never the
             // sweeping-beam failure mode, just a few pixels of precision.
-            if (distance <= ringRadius + SHIP.radius && !this.pendingShipHits.includes(player.ship)) {
+            if (
+              distance <= ringRadius + SHIP.radius &&
+              !this.pendingShipHits.includes(player.ship)
+            ) {
               this.pendingShipHits.push(player.ship);
             }
           });
@@ -1719,7 +2142,10 @@ export class GameScene extends Phaser.Scene {
         const livingShips = this.players.filter((p) => p.ship.isAlive).map((p) => p.ship);
         if (livingShips.length > 0) {
           const target = livingShips[Math.floor(Math.random() * livingShips.length)]!;
-          const heading = Math.atan2(target.position.y - fragment.position.y, target.position.x - fragment.position.x);
+          const heading = Math.atan2(
+            target.position.y - fragment.position.y,
+            target.position.x - fragment.position.x,
+          );
           this.fractureShards.push(new FractureShard(this, fragment.position, heading, nowMs));
         }
         fragment.recordShardFired(nowMs);
@@ -1755,22 +2181,34 @@ export class GameScene extends Phaser.Scene {
     // GameConfig.ts, now stale on that specific point).
     this.players.forEach((player) => {
       if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
-      const distance = Math.hypot(player.ship.position.x - cardinal.position.x, player.ship.position.y - cardinal.position.y);
+      const distance = Math.hypot(
+        player.ship.position.x - cardinal.position.x,
+        player.ship.position.y - cardinal.position.y,
+      );
       // + SHIP.radius: a ship's edge touches the core before its exact
       // center coordinate does - same "count the ship's real size, not
       // just its center point" fix as the laser hit-test below. Far
       // milder here (the core doesn't move relative to itself, so this
       // was never the "essentially unhittable" bug the sweeping laser
       // was), but the same principle applies for consistency.
-      if (distance <= CARDINAL.coreRadius + SHIP.radius && !this.pendingShipHits.includes(player.ship)) {
+      if (
+        distance <= CARDINAL.coreRadius + SHIP.radius &&
+        !this.pendingShipHits.includes(player.ship)
+      ) {
         this.pendingShipHits.push(player.ship);
       }
     });
 
     this.asteroids.forEach((asteroid) => {
       if (!asteroid.isAlive) return;
-      const distance = Math.hypot(asteroid.position.x - cardinal.position.x, asteroid.position.y - cardinal.position.y);
-      if (distance <= CARDINAL.coreRadius + asteroid.radius && !this.pendingBossAsteroidHits.includes(asteroid)) {
+      const distance = Math.hypot(
+        asteroid.position.x - cardinal.position.x,
+        asteroid.position.y - cardinal.position.y,
+      );
+      if (
+        distance <= CARDINAL.coreRadius + asteroid.radius &&
+        !this.pendingBossAsteroidHits.includes(asteroid)
+      ) {
         this.pendingBossAsteroidHits.push(asteroid);
       }
     });
@@ -1786,7 +2224,14 @@ export class GameScene extends Phaser.Scene {
           this.players.forEach((player) => {
             if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
             if (
-              isPointOnBeam(player.ship.position, cardinal.position, angle, CARDINAL.laserLength, CARDINAL.laserWidth, SHIP.radius) &&
+              isPointOnBeam(
+                player.ship.position,
+                cardinal.position,
+                angle,
+                CARDINAL.laserLength,
+                CARDINAL.laserWidth,
+                SHIP.radius,
+              ) &&
               !this.pendingShipHits.includes(player.ship)
             ) {
               this.pendingShipHits.push(player.ship);
@@ -1808,7 +2253,10 @@ export class GameScene extends Phaser.Scene {
         };
         this.projectiles.forEach((projectile) => {
           if (!projectile.isAlive) return;
-          if (distanceToSegment(projectile.position, armStart, armEnd) <= CARDINAL.armHitWidth / 2) {
+          if (
+            distanceToSegment(projectile.position, armStart, armEnd) <=
+            CARDINAL.armHitWidth / 2
+          ) {
             if (!this.pendingCardinalArmHits.some((hit) => hit.projectile === projectile)) {
               this.pendingCardinalArmHits.push({ armIndex, projectile });
             }
@@ -1822,7 +2270,8 @@ export class GameScene extends Phaser.Scene {
         this.players.forEach((player) => {
           if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
           if (
-            distanceToSegment(player.ship.position, armStart, armEnd) <= CARDINAL.armHitWidth / 2 + SHIP.radius &&
+            distanceToSegment(player.ship.position, armStart, armEnd) <=
+              CARDINAL.armHitWidth / 2 + SHIP.radius &&
             !this.pendingShipHits.includes(player.ship)
           ) {
             this.pendingShipHits.push(player.ship);
@@ -1832,7 +2281,8 @@ export class GameScene extends Phaser.Scene {
         this.asteroids.forEach((asteroid) => {
           if (!asteroid.isAlive) return;
           if (
-            distanceToSegment(asteroid.position, armStart, armEnd) <= CARDINAL.armHitWidth / 2 + asteroid.radius &&
+            distanceToSegment(asteroid.position, armStart, armEnd) <=
+              CARDINAL.armHitWidth / 2 + asteroid.radius &&
             !this.pendingBossAsteroidHits.includes(asteroid)
           ) {
             this.pendingBossAsteroidHits.push(asteroid);
@@ -1843,8 +2293,14 @@ export class GameScene extends Phaser.Scene {
       // Core becomes a valid target only once every arm is down.
       this.projectiles.forEach((projectile) => {
         if (!projectile.isAlive) return;
-        const distance = Math.hypot(projectile.position.x - cardinal.position.x, projectile.position.y - cardinal.position.y);
-        if (distance <= CARDINAL.coreRadius && !this.pendingCardinalCoreHits.some((hit) => hit.projectile === projectile)) {
+        const distance = Math.hypot(
+          projectile.position.x - cardinal.position.x,
+          projectile.position.y - cardinal.position.y,
+        );
+        if (
+          distance <= CARDINAL.coreRadius &&
+          !this.pendingCardinalCoreHits.some((hit) => hit.projectile === projectile)
+        ) {
           this.pendingCardinalCoreHits.push({ projectile });
         }
       });
@@ -1852,8 +2308,15 @@ export class GameScene extends Phaser.Scene {
       if (cardinal.canFirePlasma(nowMs)) {
         const target = this.nearestAliveShip(cardinal.position);
         if (target) {
-          const heading = computeLeadAimHeading(cardinal.position, target.ship.position, target.ship.velocity, CARDINAL.plasmaSpeed);
-          this.cardinalPlasmaBalls.push(new CardinalPlasmaBall(this, cardinal.position, heading, nowMs));
+          const heading = computeLeadAimHeading(
+            cardinal.position,
+            target.ship.position,
+            target.ship.velocity,
+            CARDINAL.plasmaSpeed,
+          );
+          this.cardinalPlasmaBalls.push(
+            new CardinalPlasmaBall(this, cardinal.position, heading, nowMs),
+          );
         }
         cardinal.recordPlasmaFired(nowMs);
       }
@@ -1873,7 +2336,10 @@ export class GameScene extends Phaser.Scene {
     const hole = this.blackHole;
     if (!hole) return;
 
-    const captureIfNeeded = (visual: MatterGameObject<Phaser.GameObjects.Graphics>, position: Vector2): void => {
+    const captureIfNeeded = (
+      visual: MatterGameObject<Phaser.GameObjects.Graphics>,
+      position: Vector2,
+    ): void => {
       if (!isCaptured(position, hole.position, BLACK_HOLE.eventHorizonRadius)) return;
       const velocity = computeCaptureVelocity(
         position,
@@ -1947,12 +2413,21 @@ export class GameScene extends Phaser.Scene {
 
   /** A shield absorbing the lethal center doesn't just "not die" - "the shield's energy discharge blows you back out," a judgment call (not asked about explicitly): teleported just past the event horizon along the same line it was pulled in on, with an outward velocity burst and a brief invulnerability window so it can't be immediately recaptured before the player reacts. */
   private ejectShipFromBlackHole(ship: Ship, holeCenter: Vector2, nowMs: number): void {
-    const away = normalize({ x: ship.position.x - holeCenter.x, y: ship.position.y - holeCenter.y });
+    const away = normalize({
+      x: ship.position.x - holeCenter.x,
+      y: ship.position.y - holeCenter.y,
+    });
     const direction = away.x === 0 && away.y === 0 ? { x: 1, y: 0 } : away;
     const ejectDistance = BLACK_HOLE.eventHorizonRadius + 20;
 
-    ship.visual.setPosition(holeCenter.x + direction.x * ejectDistance, holeCenter.y + direction.y * ejectDistance);
-    ship.visual.setVelocity(direction.x * BLACK_HOLE.shieldEjectSpeed, direction.y * BLACK_HOLE.shieldEjectSpeed);
+    ship.visual.setPosition(
+      holeCenter.x + direction.x * ejectDistance,
+      holeCenter.y + direction.y * ejectDistance,
+    );
+    ship.visual.setVelocity(
+      direction.x * BLACK_HOLE.shieldEjectSpeed,
+      direction.y * BLACK_HOLE.shieldEjectSpeed,
+    );
     ship.grantInvulnerability(nowMs, BLACK_HOLE.shieldEjectInvulnerabilityMs);
     this.spawnBurst(ship.position, COLORS.shield, EFFECTS.shipBurst);
   }
@@ -1962,25 +2437,50 @@ export class GameScene extends Phaser.Scene {
     const entityA = this.entityOf(pair.bodyA);
     const entityB = this.entityOf(pair.bodyB);
 
-    const projectile = entityA instanceof Projectile ? entityA : entityB instanceof Projectile ? entityB : undefined;
-    const asteroid = entityA instanceof Asteroid ? entityA : entityB instanceof Asteroid ? entityB : undefined;
+    const projectile =
+      entityA instanceof Projectile ? entityA : entityB instanceof Projectile ? entityB : undefined;
+    const asteroid =
+      entityA instanceof Asteroid ? entityA : entityB instanceof Asteroid ? entityB : undefined;
     const ship = entityA instanceof Ship ? entityA : entityB instanceof Ship ? entityB : undefined;
-    const shield = entityA instanceof Shield ? entityA : entityB instanceof Shield ? entityB : undefined;
+    const shield =
+      entityA instanceof Shield ? entityA : entityB instanceof Shield ? entityB : undefined;
     const ufo = entityA instanceof Ufo ? entityA : entityB instanceof Ufo ? entityB : undefined;
-    const ufoShot = entityA instanceof UfoShot ? entityA : entityB instanceof UfoShot ? entityB : undefined;
-    const commander = entityA instanceof Commander ? entityA : entityB instanceof Commander ? entityB : undefined;
-    const fracture = entityA instanceof Fracture ? entityA : entityB instanceof Fracture ? entityB : undefined;
+    const ufoShot =
+      entityA instanceof UfoShot ? entityA : entityB instanceof UfoShot ? entityB : undefined;
+    const commander =
+      entityA instanceof Commander ? entityA : entityB instanceof Commander ? entityB : undefined;
+    const fracture =
+      entityA instanceof Fracture ? entityA : entityB instanceof Fracture ? entityB : undefined;
     const fractureFragment =
-      entityA instanceof FractureFragment ? entityA : entityB instanceof FractureFragment ? entityB : undefined;
+      entityA instanceof FractureFragment
+        ? entityA
+        : entityB instanceof FractureFragment
+          ? entityB
+          : undefined;
     const fractureSwarmBit =
-      entityA instanceof FractureSwarmBit ? entityA : entityB instanceof FractureSwarmBit ? entityB : undefined;
+      entityA instanceof FractureSwarmBit
+        ? entityA
+        : entityB instanceof FractureSwarmBit
+          ? entityB
+          : undefined;
     const fractureShard =
-      entityA instanceof FractureShard ? entityA : entityB instanceof FractureShard ? entityB : undefined;
+      entityA instanceof FractureShard
+        ? entityA
+        : entityB instanceof FractureShard
+          ? entityB
+          : undefined;
     const cardinalPlasma =
-      entityA instanceof CardinalPlasmaBall ? entityA : entityB instanceof CardinalPlasmaBall ? entityB : undefined;
-    const wreck = entityA instanceof Wreck ? entityA : entityB instanceof Wreck ? entityB : undefined;
-    const saboteur = entityA instanceof Saboteur ? entityA : entityB instanceof Saboteur ? entityB : undefined;
-    const mine = entityA instanceof DriftMine ? entityA : entityB instanceof DriftMine ? entityB : undefined;
+      entityA instanceof CardinalPlasmaBall
+        ? entityA
+        : entityB instanceof CardinalPlasmaBall
+          ? entityB
+          : undefined;
+    const wreck =
+      entityA instanceof Wreck ? entityA : entityB instanceof Wreck ? entityB : undefined;
+    const saboteur =
+      entityA instanceof Saboteur ? entityA : entityB instanceof Saboteur ? entityB : undefined;
+    const mine =
+      entityA instanceof DriftMine ? entityA : entityB instanceof DriftMine ? entityB : undefined;
 
     // Core and Fragment: shootable (CATEGORY.PROJECTILE) and now also
     // "behave like rocks," decided - CATEGORY.SHIP too, resolved via the
@@ -2119,10 +2619,18 @@ export class GameScene extends Phaser.Scene {
       // own shield can still save it individually. A ship mid-respawn-
       // invulnerability is skipped entirely, same as every other damage
       // path below.
-      if (entityA.isAlive && !entityA.isInvulnerable(nowMs) && !this.pendingShipHits.includes(entityA)) {
+      if (
+        entityA.isAlive &&
+        !entityA.isInvulnerable(nowMs) &&
+        !this.pendingShipHits.includes(entityA)
+      ) {
         this.pendingShipHits.push(entityA);
       }
-      if (entityB.isAlive && !entityB.isInvulnerable(nowMs) && !this.pendingShipHits.includes(entityB)) {
+      if (
+        entityB.isAlive &&
+        !entityB.isInvulnerable(nowMs) &&
+        !this.pendingShipHits.includes(entityB)
+      ) {
         this.pendingShipHits.push(entityB);
       }
       return;
@@ -2214,7 +2722,11 @@ export class GameScene extends Phaser.Scene {
     // pair here - a rare edge case already mostly covered by
     // blastRadius being well past either one's own hitbox, not worth a
     // second typed entity slot for.
-    if (mine?.isAlive && mine.isArmed(nowMs) && (ship?.isAlive || asteroid?.isAlive || ufo?.isAlive || saboteur?.isAlive)) {
+    if (
+      mine?.isAlive &&
+      mine.isArmed(nowMs) &&
+      (ship?.isAlive || asteroid?.isAlive || ufo?.isAlive || saboteur?.isAlive)
+    ) {
       if (!this.pendingMineCollisionTriggers.includes(mine)) {
         this.pendingMineCollisionTriggers.push(mine);
       }
@@ -2242,7 +2754,11 @@ export class GameScene extends Phaser.Scene {
       // just triggers the mine (anonymous, no shooter), and
       // detonateMine's own AOE sweep is what actually catches the
       // Commander, same as it catches a ship or an asteroid.
-      if (mine?.isAlive && mine.isArmed(nowMs) && !this.pendingMineCollisionTriggers.includes(mine)) {
+      if (
+        mine?.isAlive &&
+        mine.isArmed(nowMs) &&
+        !this.pendingMineCollisionTriggers.includes(mine)
+      ) {
         this.pendingMineCollisionTriggers.push(mine);
         return;
       }
@@ -2403,7 +2919,10 @@ export class GameScene extends Phaser.Scene {
         } else {
           player.lives -= 1;
           if (player.lives > 0) {
-            this.pendingRespawns.push({ slotIndex: player.slotIndex, respawnAtMs: nowMs + SHIP.respawnDelayMs });
+            this.pendingRespawns.push({
+              slotIndex: player.slotIndex,
+              respawnAtMs: nowMs + SHIP.respawnDelayMs,
+            });
           } else {
             player.eliminated = true;
           }
@@ -2416,7 +2935,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Cooperative's "emergency exit" - see the class doc comment. */
-  private ejectCommander(player: PlayerSlot, position: Vector2, color: number, nowMs: number): void {
+  private ejectCommander(
+    player: PlayerSlot,
+    position: Vector2,
+    color: number,
+    nowMs: number,
+  ): void {
     const headingRad = Math.random() * Math.PI * 2;
     this.commanders.push(new Commander(this, position, player.slotIndex, color, headingRad, nowMs));
   }
@@ -2477,7 +3001,11 @@ export class GameScene extends Phaser.Scene {
       // waiting for the fetch) freezes the round immediately either way.
       this.matter.world.pause();
       const winner = this.players.find((p) => p.slotIndex === outcome.winnerIndex);
-      void this.finishCompetitiveRound(outcome.winnerIndex, this.scores[outcome.winnerIndex] ?? 0, winner);
+      void this.finishCompetitiveRound(
+        outcome.winnerIndex,
+        this.scores[outcome.winnerIndex] ?? 0,
+        winner,
+      );
     } else if (outcome.status === 'draw') {
       // No single score a draw could attribute to a leaderboard entry -
       // straight to the normal overlay, same as before this feature.
@@ -2501,12 +3029,20 @@ export class GameScene extends Phaser.Scene {
   private async finishSinglePlayerRound(finalScore: number): Promise<void> {
     const leaderboard = await fetchLeaderboard('singlePlayer');
     if (qualifiesForLeaderboard(leaderboard, finalScore)) {
-      this.enterInitialsEntry(finalScore, 'singlePlayer', this.players[0]!.input, ['GAME OVER', `SCORE ${finalScore}`]);
+      this.enterInitialsEntry(finalScore, 'singlePlayer', this.players[0]!.input, [
+        'GAME OVER',
+        `SCORE ${finalScore}`,
+      ]);
       return;
     }
 
     const topLine = leaderboard[0] ? `TOP SCORE ${leaderboard[0].score}` : 'NO SCORES YET';
-    this.enterGameOver(['GAME OVER', `SCORE ${finalScore}`, topLine, 'PRESS ANY KEY FOR MAIN MENU']);
+    this.enterGameOver([
+      'GAME OVER',
+      `SCORE ${finalScore}`,
+      topLine,
+      'PRESS ANY KEY FOR MAIN MENU',
+    ]);
   }
 
   /** Competitive's own leaderboard check - the winning player's own score, entered with their own input if it qualifies. No winner slot found (shouldn't happen - RoundOutcome.ts only reports a winnerIndex that was alive) degrades to the plain win overlay rather than throwing. */
@@ -2523,7 +3059,10 @@ export class GameScene extends Phaser.Scene {
 
     const leaderboard = await fetchLeaderboard('competitive');
     if (qualifiesForLeaderboard(leaderboard, finalScore)) {
-      this.enterInitialsEntry(finalScore, 'competitive', winner.input, [winLine, `SCORE ${finalScore}`]);
+      this.enterInitialsEntry(finalScore, 'competitive', winner.input, [
+        winLine,
+        `SCORE ${finalScore}`,
+      ]);
       return;
     }
     this.enterGameOver([winLine, `SCORE ${finalScore}`, 'PRESS ANY KEY FOR MAIN MENU']);
@@ -2551,7 +3090,10 @@ export class GameScene extends Phaser.Scene {
 
     const leaderboard = await fetchLeaderboard('cooperative');
     if (qualifiesForLeaderboard(leaderboard, finalScore)) {
-      this.enterInitialsEntry(finalScore, 'cooperative', enterer.input, ['GAME OVER', `SCORE ${finalScore}`]);
+      this.enterInitialsEntry(finalScore, 'cooperative', enterer.input, [
+        'GAME OVER',
+        `SCORE ${finalScore}`,
+      ]);
       return;
     }
     this.enterGameOver(['GAME OVER', `SCORE ${finalScore}`, 'PRESS ANY KEY FOR MAIN MENU']);
@@ -2656,8 +3198,10 @@ export class GameScene extends Phaser.Scene {
     if (!entry) return;
     entry.letterTexts.forEach((text, i) => {
       text.setText(entry.letters[i] ?? 'A');
-      if (i < entry.activeSlot) text.setColor('#8aff4d'); // already confirmed
-      else if (i === entry.activeSlot) text.setColor(toCssHex(COLORS.players[0])); // active
+      if (i < entry.activeSlot)
+        text.setColor('#8aff4d'); // already confirmed
+      else if (i === entry.activeSlot)
+        text.setColor(toCssHex(COLORS.players[0])); // active
       else text.setColor('#5a5a6e'); // not yet reached
     });
   }
@@ -2670,7 +3214,9 @@ export class GameScene extends Phaser.Scene {
     const turn = input.turnDirection;
     if (turn !== 0 && entry.prevTurnDirection === 0) {
       const currentCode = entry.letters[entry.activeSlot].charCodeAt(0) - 65; // 'A' = 65
-      entry.letters[entry.activeSlot] = String.fromCharCode(65 + (((currentCode + turn) % 26) + 26) % 26);
+      entry.letters[entry.activeSlot] = String.fromCharCode(
+        65 + ((((currentCode + turn) % 26) + 26) % 26),
+      );
       this.refreshInitialsEntryDisplay();
     }
     entry.prevTurnDirection = turn;
@@ -2695,8 +3241,8 @@ export class GameScene extends Phaser.Scene {
     const mode = entry.mode;
     const baseLines = entry.baseOverlayLines;
 
-    [entry.titleText, entry.scoreText, entry.instructionText, ...entry.letterTexts].forEach((text) =>
-      text.destroy(),
+    [entry.titleText, entry.scoreText, entry.instructionText, ...entry.letterTexts].forEach(
+      (text) => text.destroy(),
     );
     this.initialsEntry = null;
 
@@ -2742,7 +3288,8 @@ export class GameScene extends Phaser.Scene {
     for (const rescuer of this.players) {
       const commander = rescuer.towedCommander;
       if (!commander || !rescuer.ship.isAlive) continue;
-      if (!isWithinDropOffRange(rescuer.ship.position, station.position, station.dropOffRadius)) continue;
+      if (!isWithinDropOffRange(rescuer.ship.position, station.position, station.dropOffRadius))
+        continue;
 
       this.respawnRescuedPlayer(commander.slotIndex, station.position, nowMs);
       commander.destroy();
@@ -2885,7 +3432,11 @@ export class GameScene extends Phaser.Scene {
     for (const { saboteur, projectile, awardScore } of hits) {
       if (!saboteur.isAlive) continue;
       projectile?.destroy();
-      this.destroySaboteur(saboteur, nowMs, awardScore && projectile ? projectile.ownerIndex : undefined);
+      this.destroySaboteur(
+        saboteur,
+        nowMs,
+        awardScore && projectile ? projectile.ownerIndex : undefined,
+      );
     }
   }
 
@@ -3005,7 +3556,11 @@ export class GameScene extends Phaser.Scene {
   private beginScrapCountdown(nowMs: number): void {
     this.scrapCountdownEndsAtMs = nowMs + FRACTURE.scrapCollectionMs;
     this.scrapCountdownText = this.add
-      .text(ARENA_WIDTH / 2, 40, '', { fontFamily: 'monospace', fontSize: '20px', color: toCssHex(COLORS.fracture) })
+      .text(ARENA_WIDTH / 2, 40, '', {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: toCssHex(COLORS.fracture),
+      })
       .setOrigin(0.5, 0);
   }
 
@@ -3123,8 +3678,12 @@ export class GameScene extends Phaser.Scene {
       this.awardScore(projectile.ownerIndex, CARDINAL.armScore, armPosition);
       // "Collectible until the boss finally exploded," decided - no
       // countdown, unlike beginScrapCountdown()'s 10s window below.
-      this.fractureSwarm.push(new FractureSwarmBit(this, armPosition, Math.random() * Math.PI * 2, nowMs));
-      this.fractureSwarm.push(new FractureSwarmBit(this, armPosition, Math.random() * Math.PI * 2, nowMs));
+      this.fractureSwarm.push(
+        new FractureSwarmBit(this, armPosition, Math.random() * Math.PI * 2, nowMs),
+      );
+      this.fractureSwarm.push(
+        new FractureSwarmBit(this, armPosition, Math.random() * Math.PI * 2, nowMs),
+      );
     }
   }
 
@@ -3195,7 +3754,10 @@ export class GameScene extends Phaser.Scene {
 
     this.players.forEach((player) => {
       if (!player.ship.isAlive || player.ship.isInvulnerable(nowMs)) return;
-      const distance = Math.hypot(player.ship.position.x - position.x, player.ship.position.y - position.y);
+      const distance = Math.hypot(
+        player.ship.position.x - position.x,
+        player.ship.position.y - position.y,
+      );
       if (distance <= CARDINAL.detonationMaxRadius && !this.pendingShipHits.includes(player.ship)) {
         this.pendingShipHits.push(player.ship);
       }
@@ -3220,13 +3782,15 @@ export class GameScene extends Phaser.Scene {
     const label = this.cardinalHealthBarLabel;
     if (!cardinal || !border || !fill || !label) return;
 
-    const fraction = cardinal.phase === 'armed' ? cardinal.armHpFraction() : cardinal.coreHpFraction();
+    const fraction =
+      cardinal.phase === 'armed' ? cardinal.armHpFraction() : cardinal.coreHpFraction();
     // Left-anchored (setOrigin(0, 0.5) at creation) - same "just mutate
     // .width, never reposition" pattern MenuScene's own volume sliders
     // already use, rather than recomputing .x every frame to fake it.
     fill.width = Math.max(0, CARDINAL_HEALTH_BAR.width * fraction);
 
-    const labelText = cardinal.phase === 'armed' ? 'ARMS' : cardinal.phase === 'coreExposed' ? 'CORE' : 'CRITICAL';
+    const labelText =
+      cardinal.phase === 'armed' ? 'ARMS' : cardinal.phase === 'coreExposed' ? 'CORE' : 'CRITICAL';
     label.setText(labelText);
   }
 
@@ -3247,7 +3811,13 @@ export class GameScene extends Phaser.Scene {
       .rectangle(centerX, barY, CARDINAL_HEALTH_BAR.width, CARDINAL_HEALTH_BAR.height)
       .setStrokeStyle(2, COLORS.cardinal);
     this.cardinalHealthBarFill = this.add
-      .rectangle(barLeft, barY, CARDINAL_HEALTH_BAR.width, CARDINAL_HEALTH_BAR.height - 4, COLORS.cardinal)
+      .rectangle(
+        barLeft,
+        barY,
+        CARDINAL_HEALTH_BAR.width,
+        CARDINAL_HEALTH_BAR.height - 4,
+        COLORS.cardinal,
+      )
       .setOrigin(0, 0.5);
   }
 
@@ -3273,7 +3843,9 @@ export class GameScene extends Phaser.Scene {
 
     // DENSE FIELD pays double on rocks specifically (StageChoice's
     // FIELD_MODIFIERS) - the reward half of its risk/reward trade.
-    const asteroidScore = Math.round(ASTEROID[size].score * this.fieldModifiers.asteroidScoreMultiplier);
+    const asteroidScore = Math.round(
+      ASTEROID[size].score * this.fieldModifiers.asteroidScoreMultiplier,
+    );
     this.awardScore(projectile.ownerIndex, asteroidScore, position);
 
     const childSize: AsteroidSize | null = nextAsteroidSize(size);
@@ -3310,7 +3882,11 @@ export class GameScene extends Phaser.Scene {
    * tuned for *sustained* per-frame forces - see SHIP's own doc comment
    * on that gotcha) is the right primitive here.
    */
-  private applyHeavyShotImpulse(impactPosition: Vector2, shotHeadingRad: number, strength: number): void {
+  private applyHeavyShotImpulse(
+    impactPosition: Vector2,
+    shotHeadingRad: number,
+    strength: number,
+  ): void {
     for (const asteroid of this.asteroids) {
       if (!asteroid.isAlive) continue;
       const push = computeImpulseVelocity(
@@ -3329,7 +3905,12 @@ export class GameScene extends Phaser.Scene {
   private spawnBurst(
     origin: Vector2,
     color: number,
-    config: { count: number; speedRange: readonly [number, number]; lifespanMs: number; sizePx: number },
+    config: {
+      count: number;
+      speedRange: readonly [number, number];
+      lifespanMs: number;
+      sizePx: number;
+    },
   ): void {
     this.bursts.push(
       new DestructionBurst(
@@ -3537,7 +4118,8 @@ export class GameScene extends Phaser.Scene {
     const pooledScore = this.scores.reduce((sum, score) => sum + score, 0);
 
     this.players.forEach((player) => {
-      const score = this.mode === 'competitive' ? (this.scores[player.slotIndex] ?? 0) : pooledScore;
+      const score =
+        this.mode === 'competitive' ? (this.scores[player.slotIndex] ?? 0) : pooledScore;
       const lines = [`P${player.slotIndex + 1}`, `SCORE ${score}`];
 
       // Kill chain, shown only while it's actually worth something -
@@ -3585,7 +4167,11 @@ export class GameScene extends Phaser.Scene {
     // if a boss fight just ended (spaceStationRelocated), so this is a
     // safe no-op on every other stage-clear.
     if (this.spaceStation && this.spaceStationRelocated) {
-      this.spaceStation.travelTo({ x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 }, this.time.now, SPACE_STATION.relocateTravelMs);
+      this.spaceStation.travelTo(
+        { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2 },
+        this.time.now,
+        SPACE_STATION.relocateTravelMs,
+      );
       this.spaceStationRelocated = false;
     }
     this.enterShop();
@@ -3649,11 +4235,16 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const hintText = this.add
-      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + 230, 'TURN: select   FIRE: buy / vote / toggle ready', {
-        fontFamily: 'monospace',
-        fontSize: '16px',
-        color: '#6a6a80',
-      })
+      .text(
+        ARENA_WIDTH / 2,
+        ARENA_HEIGHT / 2 + 230,
+        'TURN: select   FIRE: buy / vote / toggle ready',
+        {
+          fontFamily: 'monospace',
+          fontSize: '16px',
+          color: '#6a6a80',
+        },
+      )
       .setOrigin(0.5);
 
     const panelCount = this.players.length;
@@ -3661,7 +4252,9 @@ export class GameScene extends Phaser.Scene {
     const startX = ARENA_WIDTH / 2 - totalWidth / 2 + SHOP_PANEL_WIDTH / 2;
     const panelY = ARENA_HEIGHT / 2 + 10;
 
-    const panels = this.players.map((player, i) => this.buildShopPanel(player, startX + i * (SHOP_PANEL_WIDTH + SHOP_PANEL_GAP), panelY));
+    const panels = this.players.map((player, i) =>
+      this.buildShopPanel(player, startX + i * (SHOP_PANEL_WIDTH + SHOP_PANEL_GAP), panelY),
+    );
 
     this.shop = { panels, headlineText, subheadlineText, hintText };
   }
@@ -3881,7 +4474,15 @@ export class GameScene extends Phaser.Scene {
       const marker = selected ? '> ' : '  ';
       const state = owned ? 'OWNED' : String(WEAPON_UPGRADES.costs[id]);
       text.setText(`${marker}${WEAPON_UPGRADE_LABELS[id].padEnd(12)}${state}`);
-      text.setColor(owned ? toCssHex(COLORS.scrap) : affordable ? (selected ? toCssHex(COLORS.players[panel.slotIndex]!) : '#dfe1ef') : '#5a5a6e');
+      text.setColor(
+        owned
+          ? toCssHex(COLORS.scrap)
+          : affordable
+            ? selected
+              ? toCssHex(COLORS.players[panel.slotIndex]!)
+              : '#dfe1ef'
+            : '#5a5a6e',
+      );
     });
 
     this.stageChoiceOptions.forEach((option, i) => {
@@ -3896,13 +4497,25 @@ export class GameScene extends Phaser.Scene {
       const marker = selected ? '>' : ' ';
       const chosen = votedForThis ? '*' : ' ';
       text.setText(`${marker}${chosen}${option.label.padEnd(14)}${votes > 0 ? votes : ''}`);
-      text.setColor(votedForThis ? toCssHex(COLORS.players[panel.slotIndex]!) : selected ? '#dfe1ef' : '#6a6a80');
+      text.setColor(
+        votedForThis
+          ? toCssHex(COLORS.players[panel.slotIndex]!)
+          : selected
+            ? '#dfe1ef'
+            : '#6a6a80',
+      );
     });
 
     if (panel.readyText) {
       const readySelected = panel.cursor === 'ready';
       panel.readyText.setText(panel.ready ? 'READY' : readySelected ? '> READY? <' : 'READY?');
-      panel.readyText.setColor(panel.ready ? toCssHex(COLORS.scrap) : readySelected ? toCssHex(COLORS.players[panel.slotIndex]!) : '#6a6a80');
+      panel.readyText.setColor(
+        panel.ready
+          ? toCssHex(COLORS.scrap)
+          : readySelected
+            ? toCssHex(COLORS.players[panel.slotIndex]!)
+            : '#6a6a80',
+      );
     }
   }
 
@@ -3946,7 +4559,12 @@ export class GameScene extends Phaser.Scene {
       // The crew's own pick if they made one, otherwise the original
       // coin flip - which still covers the very first transition of a
       // round, before any shop has been seen.
-      const boss = this.chosenBoss === 'fracture' ? 'fracture' : this.chosenBoss === 'cardinal' ? 'cardinal' : this.pickRandomBoss();
+      const boss =
+        this.chosenBoss === 'fracture'
+          ? 'fracture'
+          : this.chosenBoss === 'cardinal'
+            ? 'cardinal'
+            : this.pickRandomBoss();
       this.chosenBoss = undefined;
       this.beginBossAnnouncement(boss);
       return;
@@ -4042,7 +4660,9 @@ export class GameScene extends Phaser.Scene {
     for (const player of this.players) {
       if (!player.ship.isAlive) continue;
       player.ship.destroy();
-      const offset = isBossStageStart ? BOSS_RESPAWN_OFFSETS[player.slotIndex]! : this.spawnOffsetFor(player.slotIndex);
+      const offset = isBossStageStart
+        ? BOSS_RESPAWN_OFFSETS[player.slotIndex]!
+        : this.spawnOffsetFor(player.slotIndex);
       player.ship = new Ship(
         this,
         ARENA_WIDTH / 2 + offset.x,
@@ -4051,7 +4671,9 @@ export class GameScene extends Phaser.Scene {
         this.mode === 'competitive',
         player.hullId,
       );
-      const invulnerabilityMs = isBossStageStart ? BOSS_STAGE_START.invulnerabilityMs : SHIP.respawnInvulnerabilityMs;
+      const invulnerabilityMs = isBossStageStart
+        ? BOSS_STAGE_START.invulnerabilityMs
+        : SHIP.respawnInvulnerabilityMs;
       player.ship.grantInvulnerability(nowMs, invulnerabilityMs);
     }
   }
@@ -4072,7 +4694,8 @@ export class GameScene extends Phaser.Scene {
    */
   private beginBossAnnouncement(boss: 'fracture' | 'cardinal'): void {
     this.state = 'bossAnnouncement';
-    const announcementDurationMs = boss === 'fracture' ? FRACTURE.announcementDurationMs : CARDINAL.announcementDurationMs;
+    const announcementDurationMs =
+      boss === 'fracture' ? FRACTURE.announcementDurationMs : CARDINAL.announcementDurationMs;
     this.showBossAnnouncement(boss === 'fracture' ? 'THE FRACTURE' : 'THE CARDINAL');
     this.shakeCamera(EFFECTS.majorShake);
     this.relocateSpaceStationForBoss();
@@ -4127,7 +4750,11 @@ export class GameScene extends Phaser.Scene {
     const nowMs = this.time.now;
     this.resetStageHazards(nowMs, true);
     this.spawnWave(FRACTURE.spawnAsteroidCount);
-    this.fracture = new Fracture(this, { x: ARENA_WIDTH / 2, y: FRACTURE_SPAWN_OFFSCREEN_Y }, nowMs);
+    this.fracture = new Fracture(
+      this,
+      { x: ARENA_WIDTH / 2, y: FRACTURE_SPAWN_OFFSCREEN_Y },
+      nowMs,
+    );
   }
 
   /**
@@ -4208,7 +4835,14 @@ export class GameScene extends Phaser.Scene {
   private showPauseMenu(): void {
     const centerX = ARENA_WIDTH / 2;
     const centerY = ARENA_HEIGHT / 2;
-    const backdrop = this.add.rectangle(centerX, centerY, ARENA_WIDTH, ARENA_HEIGHT, 0x05050a, 0.75);
+    const backdrop = this.add.rectangle(
+      centerX,
+      centerY,
+      ARENA_WIDTH,
+      ARENA_HEIGHT,
+      0x05050a,
+      0.75,
+    );
     const title = this.add
       .text(centerX, centerY - 160, 'PAUSED', {
         fontFamily: 'monospace',
@@ -4217,11 +4851,15 @@ export class GameScene extends Phaser.Scene {
         color: '#ffffff',
       })
       .setOrigin(0.5);
-    const continueButton = this.makeMenuButton(centerX, centerY - 20, 'CONTINUE', () => this.exitPaused());
+    const continueButton = this.makeMenuButton(centerX, centerY - 20, 'CONTINUE', () =>
+      this.exitPaused(),
+    );
     const restartButton = this.makeMenuButton(centerX, centerY + 60, 'RESTART', () =>
       this.scene.restart({ mode: this.mode }),
     );
-    const mainMenuButton = this.makeMenuButton(centerX, centerY + 140, 'MAIN MENU', () => this.goToMainMenu());
+    const mainMenuButton = this.makeMenuButton(centerX, centerY + 140, 'MAIN MENU', () =>
+      this.goToMainMenu(),
+    );
     this.pauseMenuObjects = [
       backdrop,
       title,
@@ -4253,9 +4891,16 @@ export class GameScene extends Phaser.Scene {
     label: string,
     onClick: () => void,
   ): { bg: Phaser.GameObjects.Rectangle; text: Phaser.GameObjects.Text } {
-    const bg = this.add.rectangle(x, y, 280, 64, 0x14141c, 1).setStrokeStyle(2, COLORS.players[0], 1);
+    const bg = this.add
+      .rectangle(x, y, 280, 64, 0x14141c, 1)
+      .setStrokeStyle(2, COLORS.players[0], 1);
     const text = this.add
-      .text(x, y, label, { fontFamily: 'monospace', fontSize: '26px', fontStyle: 'bold', color: '#ffffff' })
+      .text(x, y, label, {
+        fontFamily: 'monospace',
+        fontSize: '26px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+      })
       .setOrigin(0.5);
     bg.setInteractive({ useHandCursor: true }).on('pointerdown', onClick);
     return { bg, text };
@@ -4268,7 +4913,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showOverlay(lines: string[]): void {
-    const startY = ARENA_HEIGHT / 2 - ((lines.length - 1) * 24);
+    const startY = ARENA_HEIGHT / 2 - (lines.length - 1) * 24;
     this.overlayTexts = lines.map((line, i) =>
       this.add
         .text(ARENA_WIDTH / 2, startY + i * 48, line, {

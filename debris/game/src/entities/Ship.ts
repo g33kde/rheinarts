@@ -125,6 +125,34 @@ export class Ship {
     this.visual.setRotation(angleRadians);
   }
 
+  /**
+   * The network-client path (docs/roadmap.md's "Windows + LAN
+   * multiplayer," Sprint 6) - applies a received `ShipSnapshot`
+   * directly and renders, bypassing `update()`/Matter physics entirely.
+   * A client never simulates any ship, including its own (the "pure
+   * renderer, no prediction yet" decision) - this is the one entry
+   * point that exists specifically because of that.
+   *
+   * Visibility rather than `destroy()` stands in for "dead": a client
+   * has no respawn flow of its own to later construct a replacement
+   * Ship with, so the same instance just hides and reappears as the
+   * host's own `alive` flag changes.
+   */
+  applyNetworkSnapshot(
+    snapshot: { x: number; y: number; heading: number; alive: boolean; thrusting: boolean; invulnerableUntilMs: number },
+    nowMs: number,
+  ): void {
+    this.visual.setVisible(snapshot.alive);
+    if (!snapshot.alive) return;
+
+    this.visual.setPosition(snapshot.x, snapshot.y);
+    this.visual.setRotation(snapshot.heading);
+    this.thrusting = snapshot.thrusting;
+    this.invulnerableUntilMs = snapshot.invulnerableUntilMs;
+    this.lastNowMs = nowMs;
+    this.render();
+  }
+
   update(nowMs: number, _deltaSeconds: number, arenaWidth: number, arenaHeight: number): void {
     this.lastNowMs = nowMs;
     if (this.thrusting) {

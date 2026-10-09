@@ -3,6 +3,7 @@ import { ARENA_HEIGHT, ARENA_WIDTH, COLORS } from './config/GameConfig';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { HighScoreScene } from './scenes/HighScoreScene';
+import { LanLobbyScene } from './scenes/LanLobbyScene';
 import { MenuScene } from './scenes/MenuScene';
 import { SplashScene } from './scenes/SplashScene';
 import { patchPhaserGamepadHoleBug } from './systems/PhaserGamepadPatch';
@@ -38,7 +39,7 @@ new Phaser.Game({
       debug: false,
     },
   },
-  scene: [BootScene, SplashScene, MenuScene, GameScene, HighScoreScene],
+  scene: [BootScene, SplashScene, MenuScene, GameScene, HighScoreScene, LanLobbyScene],
 });
 
 // Dev-only balance overlay for the v2 tuning pass - a no-op unless the
