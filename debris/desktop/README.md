@@ -61,3 +61,18 @@ dumb pipe on purpose.
 Not wired into any menu/UI yet - this sprint is the transport layer on
 its own, tested standalone (`npm --prefix ../game run test`), not yet
 driving an actual "Host Game"/"Join Game" screen.
+
+## WebRTC connection (Sprint 5)
+
+`../game/src/systems/RtcConnection.ts` wraps a single peer's
+`RTCPeerConnection` + its two DataChannels (reliable, unreliable).
+`RtcSignaling.ts` wires that to this LAN discovery channel - `sendTo`
+(above) carries the offer/answer/ICE-candidate exchange a connection
+needs before it's actually usable.
+
+Entirely untestable with vitest - Node has no `RTCPeerConnection` at
+all. tsc/lint/the rest of the test suite are clean, and the LAN
+discovery mechanics underneath this were independently confirmed
+working (Sprint 4's README entry), but **an actual two-machine
+connection still needs to be tried for real** - that's the next thing
+worth doing once you're set up to run two instances of the app.

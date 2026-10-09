@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('debrisLan', {
   startListening: (port) => ipcRenderer.send('lan:startListening', port),
   stopListening: () => ipcRenderer.send('lan:stopListening'),
   broadcast: (port, message) => ipcRenderer.send('lan:broadcast', port, message),
+  sendTo: (address, port, message) => ipcRenderer.send('lan:sendTo', address, port, message),
   onMessage: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('lan:message', listener);

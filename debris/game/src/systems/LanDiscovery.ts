@@ -29,6 +29,7 @@ declare global {
       startListening: (port: number) => void;
       stopListening: () => void;
       broadcast: (port: number, message: string) => void;
+      sendTo: (address: string, port: number, message: string) => void;
       onMessage: (callback: (payload: { address: string; data: string }) => void) => () => void;
     };
   }

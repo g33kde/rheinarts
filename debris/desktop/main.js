@@ -44,9 +44,24 @@ function broadcast(_event, port, message) {
   });
 }
 
+// Directed (unicast) send, unlike broadcast() above - WebRTC signaling
+// (Sprint 5, game/src/systems/RtcSignaling.ts) needs a reply to actually
+// reach the sender back, which means sending *from* the same bound
+// `discoverySocket` the caller is already listening on rather than a
+// fresh ephemeral one: the recipient's reply goes to whatever
+// address/port a datagram's `rinfo` says it came from, and only
+// `discoverySocket`'s own bound port is something the other side can
+// already be listening on. Silently does nothing if the caller hasn't
+// called startListening() first - signaling without a bound socket to
+// receive the reply on wouldn't get anywhere anyway.
+function sendTo(_event, address, port, message) {
+  discoverySocket?.send(message, port, address);
+}
+
 ipcMain.on('lan:startListening', startListening);
 ipcMain.on('lan:stopListening', stopListening);
 ipcMain.on('lan:broadcast', broadcast);
+ipcMain.on('lan:sendTo', sendTo);
 
 // Sprint 1 (docs/roadmap.md's "Windows + LAN multiplayer") - a bare
 // Electron shell around the existing web build, nothing else.
