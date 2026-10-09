@@ -1670,6 +1670,130 @@ extraction zone, under real pressure the whole way there.
 - **Delivery**: instant on reaching the extraction zone, or does the
   cargo need to be held/parked there briefly?
 
+### Windows + LAN multiplayer
+
+A new, **additional** way to play, not a replacement — the existing
+browser/arcade-cabinet build (local input only, same-screen multiplayer)
+keeps working exactly as it does today. This adds a second shell around
+the same core game code: a Windows desktop app that can host or join a
+networked match across up to 4 separate PCs on a LAN, plus a standalone
+dedicated-server variant. Scoped deliberately to LAN only for v1 - real
+internet play is its own, larger follow-up (see "Deferred to a later
+phase" below), not something this pulls in by accident.
+
+**Three things get built, not one:**
+
+1. **Debris Client** - the game itself, packaged for Windows via
+   **Electron** (wraps the existing Phaser/TypeScript/Vite game almost
+   as-is, with real Node.js socket access the browser build never had) -
+   picked over Tauri (smaller footprint, but more new build tooling to
+   learn for no gameplay benefit) and over a full native rewrite (only
+   worth it if the web stack itself were the problem, which it isn't).
+   Can **host** a match or **join** one found on the LAN. Keeps today's
+   local split-input flexibility - one PC can still bring 2 local
+   players (keyboard + gamepad) into a networked match, so as few as 2
+   PCs could seat all 4 players.
+2. **Debris Server** - a second, lighter application, deliberately
+   **not** Electron: a plain Node.js console app with no rendering at
+   all, just simulation + networking. Exists so a match can run on a
+   machine nobody's actively playing on. Broadcasts itself on the LAN
+   exactly like a hosting player's client does, so it shows up
+   identically in anyone's "Join Game" list - a joining player can't
+   tell the difference between a player-hosted match and a dedicated
+   server, and doesn't need to.
+3. **A shared core package** - the actual game logic (`GameConfig`,
+   entities, systems, the Matter.js simulation) factored so the Electron
+   client and the Node server run the *exact same* simulation code,
+   not two copies that could quietly drift apart from each other.
+
+**Authority, decided**: whoever's hosting - a player's own client, or
+the dedicated server - runs the one real simulation. Every other PC is a
+**pure renderer**: no local physics at all, just interpolating between
+the position/state snapshots the host sends. The simplest client there
+is, deliberately - it cannot ever disagree with the host about where
+anything is, because it never computes anything itself. Lockstep (every
+PC simulates independently from synced inputs) was considered and
+rejected: it demands the physics be bit-identical across machines, which
+Matter.js was never built to guarantee.
+
+**Discovery, decided**: LAN broadcast. The host (player or dedicated
+server) broadcasts itself; "Join Game" shows a live list of everything
+currently broadcasting. No manual IP entry, no room codes - both were
+considered and set aside as unnecessary friction for a feature whose
+whole pitch is "find the other 3 PCs in the same room."
+
+**Transport, decided**: **WebRTC DataChannels**, not plain WebSocket and
+not raw UDP. Two channels per connection - one reliable/ordered (round
+start/end, scoring, hit confirmation) and one unreliable/unordered
+(frequent position snapshots, where a dropped packet should just be
+superseded by the next one, not block everything behind it the way TCP
+would). This is the one piece deliberately built with the internet in
+mind even though v1 ships LAN-only: WebRTC's NAT traversal (STUN) and
+loss tolerance mean a later internet-play phase is "add a different
+discovery/signaling path," not "redesign the transport."
+
+**Modes in scope, decided**: Cooperative and Competitive - both gain
+real stakes from every player being on their own machine. Single Player
+stays local-only; networking a mode with nobody else in it has no
+purpose.
+
+**Lobby, decided**: the host can start with however many players have
+joined, 1-4 - same flexibility the local game already has, not a new
+"must be a full table" restriction.
+
+**Disconnects, decided**:
+- **Host disconnects** (player-hosted only - a dedicated server going
+  down is just "the server went down," no special case needed): the
+  round ends immediately for everyone, clear message, back to the menu.
+  No pause-and-wait, no host migration - both were considered and
+  rejected as real complexity for a failure mode that should just be
+  handled honestly instead.
+- **A non-host player disconnects**: their ship is removed, same shape
+  as a Competitive elimination today; everyone else keeps playing.
+
+**Client role, decided**: pure renderer, no local physics (see
+"Authority" above) - the direct consequence of also deciding *not* to
+build client-side prediction yet (see below). A client that predicted
+its own movement would need real reconciliation logic for when the
+host's snapshot disagrees; a client that never predicts anything has
+nothing to reconcile.
+
+**Deferred to a later phase, decided explicitly rather than assumed:**
+
+- **Real internet play** - NAT traversal beyond what STUN resolves on
+  its own, a signaling/matchmaking server (LAN broadcast cannot cross
+  the internet, so discovery needs an entirely different mechanism), and
+  a TURN relay fallback for players behind strict/symmetric NATs who
+  can't connect peer-to-peer even with STUN. Get the LAN case solid
+  first; the transport choice above is specifically what makes this an
+  additive phase 2 rather than a rearchitecture.
+- **Client-side prediction / lag compensation** - moving a ship
+  instantly on input rather than waiting for the host's next snapshot.
+  Barely matters on a LAN (near-zero latency already); matters a great
+  deal once real internet latency (50-150ms+) is in play. Deliberately
+  not built until there's a concrete reason to need it.
+- **Host migration** - if this turns out to matter in practice once
+  people are actually playing, it's a second hosting path on top of the
+  two that already exist (player-hosted, dedicated server), not a small
+  addition.
+- **Voice/text chat** - assumed to happen outside the game (Discord or
+  similar), not a feature this builds.
+
+**Open questions for whoever picks this up:**
+
+- **Does a LAN match still submit to the existing global online
+  leaderboard** (`systems/HighScoreApi.ts`)? Default assumption here is
+  yes, unchanged - each client still has its own internet access and
+  submits its own score exactly like a local game does today - but
+  that's a default, not a decision made directly.
+- **Snapshot rate** - how often the host actually sends state. Something
+  in the 20-30Hz range is a reasonable starting guess, same "starting
+  guess, not playtested" spirit every other new constant in this
+  codebase gets, not a researched number.
+- **Version compatibility** - presumably all connecting PCs need to be
+  running the same build (a simple version-check gate on connect), but
+  this hasn't been decided outright either.
+
 ## Explicitly deferred past v1
 
 - **Power-ups beyond Shield** (rapid-fire, multi-shot, etc.) — Shield
@@ -1689,8 +1813,11 @@ extraction zone, under real pressure the whole way there.
   candidates" above, which scales the same curve by player count.
 - **Stage-scaled asteroid/UFO counts** — **landed, see item 28.**
 - **Touch/mobile controls.**
-- **Online multiplayer.** Local input only for the foreseeable future —
-  a real netcode project, not a natural extension of this one.
+- **Online multiplayer** — a real netcode project, not a natural
+  extension of this one. **A LAN-scoped version of this is now a "Future
+  ideas" concept, see "Windows + LAN multiplayer" above** - real
+  internet play (beyond a LAN) stays deferred exactly as this bullet
+  always said, deliberately, even in that concept.
 
 ## Not yet started
 
