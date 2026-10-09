@@ -1,11 +1,20 @@
 import { defineConfig } from 'vite';
 
+// Desktop (debris/desktop, docs/roadmap.md's "Windows + LAN multiplayer",
+// Sprint 2) loads the built game from local disk via Electron's
+// `loadFile` - a `/debris/` absolute prefix would try to fetch assets
+// from a path that doesn't exist on the filesystem, so that build needs
+// its own relative base and its own output directory rather than
+// reusing the web build's `dist/` (which stays exactly as it is for the
+// live site). `npm run build:desktop` sets this.
+const isDesktopBuild = process.env.ELECTRON_BUILD === '1';
+
 export default defineConfig(({ command }) => ({
   root: '.',
   // Deployed at /debris/ (same shared-image pattern as Godspeed), but the
   // dev server serves from localhost directly - only the production build
   // needs the subpath prefix baked into asset references.
-  base: command === 'build' ? '/debris/' : '/',
+  base: isDesktopBuild ? './' : command === 'build' ? '/debris/' : '/',
   // Music lives outside the Vite project root (debris/music/, sibling to
   // debris/game/) so tracks can be dropped in without touching src/ - Vite
   // copies this dir's contents as-is, referenced at runtime via
@@ -30,7 +39,7 @@ export default defineConfig(({ command }) => ({
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: isDesktopBuild ? 'dist-desktop' : 'dist',
     target: 'es2022',
   },
 }));

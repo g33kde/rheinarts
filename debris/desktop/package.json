@@ -2,15 +2,46 @@
   "name": "debris-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Debris, packaged as a Windows desktop app (Sprint 1: dev-mode Electron shell around the existing web build - see docs/roadmap.md's \"Windows + LAN multiplayer\")",
+  "description": "Debris, packaged as a Windows desktop app (docs/roadmap.md's \"Windows + LAN multiplayer\")",
   "main": "main.js",
   "scripts": {
-    "dev": "concurrently -k -n game,electron -c cyan,magenta \"npm --prefix ../game run dev\" \"wait-on http://localhost:5175 && electron .\""
+    "dev": "concurrently -k -n game,electron -c cyan,magenta \"npm --prefix ../game run dev\" \"wait-on http://localhost:5175 && electron .\"",
+    "build:game": "npm --prefix ../game run build:desktop",
+    "preview": "npm run build:game && cross-env ELECTRON_LOAD_BUILD=1 electron .",
+    "dist": "npm run build:game && electron-builder --win"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
     "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.rheinarts.debris",
+    "productName": "Debris",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../game/dist-desktop",
+        "to": "game"
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "allowScripts": {
     "electron@33.4.11": true

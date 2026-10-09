@@ -6,7 +6,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['dist/**', 'node_modules/**'],
+    ignores: ['dist/**', 'dist-desktop/**', 'node_modules/**'],
   },
   {
     rules: {

@@ -1,13 +1,31 @@
 const { app, BrowserWindow } = require('electron');
+const path = require('node:path');
 
 // Sprint 1 (docs/roadmap.md's "Windows + LAN multiplayer") - a bare
-// Electron shell around the existing web build, nothing else. Points at
-// the game's own Vite dev server rather than loading built files
-// directly: same dev loop the browser build already has (edit, save,
-// see it), and sidesteps the production build's `base: '/debris/'` path
-// prefix entirely - that's Sprint 2's problem once an actual installer
-// needs to load bundled static files instead.
+// Electron shell around the existing web build, nothing else.
 const GAME_DEV_SERVER_URL = 'http://localhost:5175';
+
+// Sprint 2: a real installer has no dev server to point at - it loads
+// the game's own `build:desktop` output from local disk instead
+// (`../game/vite.config.ts`'s relative `base: './'`, specifically built
+// for this rather than reusing the web build's `/debris/`-prefixed
+// `dist/`, which would try to fetch assets from a path that doesn't
+// exist on the filesystem).
+//
+// Packaged: electron-builder's `extraResources` (desktop/package.json)
+// copies that build to `resources/game/` - resolved via
+// `process.resourcesPath`, not `__dirname`, since `__dirname` points
+// inside the asar-packed app code, not the resources directory sitting
+// next to it.
+// Unpackaged with ELECTRON_LOAD_BUILD=1: reads the build straight out of
+// `../game/dist-desktop`, for testing the production build without
+// going through electron-builder every time.
+function resolveBuiltIndexPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'game', 'index.html');
+  }
+  return path.join(__dirname, '..', 'game', 'dist-desktop', 'index.html');
+}
 
 // 1280x800 preserves ARENA_WIDTH/ARENA_HEIGHT's 1920x1200 aspect ratio
 // (1.6:1) - Phaser's own Scale.FIT mode (src/main.ts) handles the actual
@@ -27,7 +45,11 @@ function createWindow() {
     },
   });
 
-  win.loadURL(GAME_DEV_SERVER_URL);
+  if (app.isPackaged || process.env.ELECTRON_LOAD_BUILD === '1') {
+    win.loadFile(resolveBuiltIndexPath());
+  } else {
+    win.loadURL(GAME_DEV_SERVER_URL);
+  }
 }
 
 app.whenReady().then(createWindow);
