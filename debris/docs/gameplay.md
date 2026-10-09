@@ -419,27 +419,6 @@ unchanged underneath - the vote picks that stage's *flavor*:
   **THE VOID** (fewer rocks, but UFOs arrive twice as often - emptier is
   not the same as safer).
 
-## The Assembler
-
-A boss that **builds itself out of the asteroid field** partway through
-a normal stage, rather than arriving finished the way The Fracture and
-The Cardinal do. It seeds, drags nearby rocks in, and welds each one on
-as a visible plate. Two things can stop it:
-
-- **Starve it.** It eats the stage's *real* asteroids, so clearing the
-  field quickly is itself the counter - and ignoring the rocks to shoot
-  at it feeds it. Run it dry before it finishes and it collapses
-  without ever waking up. That pays **no score at all**: the reward for
-  denial is simply not having to fight it.
-- **Knock it apart.** Shooting it while it builds knocks plates back
-  off instead of damaging it, so a crew can split between the two
-  counters.
-
-Let it finish and it comes alive as a real boss - tougher the more it
-managed to eat - which hunts the nearest player and fires debris. Kill
-it then and it pays properly, and everything it swallowed comes back as
-scrap.
-
 ## The Saboteur
 
 A late-game field hazard, not a boss - it carries no weapon of its own.

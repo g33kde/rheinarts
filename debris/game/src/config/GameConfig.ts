@@ -331,9 +331,9 @@ export const SABOTEUR = {
  * kill in this game already follows.
  *
  * **Always-visible blast-radius telegraph, decided** - the fair-
- * telegraph rule every other hazard in Debris follows (Gravity Well's
- * glow, the Assembler's pull field), applied to a threat that can
- * trigger from something that isn't the player's own choice at all.
+ * telegraph rule every other hazard in Debris follows (the Gravity
+ * Well's own glow), applied to a threat that can trigger from something
+ * that isn't the player's own choice at all.
  *
  * Starting guesses, not playtested.
  */
@@ -616,42 +616,6 @@ export const HULLS: Record<HullId, HullStats> = {
     },
   },
 };
-
-/**
- * The Assembler (docs/roadmap.md) - Debris's third boss, and the only
- * one that assembles itself out of the arena mid-stage instead of
- * arriving finished. *Sinistar*-descended; `systems/AssemblerBuild.ts`
- * owns the rules and records the design decisions behind them.
- *
- * **A normal-stage event, not a boss-stage pick**, decided: it needs a
- * field of rocks to eat, which a boss stage doesn't have. That also
- * means it needs no change to the normal/boss alternation at all - it
- * spawns on its own timer exactly the way the Gravity Well does, and
- * (like a boss) suppresses the Gravity Well while it's around, so a
- * stage never runs both.
- *
- * Starting guesses, not playtested.
- */
-export const ASSEMBLER = {
-  radius: 46, // its own body/hit radius
-  coreRadius: 20,
-  plateRadius: 9, // an absorbed rock, drawn welded to the ring
-  pullRadius: 300, // how far it steals asteroids from
-  pullForce: 0.0000075, // gentler than BLACK_HOLE.pullForceMax - rocks drift in rather than being snatched
-  platesToComplete: 6, // asteroids it must eat before it comes alive - deliberately under a mid-stage field's rock count, or it could never finish
-  hpPerPlate: 3, // a better-fed Assembler is a longer fight (see absorbAsteroid)
-  huntSpeed: 0.55, // px/step once alive - slower than any ship, so it's pressure rather than a chase it wins
-  shardCooldownMs: 2600,
-  materializeDurationMs: 900, // matches FRACTURE/CARDINAL's own beat
-  minStageElapsedMs: 25000, // no earlier than this into a normal stage, same "let them fight the rocks first" rule the Gravity Well got
-  spawnChance: 0.5, // not every stage - it should be a thing that happens, not a fixture
-  scrapOnDeath: 6,
-  // Between FRACTURE.score (1000) and the UFO: it can be denied
-  // entirely, so it pays less than a boss you're forced to fight.
-  // Starving it out deliberately pays *nothing* - the reward for
-  // denial is simply not having to fight it.
-  score: 900,
-} as const;
 
 /**
  * Static arena wreckage (`systems/ArenaTerrain.ts`, `entities/Wreck.ts`)

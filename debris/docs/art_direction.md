@@ -638,9 +638,11 @@ top-center, out of every corner's way.
 
 ## The game's voice, decided
 
-Debris speaks - currently only through The Assembler, but the voice
-belongs to the game rather than to that boss, and anything else that
-needs to talk should use the same one.
+Debris speaks - originally only through The Assembler, which has since
+been pulled back out (`docs/roadmap.md`'s "Future ideas"). The voice
+engine belongs to the game rather than to that boss and outlived it;
+nothing currently uses it, but the next hazard/boss that needs to talk
+should reach for the same one rather than building a second.
 
 **Synthesized, never sampled** (`systems/VoiceSynth.ts`). The brief was
 "always the same voice", and the browser's built-in `speechSynthesis`

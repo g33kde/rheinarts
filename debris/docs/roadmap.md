@@ -824,24 +824,24 @@ outstanding.
     feel: the spring hit `maxForce` at only 60px of stretch, making it
     a constant yank rather than something that builds - there's now a
     regression test pinning that.
-40. [x] The Assembler - Debris's third boss, and the only one that
-    builds itself out of the arena instead of arriving finished
-    (`systems/AssemblerBuild.ts` + `entities/Assembler.ts`). Every open
-    question from its concept section below is now resolved: **it eats
-    the stage's real asteroids** (so clearing rocks quickly is itself
-    the counter, and ignoring them to shoot it feeds it); **full denial
-    is allowed** - starve it and it collapses without ever waking up,
-    paying *nothing*, so denial is the safe line rather than the
-    lucrative one; **shots knock plates back off** while it builds, so
-    a crew can split between starving it and undoing its progress; and
-    it's a **normal-stage event, not a boss-stage pick**, which is what
-    lets it need a field to eat without touching the alternation at
-    all. It counts as a boss encounter for gating purposes, so it
-    inherits "stage isn't clear", "no Gravity Well on top of it" and
-    the UFO cap with no special cases. **It taunts** - see item 42,
-    which was built immediately afterwards precisely because "this game
-    has no voice assets" turned out to be a solvable problem rather
-    than a permanent constraint.
+40. [x] ~~The Assembler~~ - **removed, see below.** Debris's third
+    boss, and the only one that built itself out of the arena instead of
+    arriving finished (`systems/AssemblerBuild.ts` + `entities/
+    Assembler.ts`), landed with every open question from its concept
+    section resolved: it ate the stage's real asteroids (so clearing
+    rocks quickly was itself the counter, and ignoring them to shoot it
+    fed it); full denial was allowed - starve it and it collapsed
+    without ever waking up, paying nothing; shots knocked plates back
+    off while it built; and it counted as a boss encounter for gating
+    purposes with no special cases. It taunted (item 42's voice
+    synthesizer was built immediately afterwards specifically to give it
+    one). **Pulled back out on request** after shipping (a live-game
+    report of it appearing as early as stage 1, with no stage gate of
+    its own unlike the Saboteur's - item 43 - which does) - rather than
+    just adding that gate, it's reverted to a future idea entirely; see
+    its own section under "Future ideas" below for the preserved full
+    concept, which whoever rebuilds it should treat as the spec, not
+    this paragraph's historical account of what the first build did.
 41. [x] Arena terrain - static wreckage (`systems/ArenaTerrain.ts` +
     `entities/Wreck.ts`), the first thing in this game that physically
     blocks anything. **The screen-wrap conflict was resolved by
@@ -870,9 +870,12 @@ outstanding.
     are **ramped rather than stepped** between phonemes, which is the
     single detail that makes it intelligible instead of a string of
     beeps. Lines the game says often are hand-written as explicit
-    phonemes (`VOICE_LINES`), exactly as allophone chips were driven; a
-    crude speller handles arbitrary text for one-offs. Wired to The
-    Assembler's four moments (item 40). Verified by measuring real
+    phonemes, exactly as allophone chips were driven; a crude speller
+    handles arbitrary text for one-offs. Originally wired to The
+    Assembler's four moments (item 40); those specific lines (`VOICE_LINES`)
+    were removed along with the Assembler itself, but the engine is
+    general-purpose and outlived it - the next hazard/boss that needs a
+    voice gets its own hand-tuned lines the same way. Verified by measuring real
     formant-structured output and by rendering a spectrogram showing
     the formants actually moving across an utterance - **but not by
     ear**, which is the one check this environment can't do.
@@ -923,8 +926,9 @@ outstanding.
     - **Destroying it drops one last mine at its own death position**,
       regardless of cause (shot, ram, or caught in another mine's own
       blast) - punishes killing it at close range, rewards sniping it
-      from a distance, same "nothing dies for free" precedent the
-      Assembler/Cardinal already set for bosses.
+      from a distance, same "nothing dies for free" precedent The
+      Cardinal already set for bosses (The Assembler set it too, before
+      item 40 below pulled it back out).
     - Pure logic extracted and unit-tested, same convention as every
       other hazard: `systems/SaboteurAI.ts` (targeting/steering) and
       `systems/DriftMineBlast.ts` (blast-radius math).
@@ -993,7 +997,7 @@ co-op-only or also appear in Competitive is an open question, not decided.
 | ⚡ **The Magnetar** | A huge electromagnetic boss that alternates between **PULL** and **PUSH** phases — drags every ship and asteroid in the arena together, then violently throws it all back outward. Boss-tier, arena-wide, requested directly. Distinct from the existing Gravity Well hazard (`docs/gameplay.md`) despite the surface similarity: Gravity Well is a passive, localized, pull-only environmental hazard on its own timer with no HP to fight; the Magnetar is an active, arena-wide, two-phase boss with hit points, more Harvester's sibling than Gravity Well's. |
 | 💠 **The Fracture** | A crystalline boss that splits when damaged instead of just dying — Core → 3 Fragments → Swarm. Boss-tier, requested directly, full concept preserved in its own section below rather than compressed here. **Landed, see item 19** — the splitting/movement/multi-tier-HP core loop is built; real attacks, ship contact, and the death sequence are still open. |
 | ✝️ **The Cardinal** | A stationary four-armed mechanical boss permanently anchored at arena-center — four laser cannons at N/E/S/W, the whole cross rotating continuously clockwise, firing all four simultaneously every few seconds. Boss-tier, requested directly, full concept preserved in its own section below rather than compressed here. **Landed, see item 22** — three-phase fight (armed → core exposed → critical detonation), all decided numbers built as spec'd. |
-| 🧲 **The Assembler** | A boss that **builds itself out of the asteroid field** over the course of a stage instead of materializing whole — visibly drawing rocks in and welding them together while the crew is busy fighting. Interruptible: shoot the pieces mid-assembly and you slow or stop it. Boss-tier, *Sinistar*-descended, full concept preserved in its own section below. Unbuilt — see "v2 candidates" above. |
+| 🧲 **The Assembler** | A boss that **builds itself out of the asteroid field** over the course of a stage instead of materializing whole — visibly drawing rocks in and welding them together while the crew is busy fighting. Interruptible: shoot the pieces mid-assembly and you slow or stop it. Boss-tier, *Sinistar*-descended, full concept preserved in its own section below. **Built once (item 40, Sprint 3), then pulled back out on request** — a live-game report of it appearing as early as stage 1, with no stage gate of its own. Treated as unbuilt again rather than patched; whoever picks this up again should add a stage gate (same shape as the Saboteur's `SABOTEUR.firstNormalStageCount`, item 43) as part of the rebuild, not as an afterthought. |
 
 **Chaos Meter tie-ins worth remembering** (connecting this to the section
 above, not deciding it now):
@@ -1334,8 +1338,10 @@ design spec, not v1 scope):
 A third boss-tier concept, from a "next level" brainstorming pass — not
 requested as a spec the way The Fracture and The Cardinal were, so this
 is a pitch rather than a decided design. Same "preserve it in full"
-treatment as those two. **Unbuilt** — tracked under "v2 candidates"
-above.
+treatment as those two. **Built once (item 40, Sprint 3), then removed
+on request** after a live-game report of it appearing as early as stage
+1 with no stage gate of its own - rather than patch that in, it's back
+to **unbuilt** here, tracked under "v2 candidates" above.
 
 The pitch: **a boss that builds itself out of the asteroid field while
 you're busy with the asteroid field.** Rocks drift inward toward a point,
@@ -1408,6 +1414,17 @@ idea here that changes how players treat asteroids themselves.
   punishing — but it's exactly the crew-attention fork this concept is
   built around.
 
+**What the first build actually resolved**, for whoever picks this back
+up (item 40's own writeup has the full account): it consumed real stage
+asteroids (yes); full denial paid nothing and was allowed (yes); it
+counted as a boss encounter for every gating purpose; and it taunted,
+which is what prompted the voice synthesizer (item 42) to get built at
+all. None of that was the reason it came back out - the removal was
+purely about the missing stage gate above letting it show up as early
+as stage 1. A rebuild can most likely reuse those resolutions as-is and
+just add the one piece that was actually missing, rather than
+re-deciding everything from scratch.
+
 ### Co-op rescue mechanics — landed, see item 15
 
 Built as "Emergency Ejection & Rescue" (`docs/gameplay.md`), on request.
@@ -1464,11 +1481,13 @@ again for the rest of the round, is gone.
 **The Assembler** (see its own section above) is the third boss
 concept, and the one that **didn't fit this alternation** - it wants to
 grow during a *normal* stage rather than own a boss stage. **Resolved
-when it was built (item 40): it's a normal-stage event and never joins
-`pickRandomBoss()`'s pool at all.** It still counts as a boss encounter
-for gating purposes, so the stage-clear check, the no-Gravity-Well rule
-and the UFO cap all apply to it unchanged - it inherits every
-cross-boss convention without being part of the rotation.
+when it was first built (item 40, since removed): it was a normal-stage
+event and never joined `pickRandomBoss()`'s pool at all.** It still
+counted as a boss encounter for gating purposes, so the stage-clear
+check, the no-Gravity-Well rule and the UFO cap all applied to it
+unchanged - it inherited every cross-boss convention without being part
+of the rotation. Whoever rebuilds it can almost certainly reuse this
+resolution as-is.
 
 **The Harvester** (see "Enemy roster" above) - a huge, arena-consuming
 boss gated behind Chaos Level 6 - is NOT part of this resolution.

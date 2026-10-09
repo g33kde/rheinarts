@@ -38,7 +38,7 @@ import Phaser from 'phaser';
  */
 
 export interface VoiceProfile {
-  /** Glottal pitch in Hz. Low reads as big and slow; the Assembler wants to sound like something large. */
+  /** Glottal pitch in Hz. Low reads as big and slow; a hostile machine wants to sound like something large. */
   readonly pitchHz: number;
   /** Pitch drift across an utterance, as a multiplier on the end pitch - a flat line sounds dead, a falling one sounds like a statement. */
   readonly pitchFallRatio: number;
@@ -212,9 +212,10 @@ const SINGLES: Record<string, string[]> = {
  *
  * It exists so a caller can write a throwaway line as plain text and
  * get something intelligible. Anything the game says often enough to
- * matter should be written as explicit phonemes instead (see
- * `VOICE_LINES`), which is exactly how the allophone speech chips of
- * the era were driven.
+ * matter should be written as explicit phonemes instead, same shape as
+ * the Assembler's own former barks (`CHANGELOG.md`/`docs/roadmap.md` -
+ * removed with the Assembler itself, not yet rebuilt) - exactly how the
+ * allophone speech chips of the era were driven.
  */
 export function textToPhonemes(text: string): string[] {
   const out: string[] = [];
@@ -412,32 +413,10 @@ export function speak(
   return speakPhonemes(scene, textToPhonemes(text), volume, voice);
 }
 
-/**
- * The lines the game actually speaks, written as explicit phonemes
- * rather than run through `textToPhonemes`.
- *
- * This is how the allophone speech chips of the era were driven, and
- * the reason is the same now as it was then: English spelling is far
- * too irregular for a rule set this small, so anything the game says
- * often enough to matter gets hand-tuned until it's clearly
- * intelligible over a noisy arcade mix. The plain-text path stays for
- * one-offs and debugging.
- *
- * The Assembler's barks are deliberately **original** rather than
- * Sinistar's own famous ones - the homage is in building a taunting,
- * self-assembling boss at all, not in reciting another game's script.
- *
- * ("I" is a diphthong this table has no single symbol for; AA->IY is
- * the standard way to build it out of two monophthongs, and it reads
- * correctly at speaking speed.)
- */
-export const VOICE_LINES = {
-  /** Seeding - still just a nucleus, dragging the field toward itself. "MORE MASS" */
-  assemblerSeed: ['M', 'AO', 'R', '_', 'M', 'AE', 'S'],
-  /** Completion - it is alive now. "I AM WHOLE" */
-  assemblerComplete: ['AA', 'IY', '_', 'AE', 'M', '_', 'HH', 'OW', 'L'],
-  /** Starved out before it ever finished. "NOT ENOUGH" */
-  assemblerStarved: ['N', 'AA', 'T', '_', 'IH', 'N', 'AH', 'F'],
-  /** Destroyed after waking up. "UNMADE" */
-  assemblerKilled: ['AH', 'N', '_', 'M', 'EY', 'D'],
-} as const satisfies Record<string, readonly string[]>;
+// The Assembler's own hand-tuned phoneme barks ("MORE MASS," "I AM
+// WHOLE," "NOT ENOUGH," "UNMADE") lived here as `VOICE_LINES` - removed
+// along with the Assembler itself (docs/roadmap.md's "Future ideas").
+// This engine (speak/speakPhonemes/textToPhonemes below) is general-
+// purpose and stays; the next hazard/boss that needs a voice gets its
+// own hand-tuned lines the same way, same spirit as this file's own
+// "English spelling is too irregular for a rule set this small" note.

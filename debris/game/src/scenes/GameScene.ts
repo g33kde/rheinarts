@@ -9,7 +9,6 @@ import {
   CARDINAL,
   COLORS,
   COMMANDER,
-  ASSEMBLER,
   ATTRACT_MODE,
   COMBO,
   EFFECTS,
@@ -83,7 +82,6 @@ import {
   registerKill,
   type ComboState,
 } from '../systems/ComboMultiplier';
-import { Assembler } from '../entities/Assembler';
 import { Wreck } from '../entities/Wreck';
 import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
 import { computeBotIntent } from '../systems/DemoBot';
@@ -100,7 +98,6 @@ import {
   type StageChoiceOption,
 } from '../systems/StageChoice';
 import { playUfoDestroyedSfx, playUfoShotSfx, playUfoSpawnSfx } from '../systems/ProceduralSfx';
-import { speakPhonemes, VOICE_LINES } from '../systems/VoiceSynth';
 import { computeAsteroidSpawnCount, computeUfoSpawnIntervalMs } from '../systems/StageScaling';
 import { pickDropTarget } from '../systems/SaboteurAI';
 import { isWithinBlast } from '../systems/DriftMineBlast';
@@ -395,11 +392,8 @@ export class GameScene extends Phaser.Scene {
   // next; true -> it spawns a normal wave instead. Starts false, so the
   // very first stage-clear of the round still triggers a boss first,
   // same as the original behavior.
-  /** The Assembler (ASSEMBLER / entities/Assembler.ts) - a normal-stage event, so it lives alongside the hazards rather than in the boss rotation. */
   /** Static arena wreckage for this stage (TERRAIN / systems/ArenaTerrain.ts) - regenerated per stage, never during a boss fight. */
   private wrecks: Wreck[] = [];
-  private assembler: Assembler | undefined;
-  private assemblerRolledThisStage = false;
   /** The Saboteur and its dropped ordnance (SABOTEUR/DRIFT_MINE, entities/Saboteur.ts, entities/DriftMine.ts) - all three modes, unlike the Commander/Station pair above, since its threat isn't Cooperative-specific even though the Commander-priority targeting hook only ever matters there. */
   private saboteurs: Saboteur[] = [];
   private driftMines: DriftMine[] = [];
@@ -459,13 +453,12 @@ export class GameScene extends Phaser.Scene {
   //
   // This started life as a dev-only on-screen timer, which roadmap.md
   // flagged for removal before release - and the display is indeed gone
-  // now. **The accumulator itself deliberately stays**: three systems
+  // now. **The accumulator itself deliberately stays**: other systems
   // grew to depend on it after that removal note was written, and
   // deleting it (as the note literally instructed) would silently break
-  // all three - the Gravity Well's spawn gate
-  // (BLACK_HOLE.minStageElapsedMs), The Assembler's
-  // (ASSEMBLER.minStageElapsedMs), and the stage-clear rank's own
-  // elapsed-time component (systems/StageRank.ts).
+  // them - the Gravity Well's spawn gate (BLACK_HOLE.minStageElapsedMs)
+  // and the stage-clear rank's own elapsed-time component
+  // (systems/StageRank.ts).
   //
   // Accumulated only while `state === 'playing'` rather than read off
   // wall-clock `this.time.now`, so it pauses for free across every
@@ -541,11 +534,8 @@ export class GameScene extends Phaser.Scene {
   // updateCardinalAttacks(), and any future boss can feed the same
   // queue either way.
   private pendingBossAsteroidHits: Asteroid[] = [];
-  /** Asteroids the Assembler is about to eat, and shots about to hit it - same deferred shape as every other pending queue here. */
   /** Shots that hit cover this frame - destroyed rather than ricocheting. */
   private pendingWreckAbsorbs: Projectile[] = [];
-  private pendingAssemblerFeed: Asteroid[] = [];
-  private pendingAssemblerHits: { projectile: Projectile }[] = [];
   // The plasma ball/shard are consumed on any contact (ship or asteroid
   // alike, same as a UfoShot) - separate typed queues since (unlike
   // pendingBossAsteroidHits above) there's a second object to destroy
@@ -629,9 +619,6 @@ export class GameScene extends Phaser.Scene {
     this.lastStageWasBoss = false;
     this.normalStageCount = 1;
     this.clearTerrain();
-    this.assembler?.destroy();
-    this.assembler = undefined;
-    this.assemblerRolledThisStage = false;
     this.saboteurs.forEach((saboteur) => saboteur.destroy());
     this.saboteurs = [];
     this.driftMines.forEach((mine) => mine.destroy());
@@ -673,8 +660,6 @@ export class GameScene extends Phaser.Scene {
     this.pendingCardinalPlasmaHits = [];
     this.pendingBossAsteroidHits = [];
     this.pendingWreckAbsorbs = [];
-    this.pendingAssemblerFeed = [];
-    this.pendingAssemblerHits = [];
     this.pendingCardinalPlasmaAsteroidHits = [];
     this.pendingFractureShardAsteroidHits = [];
     this.pendingScrapPickups = [];
@@ -858,8 +843,6 @@ export class GameScene extends Phaser.Scene {
     this.processPendingCardinalCoreHits(nowMs);
     this.processPendingCardinalPlasmaHits(nowMs);
     this.processPendingWreckAbsorbs();
-    this.processPendingAssemblerFeed();
-    this.processPendingAssemblerHits(nowMs);
     this.processPendingBossAsteroidHits();
     this.processPendingCardinalPlasmaAsteroidHits();
     this.processPendingFractureShardAsteroidHits();
@@ -1023,7 +1006,6 @@ export class GameScene extends Phaser.Scene {
     });
     this.processCommanderExpiry(nowMs);
     this.processStationDropOffs(nowMs);
-    this.updateAssembler(nowMs);
     this.updateSaboteurs(nowMs, deltaSeconds);
     this.updateDriftMines(nowMs, ARENA_WIDTH, ARENA_HEIGHT);
     this.processPendingChainDetonations(nowMs);
@@ -1152,149 +1134,11 @@ export class GameScene extends Phaser.Scene {
       this.fracture !== undefined ||
       this.fractureFragments.length > 0 ||
       this.scrapCountdownEndsAtMs !== undefined ||
-      this.cardinal !== undefined ||
-      // The Assembler is a normal-stage event rather than a boss stage,
-      // but every rule this gates applies to it identically: the stage
-      // isn't clear while it's alive, no Gravity Well on top of it, and
-      // the UFO cap holds. Counting it here is how it inherits all
-      // three without a single special case elsewhere.
-      this.assembler !== undefined
+      this.cardinal !== undefined
     );
   }
 
   /** Moves every UFO, then has each one fire independently if its own cooldown and a live target both allow it. */
-  /**
-   * The Assembler's whole per-frame life (ASSEMBLER / entities/Assembler.ts).
-   *
-   * Spawning mirrors the Gravity Well's own rules exactly - a minimum
-   * time into the stage so the crew gets to fight rocks first, never
-   * during a boss encounter, and only on a chance roll so it's an event
-   * rather than a fixture. Rolled once per stage, not once per frame.
-   */
-  private updateAssembler(nowMs: number): void {
-    const assembler = this.assembler;
-
-    if (!assembler) {
-      if (this.assemblerRolledThisStage) return;
-      if (this.isBossEncounterActive() || this.blackHole) return;
-      if (this.stageElapsedMs < ASSEMBLER.minStageElapsedMs) return;
-      // Needs a field to eat - seeding one into an almost-cleared stage
-      // would just collapse it immediately.
-      if (this.asteroids.length < ASSEMBLER.platesToComplete) return;
-      this.assemblerRolledThisStage = true;
-      if (Math.random() > ASSEMBLER.spawnChance) return;
-      this.spawnAssembler(nowMs);
-      return;
-    }
-
-    if (assembler.isMaterializing(nowMs)) {
-      assembler.update(nowMs, undefined, ARENA_WIDTH, ARENA_HEIGHT);
-      return;
-    }
-
-    // Starved: it ran the field dry without finishing, so it falls
-    // apart. This is the counter that makes clearing rocks quickly the
-    // right answer rather than a distraction.
-    if (!assembler.isActive && this.asteroids.length === 0) {
-      if (assembler.starve()) this.collapseAssembler(nowMs, false);
-      return;
-    }
-
-    if (!assembler.isActive) this.pullAsteroidsToAssembler(assembler);
-
-    const target = this.nearestAliveShip(assembler.position)?.ship.position;
-    assembler.update(nowMs, target, ARENA_WIDTH, ARENA_HEIGHT);
-
-    if (assembler.canFireShard(nowMs) && target) {
-      const heading = Math.atan2(target.y - assembler.position.y, target.x - assembler.position.x);
-      this.fractureShards.push(new FractureShard(this, assembler.position, heading, nowMs));
-      assembler.recordShardFired(nowMs);
-    }
-  }
-
-  private spawnAssembler(nowMs: number): void {
-    // Reuses the Black Hole's own "not on top of a ship or the station"
-    // placement search - the same courtesy applies to something that's
-    // about to start dragging the field around.
-    this.assembler = new Assembler(this, this.pickBlackHoleSpawnPosition(), nowMs);
-    this.shakeCamera(EFFECTS.minorShake);
-    // It announces itself. Sinistar's whole reputation rests on the
-    // fact that it talked, and the voice is synthesized rather than
-    // sampled (systems/VoiceSynth.ts) so it's identical everywhere.
-    speakPhonemes(this, VOICE_LINES.assemblerSeed, getSfxVolume());
-  }
-
-  /** Drags nearby rocks in, reusing the Gravity Well's own force math - this is the same kind of pull, just gentler and with an appetite. */
-  private pullAsteroidsToAssembler(assembler: Assembler): void {
-    for (const asteroid of this.asteroids) {
-      if (!asteroid.isAlive) continue;
-      const force = computeGravityForce(
-        asteroid.position,
-        assembler.position,
-        ASSEMBLER.pullRadius,
-        // No event horizon of its own - its body radius is the inner
-        // cutoff, so a rock already touching it stops being pulled and
-        // is simply eaten by the collision instead.
-        ASSEMBLER.radius,
-        ASSEMBLER.pullForce,
-      );
-      if (force.x === 0 && force.y === 0) continue;
-      asteroid.visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
-    }
-  }
-
-  /** An absorbed rock: it feeds the build and leaves the field, which is the trade at the heart of this fight. */
-  private feedAssembler(asteroid: Asteroid): void {
-    const assembler = this.assembler;
-    if (!assembler || assembler.isActive) return;
-    this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
-    asteroid.destroy();
-    if (assembler.absorb()) {
-      // It just came alive.
-      this.shakeCamera(EFFECTS.majorShake);
-      speakPhonemes(this, VOICE_LINES.assemblerComplete, getSfxVolume());
-      this.showBossAnnouncement('THE ASSEMBLER');
-    }
-  }
-
-  /**
-   * Death, either way it can happen - killed while alive, or starved
-   * out before it ever woke up.
-   *
-   * Only a kill pays anything. Starving it out pays nothing at all, and
-   * deliberately so: the reward for denial is that you never had to
-   * fight it. (There's also no such thing as a *shot* that collapses an
-   * unfinished one - `takeHit` knocks plates off while assembling and
-   * can't reduce it past zero - so `killerSlotIndex` being present
-   * always implies `wasActive`.)
-   */
-  private collapseAssembler(nowMs: number, wasActive: boolean, killerSlotIndex?: number): void {
-    const assembler = this.assembler;
-    if (!assembler) return;
-    const position = assembler.position;
-
-    this.spawnBurst(position, wasActive ? COLORS.ufo : COLORS.asteroid, EFFECTS.ufoBurst);
-    this.shakeCamera(wasActive ? EFFECTS.majorShake : EFFECTS.minorShake);
-    if (wasActive) this.triggerSlowMo(nowMs);
-    // Two different endings deserve two different last words.
-    speakPhonemes(this, wasActive ? VOICE_LINES.assemblerKilled : VOICE_LINES.assemblerStarved, getSfxVolume());
-
-    if (wasActive) {
-      // Everything it ate comes back as scrap - the field's mass
-      // returning to the arena in a form the crew can actually use.
-      for (let i = 0; i < ASSEMBLER.scrapOnDeath; i += 1) {
-        this.fractureSwarm.push(new FractureSwarmBit(this, position, Math.random() * Math.PI * 2, nowMs));
-      }
-    }
-
-    if (killerSlotIndex !== undefined) {
-      this.awardScore(killerSlotIndex, ASSEMBLER.score, position);
-    }
-
-    assembler.destroy();
-    this.assembler = undefined;
-  }
-
   private clearTerrain(): void {
     this.wrecks.forEach((wreck) => wreck.destroy());
     this.wrecks = [];
@@ -1636,7 +1480,7 @@ export class GameScene extends Phaser.Scene {
    * blast) - a Saboteur always drops one last mine right at its own
    * death position, decided: punishes killing it at close range,
    * rewards sniping it from a distance, same "nothing dies for free"
-   * precedent the Assembler/Cardinal already set for bosses.
+   * precedent The Cardinal already set for bosses.
    */
   private destroySaboteur(saboteur: Saboteur, nowMs: number, ownerIndex: number | undefined): void {
     if (!saboteur.isAlive) return;
@@ -2111,7 +1955,6 @@ export class GameScene extends Phaser.Scene {
       entityA instanceof FractureShard ? entityA : entityB instanceof FractureShard ? entityB : undefined;
     const cardinalPlasma =
       entityA instanceof CardinalPlasmaBall ? entityA : entityB instanceof CardinalPlasmaBall ? entityB : undefined;
-    const assembler = entityA instanceof Assembler ? entityA : entityB instanceof Assembler ? entityB : undefined;
     const wreck = entityA instanceof Wreck ? entityA : entityB instanceof Wreck ? entityB : undefined;
     const saboteur = entityA instanceof Saboteur ? entityA : entityB instanceof Saboteur ? entityB : undefined;
     const mine = entityA instanceof DriftMine ? entityA : entityB instanceof DriftMine ? entityB : undefined;
@@ -2152,29 +1995,6 @@ export class GameScene extends Phaser.Scene {
     // the entire point of putting it there.
     if (projectile?.isAlive && wreck?.isAlive) {
       if (!this.pendingWreckAbsorbs.includes(projectile)) this.pendingWreckAbsorbs.push(projectile);
-      return;
-    }
-
-    // The Assembler eats the field while it's still building; once it's
-    // alive the rocks stop mattering to it and simply bounce off (it's
-    // a sensor, so "bounce off" means pass through).
-    if (asteroid?.isAlive && assembler?.isAlive && !assembler.isActive) {
-      if (!this.pendingAssemblerFeed.includes(asteroid)) this.pendingAssemblerFeed.push(asteroid);
-      return;
-    }
-
-    // Ship contact behaves like every other boss body.
-    if (ship?.isAlive && assembler?.isAlive) {
-      if (!ship.isInvulnerable(nowMs) && !this.pendingShipHits.includes(ship)) {
-        this.pendingShipHits.push(ship);
-      }
-      return;
-    }
-
-    if (projectile?.isAlive && assembler?.isAlive) {
-      if (!this.pendingAssemblerHits.some((hit) => hit.projectile === projectile)) {
-        this.pendingAssemblerHits.push({ projectile });
-      }
       return;
     }
 
@@ -2443,7 +2263,6 @@ export class GameScene extends Phaser.Scene {
     | FractureSwarmBit
     | FractureShard
     | CardinalPlasmaBall
-    | Assembler
     | Wreck
     | Saboteur
     | DriftMine
@@ -2462,7 +2281,6 @@ export class GameScene extends Phaser.Scene {
       | FractureSwarmBit
       | FractureShard
       | CardinalPlasmaBall
-      | Assembler
       | Wreck
       | Saboteur
       | DriftMine
@@ -3240,43 +3058,12 @@ export class GameScene extends Phaser.Scene {
    * ram - see the ship-contact branches in handleCollision()/
    * updateCardinalAttacks() this mirrors.
    */
-  /** Rocks the Assembler reached this frame - each one becomes a plate. */
   private processPendingWreckAbsorbs(): void {
     if (this.pendingWreckAbsorbs.length === 0) return;
     const absorbed = this.pendingWreckAbsorbs;
     this.pendingWreckAbsorbs = [];
     for (const projectile of absorbed) {
       if (projectile.isAlive) projectile.destroy();
-    }
-  }
-
-  private processPendingAssemblerFeed(): void {
-    if (this.pendingAssemblerFeed.length === 0) return;
-    const feed = this.pendingAssemblerFeed;
-    this.pendingAssemblerFeed = [];
-    for (const asteroid of feed) {
-      if (asteroid.isAlive) this.feedAssembler(asteroid);
-    }
-  }
-
-  /** Shots hitting it: plates knocked off while building, damage once alive - AssemblerBuild owns which. */
-  private processPendingAssemblerHits(nowMs: number): void {
-    if (this.pendingAssemblerHits.length === 0) return;
-    const hits = this.pendingAssemblerHits;
-    this.pendingAssemblerHits = [];
-    const assembler = this.assembler;
-    for (const { projectile } of hits) {
-      const wasActive = assembler?.isActive ?? false;
-      const ownerIndex = projectile.ownerIndex;
-      projectile.destroy();
-      if (!assembler?.isAlive) continue;
-
-      const killed = assembler.takeHit(nowMs, projectile.damage);
-      if (killed) {
-        this.collapseAssembler(nowMs, wasActive, ownerIndex);
-      } else {
-        this.spawnBurst(assembler.position, wasActive ? COLORS.ufo : COLORS.asteroid, EFFECTS.asteroidBurst);
-      }
     }
   }
 

@@ -1,5 +1,4 @@
 import {
-  ASSEMBLER,
   COMBO,
   COMMANDER,
   CREW_SCALING,
@@ -136,19 +135,6 @@ function buildSchema(): TuningGroup[] {
       fields: [
         field('EFFECTS.slowMo.timeScale', EFFECTS.slowMo, 'timeScale', 0.05, 1, 0.05),
         field('EFFECTS.slowMo.durationMs', EFFECTS.slowMo, 'durationMs', 100, 2000, 50),
-      ],
-    },
-    {
-      title: 'The Assembler',
-      fields: [
-        field('ASSEMBLER.platesToComplete', ASSEMBLER, 'platesToComplete', 2, 16, 1),
-        field('ASSEMBLER.hpPerPlate', ASSEMBLER, 'hpPerPlate', 1, 12, 1),
-        field('ASSEMBLER.pullRadius', ASSEMBLER, 'pullRadius', 80, 700, 10),
-        field('ASSEMBLER.pullForce', ASSEMBLER, 'pullForce', 0.000001, 0.00005, 0.000001),
-        field('ASSEMBLER.huntSpeed', ASSEMBLER, 'huntSpeed', 0.1, 3, 0.05),
-        field('ASSEMBLER.shardCooldownMs', ASSEMBLER, 'shardCooldownMs', 500, 8000, 100),
-        field('ASSEMBLER.minStageElapsedMs', ASSEMBLER, 'minStageElapsedMs', 0, 120000, 5000, 'next stage'),
-        field('ASSEMBLER.spawnChance', ASSEMBLER, 'spawnChance', 0, 1, 0.05, 'next stage'),
       ],
     },
     {

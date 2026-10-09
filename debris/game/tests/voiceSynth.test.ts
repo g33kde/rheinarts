@@ -1,12 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  GAME_VOICE,
-  isKnownPhoneme,
-  knownPhonemes,
-  textToPhonemes,
-  utteranceDurationMs,
-  VOICE_LINES,
-} from '../src/systems/VoiceSynth';
+import { GAME_VOICE, isKnownPhoneme, knownPhonemes, textToPhonemes, utteranceDurationMs } from '../src/systems/VoiceSynth';
 
 describe('textToPhonemes', () => {
   it('maps a simple word to phonemes', () => {
@@ -29,7 +22,7 @@ describe('textToPhonemes', () => {
   });
 
   it('produces only phonemes the synthesizer actually knows', () => {
-    const sample = 'THE ASSEMBLER HUNGERS FOR ROCK AND SHIP ALIKE';
+    const sample = 'SOMETHING HUNGERS FOR ROCK AND SHIP ALIKE';
     for (const phoneme of textToPhonemes(sample)) {
       expect(isKnownPhoneme(phoneme)).toBe(true);
     }
@@ -47,24 +40,6 @@ describe('textToPhonemes', () => {
   });
 });
 
-describe('VOICE_LINES', () => {
-  it('only uses phonemes the synthesizer knows', () => {
-    for (const [name, line] of Object.entries(VOICE_LINES)) {
-      for (const phoneme of line) {
-        expect(isKnownPhoneme(phoneme), `${name} uses unknown phoneme ${phoneme}`).toBe(true);
-      }
-    }
-  });
-
-  it('gives every line a sensible arcade-bark length', () => {
-    for (const [name, line] of Object.entries(VOICE_LINES)) {
-      const ms = utteranceDurationMs(line);
-      expect(ms, `${name} too short`).toBeGreaterThan(200);
-      expect(ms, `${name} too long for a bark`).toBeLessThan(2500);
-    }
-  });
-});
-
 describe('utteranceDurationMs', () => {
   it('is zero for nothing to say', () => {
     expect(utteranceDurationMs([])).toBe(0);
@@ -77,8 +52,9 @@ describe('utteranceDurationMs', () => {
   });
 
   it('shortens as the voice rate increases', () => {
-    const normal = utteranceDurationMs(VOICE_LINES.assemblerComplete, GAME_VOICE);
-    const fast = utteranceDurationMs(VOICE_LINES.assemblerComplete, { ...GAME_VOICE, rate: GAME_VOICE.rate * 2 });
+    const line = ['AA', 'IY', '_', 'AE', 'M', '_', 'HH', 'OW', 'L'];
+    const normal = utteranceDurationMs(line, GAME_VOICE);
+    const fast = utteranceDurationMs(line, { ...GAME_VOICE, rate: GAME_VOICE.rate * 2 });
     expect(fast).toBeLessThan(normal);
   });
 
