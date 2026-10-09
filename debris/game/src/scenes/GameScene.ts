@@ -23,8 +23,9 @@ import {
   SPACE_STATION,
   STAGE_RANK,
   TERRAIN,
-  TETHER,
   UFO,
+  SABOTEUR,
+  DRIFT_MINE,
   WEAPON_UPGRADES,
 } from '../config/GameConfig';
 import { PlayfieldBackground } from '../entities/Background';
@@ -34,6 +35,8 @@ import { Cardinal } from '../entities/Cardinal';
 import { CardinalPlasmaBall } from '../entities/CardinalPlasmaBall';
 import { Commander } from '../entities/Commander';
 import { DestructionBurst } from '../entities/DestructionBurst';
+import { DriftMine } from '../entities/DriftMine';
+import { Saboteur } from '../entities/Saboteur';
 import { Fracture } from '../entities/Fracture';
 import { FractureFragment, type FractureFragmentRole } from '../entities/FractureFragment';
 import { FractureLaser } from '../entities/FractureLaser';
@@ -86,13 +89,6 @@ import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
 import { computeBotIntent } from '../systems/DemoBot';
 import { computeStageRank, type StageRankResult } from '../systems/StageRank';
 import {
-  computeTetherForce,
-  distanceBetween,
-  shouldAttach,
-  shouldBreak,
-  tetherTension,
-} from '../systems/TetherSystem';
-import {
   BOSS_CHOICES,
   FIELD_CHOICES,
   FIELD_MODIFIERS,
@@ -106,6 +102,8 @@ import {
 import { playUfoDestroyedSfx, playUfoShotSfx, playUfoSpawnSfx } from '../systems/ProceduralSfx';
 import { speakPhonemes, VOICE_LINES } from '../systems/VoiceSynth';
 import { computeAsteroidSpawnCount, computeUfoSpawnIntervalMs } from '../systems/StageScaling';
+import { pickDropTarget } from '../systems/SaboteurAI';
+import { isWithinBlast } from '../systems/DriftMineBlast';
 import {
   ASTEROID_HIT_SFX_KEY,
   SHIELD_PICKUP_SFX_KEY,
@@ -309,7 +307,7 @@ interface ShopPanel {
  *   as a drifting `Commander` instead of costing a life. Another player
  *   can pick them up on touch and fly them to the arena-center
  *   `SpaceStation` to respawn them (`processStationDropOffs`) - or leave
- *   them to run out `COMMANDER.rescueWindowMs` (10s) or get caught by an
+ *   them to run out `COMMANDER.rescueWindowMs` (15s) or get caught by an
  *   asteroid/UFO while adrift (`processCommanderExpiry`,
  *   `pendingCommanderHazardHits`), either of which permanently
  *   eliminates that player for the round (`PlayerSlot.eliminated`).
@@ -397,14 +395,15 @@ export class GameScene extends Phaser.Scene {
   // next; true -> it spawns a normal wave instead. Starts false, so the
   // very first stage-clear of the round still triggers a boss first,
   // same as the original behavior.
-  /** Live ship-to-ship tethers (Cooperative only - see TETHER/systems/TetherSystem.ts). Each pair appears at most once. */
-  private tethers: { a: Ship; b: Ship }[] = [];
-  private tetherGraphics: Phaser.GameObjects.Graphics | undefined;
   /** The Assembler (ASSEMBLER / entities/Assembler.ts) - a normal-stage event, so it lives alongside the hazards rather than in the boss rotation. */
   /** Static arena wreckage for this stage (TERRAIN / systems/ArenaTerrain.ts) - regenerated per stage, never during a boss fight. */
   private wrecks: Wreck[] = [];
   private assembler: Assembler | undefined;
   private assemblerRolledThisStage = false;
+  /** The Saboteur and its dropped ordnance (SABOTEUR/DRIFT_MINE, entities/Saboteur.ts, entities/DriftMine.ts) - all three modes, unlike the Commander/Station pair above, since its threat isn't Cooperative-specific even though the Commander-priority targeting hook only ever matters there. */
+  private saboteurs: Saboteur[] = [];
+  private driftMines: DriftMine[] = [];
+  private lastSaboteurSpawnAtMs = -Infinity;
   private lastStageWasBoss = false;
   /** Options on offer at the current shop (bosses before a boss stage, field flavors before a normal one) - empty outside the shop. */
   private stageChoiceOptions: readonly StageChoiceOption[] = [];
@@ -568,6 +567,20 @@ export class GameScene extends Phaser.Scene {
   // ship-hit paths above.
   private pendingCommanderPickups: { commander: Commander; ship: Ship }[] = [];
   private pendingCommanderHazardHits: Commander[] = [];
+  // A shot- or ram-killed Saboteur, same shape as pendingUfoHits -
+  // either way it still drops its own parting mine (destroySaboteur()).
+  private pendingSaboteurHits: { saboteur: Saboteur; projectile: Projectile | undefined; awardScore: boolean }[] = [];
+  // Two separate trigger queues rather than one, since only the
+  // shot-triggered path has a projectile to destroy and an ownerIndex to
+  // credit the chain to - a collision trigger is anonymous, same
+  // "hazard-killed, not shot" distinction pendingUfoHits' own
+  // `awardScore` flag already draws.
+  private pendingMineShotTriggers: { mine: DriftMine; projectile: Projectile }[] = [];
+  private pendingMineCollisionTriggers: DriftMine[] = [];
+  // A mine caught in another mine's own blast doesn't detonate instantly -
+  // DRIFT_MINE.chainPropagationMs later, so a chain reads as a chain
+  // rather than one simultaneous flash. Checked every frame in update().
+  private pendingChainDetonations: { mine: DriftMine; atMs: number; ownerIndex: number | undefined }[] = [];
 
   constructor() {
     super('Game');
@@ -615,11 +628,14 @@ export class GameScene extends Phaser.Scene {
     this.fractureShards = [];
     this.lastStageWasBoss = false;
     this.normalStageCount = 1;
-    this.tethers = [];
     this.clearTerrain();
     this.assembler?.destroy();
     this.assembler = undefined;
     this.assemblerRolledThisStage = false;
+    this.saboteurs.forEach((saboteur) => saboteur.destroy());
+    this.saboteurs = [];
+    this.driftMines.forEach((mine) => mine.destroy());
+    this.driftMines = [];
     this.slowMoUntilMs = -Infinity;
     this.stageChoiceOptions = [];
     this.chosenBoss = undefined;
@@ -640,6 +656,7 @@ export class GameScene extends Phaser.Scene {
     this.state = 'playing';
     this.lastShieldSpawnAtMs = this.time.now;
     this.lastUfoSpawnAtMs = this.time.now;
+    this.lastSaboteurSpawnAtMs = this.time.now;
     this.blackHoleDespawnedAtMs = this.time.now;
     this.blackHoleWarningPlayed = false;
     this.wasAnyThrusting = false;
@@ -665,6 +682,10 @@ export class GameScene extends Phaser.Scene {
     this.pendingRespawns = [];
     this.pendingCommanderPickups = [];
     this.pendingCommanderHazardHits = [];
+    this.pendingSaboteurHits = [];
+    this.pendingMineShotTriggers = [];
+    this.pendingMineCollisionTriggers = [];
+    this.pendingChainDetonations = [];
     this.overlayTexts = [];
     this.pauseMenuObjects = [];
     this.generateStageTerrain();
@@ -846,6 +867,8 @@ export class GameScene extends Phaser.Scene {
     this.processPendingRespawns(nowMs);
     this.processPendingCommanderPickups();
     this.processPendingCommanderHazardHits();
+    this.processPendingSaboteurHits(nowMs);
+    this.processPendingMineTriggers(nowMs);
     // Must happen before this frame's per-entity update() calls below, not
     // just before next frame - an entity destroyed above still has its
     // Matter body/Graphics destroyed *this* frame, so calling update() on
@@ -857,6 +880,8 @@ export class GameScene extends Phaser.Scene {
     this.ufos = this.ufos.filter((ufo) => ufo.isAlive);
     this.ufoShots = this.ufoShots.filter((shot) => shot.isAlive);
     this.commanders = this.commanders.filter((commander) => commander.isAlive);
+    this.saboteurs = this.saboteurs.filter((saboteur) => saboteur.isAlive);
+    this.driftMines = this.driftMines.filter((mine) => mine.isAlive);
     // Same reasoning, for entities the Fracture pending-hit processing
     // above can destroy: processPendingFractureFragmentHits (a
     // Fragment), processPendingScrapPickups (a Swarm bit), and
@@ -906,7 +931,6 @@ export class GameScene extends Phaser.Scene {
     const pulledAsteroids = new Set<Asteroid>();
     this.applyBlackHoleGravityForces(pulledAsteroids);
     this.applyFractureGravityForces(pulledAsteroids);
-    this.updateTethers();
 
     this.players.forEach((player) => {
       if (!player.ship.isAlive) return;
@@ -1000,6 +1024,9 @@ export class GameScene extends Phaser.Scene {
     this.processCommanderExpiry(nowMs);
     this.processStationDropOffs(nowMs);
     this.updateAssembler(nowMs);
+    this.updateSaboteurs(nowMs, deltaSeconds);
+    this.updateDriftMines(nowMs, ARENA_WIDTH, ARENA_HEIGHT);
+    this.processPendingChainDetonations(nowMs);
     this.blackHole?.update(nowMs, deltaSeconds);
     this.fracture?.update(nowMs, ARENA_HEIGHT);
     this.fractureFragments.forEach((fragment) => fragment.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT));
@@ -1025,6 +1052,8 @@ export class GameScene extends Phaser.Scene {
     this.ufos = this.ufos.filter((ufo) => ufo.isAlive);
     this.ufoShots = this.ufoShots.filter((shot) => shot.isAlive);
     this.commanders = this.commanders.filter((commander) => commander.isAlive);
+    this.saboteurs = this.saboteurs.filter((saboteur) => saboteur.isAlive);
+    this.driftMines = this.driftMines.filter((mine) => mine.isAlive);
     this.fractureFragments = this.fractureFragments.filter((fragment) => fragment.isAlive);
     this.fractureSwarm = this.fractureSwarm.filter((swarmBit) => swarmBit.isAlive);
     this.fractureShards = this.fractureShards.filter((shard) => shard.isAlive);
@@ -1046,6 +1075,21 @@ export class GameScene extends Phaser.Scene {
     if (!ufoSpawnCapped && nowMs - this.lastUfoSpawnAtMs >= this.modifiedUfoIntervalMs()) {
       this.spawnUfo();
       this.lastUfoSpawnAtMs = nowMs;
+    }
+
+    // The Saboteur - a late-game escalation (SABOTEUR.firstNormalStageCount),
+    // never during a boss encounter (same suppression every other
+    // normal-stage-only hazard already gets), capped at maxConcurrent
+    // rather than UFO's "no cap" - it's meant to be a notable event, not
+    // a fixture.
+    if (
+      this.normalStageCount >= SABOTEUR.firstNormalStageCount &&
+      !this.isBossEncounterActive() &&
+      this.saboteurs.length < SABOTEUR.maxConcurrent &&
+      nowMs - this.lastSaboteurSpawnAtMs >= SABOTEUR.spawnIntervalMs
+    ) {
+      this.spawnSaboteur(nowMs);
+      this.lastSaboteurSpawnAtMs = nowMs;
     }
 
     // "During boss do not spawn black hole," decided - suppressed for
@@ -1119,15 +1163,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Moves every UFO, then has each one fire independently if its own cooldown and a live target both allow it. */
-  /**
-   * Forms, breaks and applies the ship-to-ship tether
-   * (`systems/TetherSystem.ts`). Cooperative only - see TETHER's config
-   * comment for why Competitive is deliberately excluded.
-   *
-   * Runs before the per-ship `update()` pass for the same reason the
-   * Gravity Well's own forces do: `Ship.update()` re-clamps velocity
-   * every frame, so a force applied after it would be partly discarded.
-   */
   /**
    * The Assembler's whole per-frame life (ASSEMBLER / entities/Assembler.ts).
    *
@@ -1296,57 +1331,6 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private updateTethers(): void {
-    if (this.mode !== 'cooperative') return;
-
-    const living = this.players.filter((p) => p.ship.isAlive).map((p) => p.ship);
-
-    // Drop any tether whose ends died or drifted too far apart.
-    this.tethers = this.tethers.filter(({ a, b }) => {
-      if (!a.isAlive || !b.isAlive) return false;
-      return !shouldBreak(distanceBetween(a.position, b.position), TETHER);
-    });
-
-    // Form new ones between untethered ships flying close together.
-    const alreadyTethered = (ship: Ship): boolean =>
-      this.tethers.some(({ a, b }) => a === ship || b === ship);
-    for (let i = 0; i < living.length; i += 1) {
-      for (let j = i + 1; j < living.length; j += 1) {
-        const a = living[i]!;
-        const b = living[j]!;
-        // One tether per ship, so a crowded crew doesn't end up in a web
-        // that can't be flown out of.
-        if (alreadyTethered(a) || alreadyTethered(b)) continue;
-        if (shouldAttach(distanceBetween(a.position, b.position), TETHER)) {
-          this.tethers.push({ a, b });
-        }
-      }
-    }
-
-    for (const { a, b } of this.tethers) {
-      const force = computeTetherForce(a.position, b.position, TETHER);
-      if (force.x === 0 && force.y === 0) continue;
-      a.visual.applyForce(new Phaser.Math.Vector2(force.x, force.y));
-      b.visual.applyForce(new Phaser.Math.Vector2(-force.x, -force.y));
-    }
-
-    this.drawTethers();
-  }
-
-  /** A line per tether, brightening and thickening as it approaches breaking - so a pair can see the snap coming rather than just feeling it. */
-  private drawTethers(): void {
-    const g = (this.tetherGraphics ??= this.add.graphics());
-    g.clear();
-    for (const { a, b } of this.tethers) {
-      const tension = tetherTension(distanceBetween(a.position, b.position), TETHER);
-      g.lineStyle(1 + tension * 2.5, COLORS.shield, 0.25 + tension * 0.6);
-      g.beginPath();
-      g.moveTo(a.position.x, a.position.y);
-      g.lineTo(b.position.x, b.position.y);
-      g.strokePath();
-    }
-  }
-
   private updateUfos(deltaSeconds: number, nowMs: number): void {
     for (const ufo of this.ufos) {
       ufo.update(deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT);
@@ -1488,6 +1472,180 @@ export class GameScene extends Phaser.Scene {
     // A UFO used to arrive in complete silence - the one hazard in the
     // game that announces itself now does.
     playUfoSpawnSfx(this, getSfxVolume());
+  }
+
+  /** Same edge-spawn shape as spawnUfo() above, its own radius/speed. */
+  private spawnSaboteur(nowMs: number): void {
+    const edge = Math.floor(Math.random() * 4);
+    let x: number;
+    let y: number;
+    let baseHeadingRad: number;
+    if (edge === 0) {
+      x = -SABOTEUR.radius;
+      y = Math.random() * ARENA_HEIGHT;
+      baseHeadingRad = 0;
+    } else if (edge === 1) {
+      x = ARENA_WIDTH + SABOTEUR.radius;
+      y = Math.random() * ARENA_HEIGHT;
+      baseHeadingRad = Math.PI;
+    } else if (edge === 2) {
+      x = Math.random() * ARENA_WIDTH;
+      y = -SABOTEUR.radius;
+      baseHeadingRad = Math.PI / 2;
+    } else {
+      x = Math.random() * ARENA_WIDTH;
+      y = ARENA_HEIGHT + SABOTEUR.radius;
+      baseHeadingRad = -Math.PI / 2;
+    }
+    const heading = baseHeadingRad + (Math.random() * 2 - 1) * (Math.PI / 4);
+    this.saboteurs.push(new Saboteur(this, { x, y }, heading, nowMs));
+  }
+
+  /**
+   * Targeting + steering for every live Saboteur, then drops one mine
+   * per hull that's ready (`readyToDrop`) - `systems/SaboteurAI.ts`'s
+   * `pickDropTarget` is only actually re-run once per hull's own
+   * `retargetIntervalMs` (see `Saboteur.update`'s own doc comment), so
+   * building the candidate position lists here every frame is cheap
+   * relative to how rarely they're actually consumed.
+   */
+  private updateSaboteurs(nowMs: number, deltaSeconds: number): void {
+    if (this.saboteurs.length === 0) return;
+
+    const adriftCommanderPositions = this.commanders.filter((c) => c.isAdrift).map((c) => c.position);
+    const asteroidPositions = this.asteroids.filter((a) => a.isAlive).map((a) => a.position);
+
+    this.saboteurs.forEach((saboteur) => {
+      saboteur.update(nowMs, deltaSeconds, ARENA_WIDTH, ARENA_HEIGHT, () =>
+        pickDropTarget(
+          saboteur.position,
+          adriftCommanderPositions,
+          SABOTEUR.commanderPriorityRadius,
+          asteroidPositions,
+          SABOTEUR.clusterSeekRadius,
+          SABOTEUR.clusterMinNeighbors,
+        ),
+      );
+
+      if (saboteur.readyToDrop(nowMs)) {
+        this.spawnDriftMine(saboteur, nowMs);
+        saboteur.recordDropped(nowMs);
+      }
+    });
+  }
+
+  /** A dropped mine inherits a slice of its Saboteur's own velocity rather than sitting dead still - still a drifting mine, just one that was placed. */
+  private spawnDriftMine(saboteur: Saboteur, nowMs: number): void {
+    const carrierVelocity = saboteur.visual.getVelocity();
+    const heading = Math.random() * Math.PI * 2;
+    const velocity = {
+      x: carrierVelocity.x * 0.5 + Math.cos(heading) * DRIFT_MINE.speed,
+      y: carrierVelocity.y * 0.5 + Math.sin(heading) * DRIFT_MINE.speed,
+    };
+    this.driftMines.push(new DriftMine(this, saboteur.position, velocity, nowMs));
+  }
+
+  private updateDriftMines(nowMs: number, arenaWidth: number, arenaHeight: number): void {
+    this.driftMines.forEach((mine) => mine.update(nowMs, arenaWidth, arenaHeight));
+  }
+
+  /** Mines caught in another mine's own blast detonate `DRIFT_MINE.chainPropagationMs` later, not instantly - see the DRIFT_MINE config doc comment on why that delay matters. */
+  private processPendingChainDetonations(nowMs: number): void {
+    if (this.pendingChainDetonations.length === 0) return;
+    const ready = this.pendingChainDetonations.filter((entry) => nowMs >= entry.atMs);
+    if (ready.length === 0) return;
+    this.pendingChainDetonations = this.pendingChainDetonations.filter((entry) => nowMs < entry.atMs);
+    for (const { mine, ownerIndex } of ready) {
+      if (mine.isAlive) this.detonateMine(mine, nowMs, ownerIndex);
+    }
+  }
+
+  /**
+   * The actual blast (`DRIFT_MINE.blastRadius`, `isWithinBlast`) -
+   * instant-radius, not a simulated expanding shockwave (see
+   * `DriftMineBlast.ts`'s own doc comment on why). `ownerIndex` traces
+   * back to whichever player's shot started this chain, if any - a
+   * purely incidental detonation (an asteroid drifted into it, a ship
+   * rammed it) carries `undefined`, and scores nothing, same
+   * "hazard-killed, not shot" rule every other environmental kill here
+   * already follows.
+   */
+  private detonateMine(mine: DriftMine, nowMs: number, ownerIndex: number | undefined): void {
+    if (!mine.isAlive) return;
+    const position = mine.position;
+    mine.destroy();
+    this.spawnBurst(position, COLORS.ufo, EFFECTS.mineBurst);
+    this.shakeCamera(EFFECTS.majorShake);
+
+    this.players.forEach((player) => {
+      const ship = player.ship;
+      if (!ship.isAlive || ship.isInvulnerable(nowMs)) return;
+      if (isWithinBlast(ship.position, position, DRIFT_MINE.blastRadius) && !this.pendingShipHits.includes(ship)) {
+        this.pendingShipHits.push(ship);
+      }
+    });
+
+    this.commanders.forEach((commander) => {
+      if (!commander.isAlive || !commander.isAdrift) return;
+      if (isWithinBlast(commander.position, position, DRIFT_MINE.blastRadius)) {
+        if (!this.pendingCommanderHazardHits.includes(commander)) this.pendingCommanderHazardHits.push(commander);
+      }
+    });
+
+    this.asteroids.forEach((asteroid) => {
+      if (!asteroid.isAlive) return;
+      if (!isWithinBlast(asteroid.position, position, DRIFT_MINE.blastRadius)) return;
+      // Destroyed whole, not split - same precedent the Gravity Well's
+      // own lethal center set. Still scores normally when this chain
+      // traces back to a player's own shot, unlike the Gravity Well -
+      // a mine clearing a cluster you aimed it at is the entire point.
+      this.spawnBurst(asteroid.position, COLORS.asteroid, EFFECTS.asteroidBurst);
+      if (ownerIndex !== undefined) {
+        const asteroidScore = Math.round(ASTEROID[asteroid.size].score * this.fieldModifiers.asteroidScoreMultiplier);
+        this.awardScore(ownerIndex, asteroidScore, asteroid.position);
+      }
+      asteroid.destroy();
+    });
+
+    this.ufos.forEach((ufo) => {
+      if (!ufo.isAlive) return;
+      if (!isWithinBlast(ufo.position, position, DRIFT_MINE.blastRadius)) return;
+      const ufoPosition = ufo.position;
+      ufo.destroy();
+      this.spawnBurst(ufoPosition, COLORS.ufo, EFFECTS.ufoBurst);
+      if (ownerIndex !== undefined) this.awardScore(ownerIndex, UFO.score, ufoPosition);
+    });
+
+    this.saboteurs.forEach((saboteur) => {
+      if (!saboteur.isAlive) return;
+      if (isWithinBlast(saboteur.position, position, DRIFT_MINE.blastRadius)) {
+        this.destroySaboteur(saboteur, nowMs, ownerIndex);
+      }
+    });
+
+    this.driftMines.forEach((other) => {
+      if (!other.isAlive || other === mine) return;
+      if (!isWithinBlast(other.position, position, DRIFT_MINE.blastRadius)) return;
+      if (this.pendingChainDetonations.some((entry) => entry.mine === other)) return;
+      this.pendingChainDetonations.push({ mine: other, atMs: nowMs + DRIFT_MINE.chainPropagationMs, ownerIndex });
+    });
+  }
+
+  /**
+   * Shared by every death path (shot, ram, caught in another mine's
+   * blast) - a Saboteur always drops one last mine right at its own
+   * death position, decided: punishes killing it at close range,
+   * rewards sniping it from a distance, same "nothing dies for free"
+   * precedent the Assembler/Cardinal already set for bosses.
+   */
+  private destroySaboteur(saboteur: Saboteur, nowMs: number, ownerIndex: number | undefined): void {
+    if (!saboteur.isAlive) return;
+    const position = saboteur.position;
+    saboteur.destroy();
+    this.spawnBurst(position, COLORS.ufo, EFFECTS.ufoBurst);
+    this.shakeCamera(EFFECTS.majorShake);
+    if (ownerIndex !== undefined) this.awardScore(ownerIndex, SABOTEUR.score, position);
+    this.driftMines.push(new DriftMine(this, position, { x: 0, y: 0 }, nowMs));
   }
 
   private spawnBlackHole(nowMs: number): void {
@@ -1955,6 +2113,8 @@ export class GameScene extends Phaser.Scene {
       entityA instanceof CardinalPlasmaBall ? entityA : entityB instanceof CardinalPlasmaBall ? entityB : undefined;
     const assembler = entityA instanceof Assembler ? entityA : entityB instanceof Assembler ? entityB : undefined;
     const wreck = entityA instanceof Wreck ? entityA : entityB instanceof Wreck ? entityB : undefined;
+    const saboteur = entityA instanceof Saboteur ? entityA : entityB instanceof Saboteur ? entityB : undefined;
+    const mine = entityA instanceof DriftMine ? entityA : entityB instanceof DriftMine ? entityB : undefined;
 
     // Core and Fragment: shootable (CATEGORY.PROJECTILE) and now also
     // "behave like rocks," decided - CATEGORY.SHIP too, resolved via the
@@ -2166,19 +2326,81 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // The Saboteur has no weapon of its own - every one of its own
+    // pairs is a contact, same shape as the UFO's own three branches
+    // above (shot/asteroid/ship).
+    if (projectile?.isAlive && saboteur?.isAlive) {
+      if (!this.pendingSaboteurHits.some((hit) => hit.saboteur === saboteur)) {
+        this.pendingSaboteurHits.push({ saboteur, projectile, awardScore: true });
+      }
+      return;
+    }
+
+    if (asteroid?.isAlive && saboteur?.isAlive) {
+      // Same "destroyed by colliding with asteroids, no score" rule the
+      // UFO already follows.
+      if (!this.pendingSaboteurHits.some((hit) => hit.saboteur === saboteur)) {
+        this.pendingSaboteurHits.push({ saboteur, projectile: undefined, awardScore: false });
+      }
+      return;
+    }
+
+    if (ship?.isAlive && saboteur?.isAlive) {
+      if (!ship.isInvulnerable(nowMs) && !this.pendingShipHits.includes(ship)) {
+        this.pendingShipHits.push(ship);
+      }
+      if (!this.pendingSaboteurHits.some((hit) => hit.saboteur === saboteur)) {
+        this.pendingSaboteurHits.push({ saboteur, projectile: undefined, awardScore: false });
+      }
+      return;
+    }
+
+    // Drift Mine: two trigger paths, identical result (DRIFT_MINE's own
+    // config doc comment) - a shot credits whoever fired it, any other
+    // contact is anonymous. Inert mines (still within armDelayMs) are
+    // skipped entirely here - contact does nothing until isArmed.
+    if (projectile?.isAlive && mine?.isAlive && mine.isArmed(nowMs)) {
+      if (!this.pendingMineShotTriggers.some((trigger) => trigger.mine === mine)) {
+        this.pendingMineShotTriggers.push({ mine, projectile });
+      }
+      return;
+    }
+
+    // Two mines directly touching each other (rather than one catching
+    // the other in its blast once it goes off) isn't handled as its own
+    // pair here - a rare edge case already mostly covered by
+    // blastRadius being well past either one's own hitbox, not worth a
+    // second typed entity slot for.
+    if (mine?.isAlive && mine.isArmed(nowMs) && (ship?.isAlive || asteroid?.isAlive || ufo?.isAlive || saboteur?.isAlive)) {
+      if (!this.pendingMineCollisionTriggers.includes(mine)) {
+        this.pendingMineCollisionTriggers.push(mine);
+      }
+      return;
+    }
+
     // Commander (Cooperative's rescue mechanic - see the class doc
-    // comment) only ever pairs with SHIP/ASTEROID/UFO/UFO_SHOT at all
-    // (its own collision mask), and only while adrift - a carried one is
-    // still a live sensor body, but GameScene ignores both branches
-    // below for it (already rescued, already attached to its carrier).
+    // comment) only ever pairs with SHIP/ASTEROID/UFO/UFO_SHOT/
+    // SABOTEUR/MINE at all (its own collision mask), and only while
+    // adrift - a carried one is still a live sensor body, but GameScene
+    // ignores both branches below for it (already rescued, already
+    // attached to its carrier).
     if (commander?.isAlive && commander.isAdrift) {
-      if (asteroid?.isAlive || ufoShot?.isAlive || ufo?.isAlive) {
+      if (asteroid?.isAlive || ufoShot?.isAlive || ufo?.isAlive || saboteur?.isAlive) {
         if (!this.pendingCommanderHazardHits.includes(commander)) {
           this.pendingCommanderHazardHits.push(commander);
         }
         if (ufoShot?.isAlive && !this.pendingUfoShotHits.includes(ufoShot)) {
           this.pendingUfoShotHits.push(ufoShot);
         }
+        return;
+      }
+
+      // A mine doesn't hurt the Commander directly here - touching it
+      // just triggers the mine (anonymous, no shooter), and
+      // detonateMine's own AOE sweep is what actually catches the
+      // Commander, same as it catches a ship or an asteroid.
+      if (mine?.isAlive && mine.isArmed(nowMs) && !this.pendingMineCollisionTriggers.includes(mine)) {
+        this.pendingMineCollisionTriggers.push(mine);
         return;
       }
 
@@ -2223,6 +2445,8 @@ export class GameScene extends Phaser.Scene {
     | CardinalPlasmaBall
     | Assembler
     | Wreck
+    | Saboteur
+    | DriftMine
     | undefined {
     const gameObject = body.gameObject as Phaser.GameObjects.GameObject | undefined;
     return gameObject?.getData('entity') as
@@ -2240,6 +2464,8 @@ export class GameScene extends Phaser.Scene {
       | CardinalPlasmaBall
       | Assembler
       | Wreck
+      | Saboteur
+      | DriftMine
       | undefined;
   }
 
@@ -2810,6 +3036,40 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** A shot- or ram-killed Saboteur, same shape as processPendingUfoHits - either way destroySaboteur() still drops its own parting mine. */
+  private processPendingSaboteurHits(nowMs: number): void {
+    if (this.pendingSaboteurHits.length === 0) return;
+    const hits = this.pendingSaboteurHits;
+    this.pendingSaboteurHits = [];
+    for (const { saboteur, projectile, awardScore } of hits) {
+      if (!saboteur.isAlive) continue;
+      projectile?.destroy();
+      this.destroySaboteur(saboteur, nowMs, awardScore && projectile ? projectile.ownerIndex : undefined);
+    }
+  }
+
+  /** Shot-triggered mines credit whoever fired the shot; collision-triggered ones are anonymous (undefined ownerIndex) - see detonateMine's own doc comment on why that distinction matters for scoring. */
+  private processPendingMineTriggers(nowMs: number): void {
+    if (this.pendingMineShotTriggers.length > 0) {
+      const shotTriggers = this.pendingMineShotTriggers;
+      this.pendingMineShotTriggers = [];
+      for (const { mine, projectile } of shotTriggers) {
+        if (!mine.isAlive) continue;
+        projectile.destroy();
+        this.detonateMine(mine, nowMs, projectile.ownerIndex);
+      }
+    }
+
+    if (this.pendingMineCollisionTriggers.length > 0) {
+      const collisionTriggers = this.pendingMineCollisionTriggers;
+      this.pendingMineCollisionTriggers = [];
+      for (const mine of collisionTriggers) {
+        if (!mine.isAlive) continue;
+        this.detonateMine(mine, nowMs, undefined);
+      }
+    }
+  }
+
   private processPendingUfoShotHits(): void {
     if (this.pendingUfoShotHits.length === 0) return;
     const shots = this.pendingUfoShotHits;
@@ -3285,6 +3545,7 @@ export class GameScene extends Phaser.Scene {
     const targets: Vector2[] = [
       ...this.asteroids.filter((a) => a.isAlive).map((a) => a.position),
       ...this.ufos.filter((u) => u.isAlive).map((u) => u.position),
+      ...this.saboteurs.filter((s) => s.isAlive).map((s) => s.position),
       ...this.fractureFragments.filter((f) => f.isAlive).map((f) => f.position),
     ];
     if (this.fracture?.isAlive) targets.push(this.fracture.position);
@@ -3961,6 +4222,12 @@ export class GameScene extends Phaser.Scene {
     this.ufos = [];
     this.ufoShots.forEach((shot) => shot.destroy());
     this.ufoShots = [];
+    // Same "no UFO on a fresh stage" rule, extended to the Saboteur and
+    // anything it was still carrying/had already dropped.
+    this.saboteurs.forEach((saboteur) => saboteur.destroy());
+    this.saboteurs = [];
+    this.driftMines.forEach((mine) => mine.destroy());
+    this.driftMines = [];
 
     for (const player of this.players) {
       if (!player.ship.isAlive) continue;

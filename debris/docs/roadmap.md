@@ -236,7 +236,7 @@ work before a `debris-v2.0.0` tag.
     (lives stop mattering in this mode entirely); pickup is automatic on
     touch and alone saves the life; the rescuer tows them to a
     fixed-center `SpaceStation` to respawn them there; not rescued within
-    `COMMANDER.rescueWindowMs` (10s), or caught by an asteroid/UFO while
+    `COMMANDER.rescueWindowMs` (15s), or caught by an asteroid/UFO while
     adrift, permanently eliminates that player. New pure logic in
     `systems/CommanderRescue.ts` (window-expiry check, tow-position
     geometry, drop-off distance check), tested.
@@ -877,6 +877,58 @@ outstanding.
     the formants actually moving across an utterance - **but not by
     ear**, which is the one check this environment can't do.
 
+## Post-2.0
+
+43. [x] The Saboteur + Drift Mine - lands the "enemy roster" pitch's
+    Saboteur entry below ("drops mines into the arena - a stationary/
+    timed hazard rather than a direct chaser"), merged on request with a
+    separately-mocked-up "drifting space mine" concept rather than
+    building two unrelated mine behaviors. The mine itself keeps the
+    mockup's own shape exactly: drifts, wraps, and detonates from either
+    a player's own shot or any physical contact at all - a ship, a rock,
+    a UFO, another Saboteur, even another mine. **"Stationary/timed" is
+    replaced, deliberately**: a freshly-dropped mine is inert for
+    `DRIFT_MINE.armDelayMs` (1s) rather than instantly live, but still
+    drifts (inheriting a slice of its Saboteur's own velocity) rather
+    than sitting fixed in place - one mine behavior, not two.
+    - **Chain reactions are the point**: a detonation catches everything
+      within `DRIFT_MINE.blastRadius` (150px) instantly rather than via a
+      simulated expanding shockwave (the mockup's shockwave animation is
+      visual only) - asteroids destroyed whole, ships hit like any other
+      hazard, and any *other* mine caught detonates in turn
+      `chainPropagationMs` (180ms) later, not simultaneously, so a chain
+      reads as a chain. A chain's asteroid kills score normally when it
+      traces back to a player's own shot; a purely incidental collision
+      chain scores nothing, the same "hazard-killed, not shot" rule
+      every other environmental kill already follows.
+    - **The Saboteur carries no weapon of its own**, per the original
+      pitch - "The Layer," picked over two other deployment-mechanism
+      mockups (rack-belly, towline), carries `SABOTEUR.carouselCount` (5)
+      mines in a visible rotating ring and drops one roughly every
+      `dropIntervalMs` (4.5s) until empty, so a player can read "how many
+      does it have left" at a glance.
+    - **Targeting** (`systems/SaboteurAI.ts`'s `pickDropTarget`): an
+      adrift Commander within `commanderPriorityRadius` always wins over
+      a cluster target, decided on request - the same "rescue is the
+      real hook" reasoning applied to a second enemy now, not just the
+      original Small Saucer sketch. Otherwise it seeds the densest nearby
+      asteroid cluster (`clusterSeekRadius`/`clusterMinNeighbors`), and
+      slows to loiter once in range rather than dropping on the fly.
+      Falls back to drifting straight, same as the Wanderer, if neither
+      exists.
+    - **All three modes**, decided - a baseline field hazard like
+      asteroids/the UFO, gated to stages `firstNormalStageCount` (2) and
+      later, capped at `maxConcurrent` (2), never during a boss
+      encounter.
+    - **Destroying it drops one last mine at its own death position**,
+      regardless of cause (shot, ram, or caught in another mine's own
+      blast) - punishes killing it at close range, rewards sniping it
+      from a distance, same "nothing dies for free" precedent the
+      Assembler/Cardinal already set for bosses.
+    - Pure logic extracted and unit-tested, same convention as every
+      other hazard: `systems/SaboteurAI.ts` (targeting/steering) and
+      `systems/DriftMineBlast.ts` (blast-radius math).
+
 ## Future ideas
 
 Bigger speculative systems — not scoped, not scheduled, but worth
@@ -934,7 +986,7 @@ co-op-only or also appear in Competitive is an open question, not decided.
 | --- | --- |
 | 🤖 **Drone** | Simple enemy that hunts players — a baseline chaser, no gimmick. (Naming echo with Godspeed's own baseline "Drone" enemy is a coincidence worth deciding whether to keep or rename, not a conflict — different games, different repos.) |
 | 🛸 **Miner** | Targets *asteroids*, not players — destroys them, but that means splitting them, which (per `docs/gameplay.md`) creates more, smaller, faster debris. Indirectly dangerous: ignoring it lets it make the field worse. |
-| ☠️ **Saboteur** | Drops mines into the arena — a stationary/timed hazard rather than a direct chaser. Presumably wraps at arena edges like everything else, for consistency. |
+| ☠️ **Saboteur** | Drops mines into the arena — a stationary/timed hazard rather than a direct chaser. Presumably wraps at arena edges like everything else, for consistency. **Landed, see item 43** — merged with a separately-pitched "drifting mine" concept; the dropped mines drift and arm after a short delay rather than sitting fixed in place, the one deviation from this row's original "stationary/timed" phrasing. |
 | 🧲 **Collector** | Collects debris and grows larger the longer it survives — a risk/reward priority target: kill it early and small, or let it grow into a bigger threat. |
 | 🌀 **Warp Ship** | Teleports unpredictably around the arena — hard to pin down or reliably avoid, an evasion/awareness threat rather than a raw damage one. |
 | 👁️ **The Harvester** | A huge boss that slowly consumes the entire arena. Boss-tier, singular, arena-dominating — a natural fit as **the payoff for reaching Chaos Level 6 ("TOTAL DEBRIS")** rather than an enemy that can show up at any time; ties this roster directly to the Chaos Meter idea above instead of the two systems existing in parallel. |
@@ -1373,7 +1425,7 @@ speculation below assumed, worth noting for anyone comparing the two:
   that can be interrupted.
 - **Yes, the drifting pilot (a "Commander," not a "pod") can be
   destroyed** by an asteroid or UFO while adrift, exactly as guessed.
-- **Yes, there's a timeout** - 10 seconds, `COMMANDER.rescueWindowMs`,
+- **Yes, there's a timeout** - 15 seconds, `COMMANDER.rescueWindowMs`,
   a fixed number rather than left open.
 - **Not speculated at the time, but decided during implementation**: a
   rescuer must physically deliver the Commander to a fixed space station

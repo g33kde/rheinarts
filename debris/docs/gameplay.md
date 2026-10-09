@@ -338,7 +338,7 @@ the pilot **ejects as a Commander** (docs/art_direction.md's
   saved at the original pickup), so no new countdown starts — but it is
   vulnerable to hazards again while it waits, same as any other adrift
   Commander.
-- **Not rescued within 10 seconds, or destroyed by a hazard first** — the
+- **Not rescued within 15 seconds, or destroyed by a hazard first** — the
   player is permanently eliminated for the round, the same finality as
   running out of lives in the other modes.
 
@@ -387,16 +387,6 @@ the screen-wrap rule is never involved; and an adrift **Commander
 passes straight through it**, so nobody can be pinned behind cover
 during a rescue. Regenerated per stage, never present during a boss
 fight, and not destructible.
-
-## The tether (Cooperative)
-
-Two ships flying close together **automatically link** with an elastic
-tether, which snaps if stretched too far. It's slack at short range and
-only pulls once taut, so it never feels sticky - but a hard burn drags
-your partner with you. Sling a teammate clear of a Gravity Well, whip
-them toward a downed pilot, or drag them somewhere they very much did
-not want to go; the coordination failures are as much the point as the
-successes. Cooperative only.
 
 ## Kill chain (score multiplier)
 
@@ -449,6 +439,46 @@ Let it finish and it comes alive as a real boss - tougher the more it
 managed to eat - which hunts the nearest player and fires debris. Kill
 it then and it pays properly, and everything it swallowed comes back as
 scrap.
+
+## The Saboteur
+
+A late-game field hazard, not a boss - it carries no weapon of its own.
+Its whole threat is indirect: it drifts a slow, visible ring of five
+mines and drops one roughly every 4-5 seconds until it's spent, then
+just keeps drifting. All three modes, from stage 2 onward, never during
+a boss fight, at most two active at once.
+
+It doesn't just drop mines at random - it seeds them where they'll do
+the most damage: the densest nearby cluster of asteroids, or, in
+Cooperative, an adrift Commander within range if one exists, ahead of
+any cluster. A rescue route is not automatically a safe one.
+
+Destroying a Saboteur - by shot or by ramming it with a ship or an
+asteroid - drops one last mine right where it died. Sniping it from a
+distance is strictly safer than finishing it up close.
+
+### Drift Mines
+
+A dropped mine drifts and wraps like anything else in the arena, inert
+for about a second after landing, then live. Two ways to set one off,
+identical result either way:
+
+- **Shoot it.**
+- **Let anything touch it** - a ship, a rock, a UFO, even another mine.
+
+A detonation is a real blast radius, not a point effect - a dashed ring
+around every armed mine shows exactly how far, at all times, whether or
+not it's about to go off. Anything that radius reaches is caught: rocks
+destroyed outright, ships hit like any other hazard, and any *other*
+mine inside it detonates in turn a beat later, not simultaneously - one
+well-placed shot into a cluster of mines and rocks can chain into
+several kills at once. A chain you triggered yourself scores normally;
+one that started from an incidental collision (a rock drifted into it,
+a UFO rammed it) pays nothing, same as any other hazard-only kill.
+
+The danger cuts both ways: a mine sitting near a fight can go off from
+something that has nothing to do with you, and you're just as caught in
+that radius as anything else would be.
 
 ## Global high scores
 

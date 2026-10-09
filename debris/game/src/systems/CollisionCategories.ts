@@ -31,4 +31,13 @@ export const CATEGORY = {
   // does not collide with it, so an adrift pilot can't be pinned behind
   // cover during a rescue window.
   WRECK: 0x0200,
+  // The Saboteur (entities/Saboteur.ts) - a solid body, same mask shape
+  // as UFO.
+  SABOTEUR: 0x0400,
+  // The Drift Mine (entities/DriftMine.ts) - a sensor, same "detects
+  // contact without physically pushing anything around" treatment
+  // Shield/FractureSwarmBit already use. Its own bit rather than reusing
+  // PICKUP: touching one is never safe, so it shouldn't share a category
+  // with something that always is.
+  MINE: 0x0800,
 } as const;

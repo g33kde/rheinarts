@@ -78,7 +78,11 @@ export class Commander {
       frictionAir: 0,
       collisionFilter: {
         category: CATEGORY.COMMANDER,
-        mask: CATEGORY.SHIP | CATEGORY.ASTEROID | CATEGORY.UFO | CATEGORY.UFO_SHOT,
+        // SABOTEUR/MINE added alongside the Saboteur's own landing -
+        // "adrift is a real risk," decided (see this class's own doc
+        // comment), extends to its ordnance the same as every other
+        // hazard here.
+        mask: CATEGORY.SHIP | CATEGORY.ASTEROID | CATEGORY.UFO | CATEGORY.UFO_SHOT | CATEGORY.SABOTEUR | CATEGORY.MINE,
       },
     });
     this.visual = visual as MatterGameObject<Phaser.GameObjects.Graphics>;

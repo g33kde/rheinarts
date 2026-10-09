@@ -264,6 +264,87 @@ export const UFO = {
   aimSpreadRad: Math.PI / 10, // ~18 degrees
 } as const;
 
+/**
+ * The Saboteur - not a chaser (docs/roadmap.md's enemy-roster pitch: "a
+ * stationary/timed hazard rather than a direct chaser"), and no weapon
+ * of its own at all. Its only offense is seeding `DRIFT_MINE`s into the
+ * field as it drifts; everything it does is indirect.
+ *
+ * **All three modes**, decided - treated as a baseline field hazard like
+ * asteroids/the UFO rather than Cooperative-only, despite the Commander-
+ * priority hook below only ever mattering there.
+ *
+ * Carries `carouselCount` mines and drops one roughly every
+ * `dropIntervalMs` until empty, then just drifts, spent, until
+ * destroyed or the stage ends - see `entities/Saboteur.ts`'s carousel
+ * visual, picked over two other mechanism mockups (rack-belly, towline)
+ * for sharing the clearest "how many does it have left" read.
+ *
+ * **Targeting, in priority order** (`systems/SaboteurAI.ts`'s
+ * `pickDropTarget`): an adrift Commander within `commanderPriorityRadius`
+ * always wins - the same "rescue is the real hook" reasoning the Small
+ * Saucer design sketch used, turning a rescue route itself into the
+ * danger. Failing that, the densest nearby asteroid cluster
+ * (`clusterSeekRadius`/`clusterMinAsteroids`) - mines land where a chain
+ * has the most to chew through. Failing *that*, no target at all: it
+ * just keeps drifting its current heading and drops wherever it happens
+ * to be, same as the Wanderer never steering.
+ *
+ * Starting guesses, not playtested.
+ */
+export const SABOTEUR = {
+  radius: 20, // between UFO's 24 and a precision-UFO sketch's own ~16 - "an armed trawler," not a reskin of either
+  speed: 0.5, // px/step - slower than UFO.speed (0.92); it's seeding the field, not fleeing or hunting
+  score: 350, // between UFO.score (200) and a precision-kill UFO's own ~500 - more dangerous left alive, but its own threat is indirect, so it shouldn't outscore a direct kill
+  turnRateRadPerSec: Math.PI * 0.35, // capped and slow - can't snap onto a cluster or a Commander instantly
+  retargetIntervalMs: 2000, // how often it re-evaluates pickDropTarget rather than committing to one target forever
+  loiterDistancePx: 70, // "arrived" - inside this it stops and holds rather than circling its target
+  carouselCount: 5, // mines carried per spawn - matches the carousel mockup's own ring size
+  dropIntervalMs: 4500, // ~1 drop every 4-5s while it still has mines left, regardless of whether it's moving or loitering
+  clusterSeekRadius: 260, // how far it looks for a dense asteroid cluster worth seeding
+  clusterMinNeighbors: 2, // an asteroid needs at least this many others within clusterSeekRadius of *itself* to count as the center of a "cluster," not just a lone rock
+  commanderPriorityRadius: 340, // an adrift Commander within this range always beats a cluster target
+  firstNormalStageCount: 2, // doesn't appear before this stage - a late-game escalation, not a baseline-from-stage-1 hazard
+  maxConcurrent: 2, // never more than this many active at once
+  spawnIntervalMs: 20000, // base roll cadence once stage-eligible - deliberately rare, not stage-scaled like UFO/asteroid counts
+} as const;
+
+/**
+ * The Drift Mine - a passive, physics-driven hazard rather than an
+ * attack: it just drifts, like an asteroid. Exists only as something a
+ * Saboteur drops (`SABOTEUR` above) - no independent spawner of its own.
+ *
+ * **Two trigger paths, identical result** (docs/roadmap.md's Saboteur
+ * entry, resolved here): a player's own shot, or physical contact with
+ * anything at all - ship, asteroid, UFO, another Saboteur, even another
+ * mine. No special case by collider type.
+ *
+ * **Chain reactions are the point.** Detonating catches everything
+ * within `blastRadius` - asteroids destroyed whole, ships hit like any
+ * other hazard, and any *other* mine caught detonates in turn after
+ * `chainPropagationMs`, not instantly - that delay is what makes a chain
+ * read as a chain rather than one simultaneous flash. A mine-triggered
+ * asteroid kill scores normally (same per-size `ASTEROID` value) when
+ * the chain traces back to a player's own shot; a purely incidental
+ * collision chain (an asteroid drifted into it, a UFO rammed it) scores
+ * nothing, same "hazard-killed, not shot" rule every other environmental
+ * kill in this game already follows.
+ *
+ * **Always-visible blast-radius telegraph, decided** - the fair-
+ * telegraph rule every other hazard in Debris follows (Gravity Well's
+ * glow, the Assembler's pull field), applied to a threat that can
+ * trigger from something that isn't the player's own choice at all.
+ *
+ * Starting guesses, not playtested.
+ */
+export const DRIFT_MINE = {
+  radius: 10, // Matter hitbox - small and precise, not a wall
+  speed: 0.3, // slow drift once dropped - inherits a slice of the Saboteur's own velocity, mostly stays near where it was placed
+  armDelayMs: 1000, // inert for a beat after dropping - "a placed object," not instantly live - before this, contact does nothing
+  blastRadius: 150, // detonation AOE, well past its own hitbox - between BLACK_HOLE.glowRadius (260) and a single asteroid's own footprint
+  chainPropagationMs: 180, // delay before a mine caught in another's blast detonates in turn
+} as const;
+
 export const SHIELD = {
   radius: 14,
   speed: 0.4, // px/step (Matter velocity units, not px/sec - see SHIP's doc comment above). ~24px/sec on screen - slower than any asteroid, reads as calm/collectible.
@@ -537,33 +618,6 @@ export const HULLS: Record<HullId, HullStats> = {
 };
 
 /**
- * The ship-to-ship tether (`systems/TetherSystem.ts`) - an elastic link
- * between two Cooperative ships, for slinging a teammate clear of a
- * hazard or whipping them toward a downed pilot.
- *
- * **Cooperative only** and **attaches/breaks on its own**, both decided
- * - see that module's doc comment for the reasoning (briefly: dragging
- * an unwilling opponent is a different game, and all four input verbs
- * are already bound).
- *
- * `stiffness` is set so the spring reaches `maxForce` right around the
- * breaking point rather than saturating early - a first pass hit the
- * cap at only 60px of stretch, which made it a constant yank instead of
- * something that builds (there's a regression test for exactly that).
- * `maxForce` at 2x `SHIP.thrustForce` is deliberate: a near-breaking
- * tether is not something you can simply out-thrust.
- *
- * Starting guesses, not playtested.
- */
-export const TETHER = {
-  attachDistancePx: 90, // well under breakDistancePx, so a snapped tether doesn't instantly re-form
-  restLengthPx: 140, // slack inside this - flying close together never feels sticky
-  breakDistancePx: 420,
-  stiffness: 0.00000022,
-  maxForce: 0.00006,
-} as const;
-
-/**
  * The Assembler (docs/roadmap.md) - Debris's third boss, and the only
  * one that assembles itself out of the arena mid-stage instead of
  * arriving finished. *Sinistar*-descended; `systems/AssemblerBuild.ts`
@@ -662,6 +716,10 @@ export const EFFECTS = {
   shipBurst: { count: 20, speedRange: [40, 140] as const, lifespanMs: 500, sizePx: 5 },
   asteroidBurst: { count: 10, speedRange: [20, 80] as const, lifespanMs: 400, sizePx: 4 },
   ufoBurst: { count: 24, speedRange: [50, 160] as const, lifespanMs: 550, sizePx: 6 },
+  // A Drift Mine's own detonation - bigger and faster than ufoBurst, so
+  // it reads as the actual blast radius going off, not just one more
+  // destroyed hazard.
+  mineBurst: { count: 32, speedRange: [80, 220] as const, lifespanMs: 650, sizePx: 6 },
   majorShake: { durationMs: 250, intensity: 0.012 }, // ship or UFO destroyed
   minorShake: { durationMs: 120, intensity: 0.004 }, // an asteroid destroyed
   /**
@@ -715,7 +773,7 @@ export const COMMANDER = {
   radius: 9, // Matter sensor hitbox - smaller than SHIELD's 14, a person is a smaller target than a pickup
   visualScale: 13, // px - normalized astronaut path (docs/art_direction.md) * this = on-screen size
   driftSpeed: 0.25, // px/step (Matter velocity units, not px/sec - see SHIP's doc comment above) - slower than SHIELD.speed (0.4), a tumbling person over a purposeful pickup
-  rescueWindowMs: 10000, // "10 second timer," decided
+  rescueWindowMs: 15000, // "15 second timer," decided
   towOffsetPx: 22, // trails behind the towing ship's heading while carried, not glued exactly on top of it
   /**
    * The adrift pilot's own EVA thruster (docs/roadmap.md's "Commander
@@ -912,12 +970,10 @@ export const FRACTURE = {
   shardCooldownMs: 3000, // "every 3 seconds," decided
   shardSpeed: 5, // px/step - between UFO.shotSpeed (6) and PROJECTILE.speed (8), reads as a heavier "shard" than a clean laser bolt
 
-  // Reported too small at 7 (14px across) - bumped to 11 (22px hitbox
-  // diameter) after a live size comparison against ASTEROID.small's own
-  // 16px-across footprint, this time deliberately bigger than the smallest
-  // rock rather than under it (reverses the original "smaller than or the
-  // same size" decision - was 12/24px pre-redesign, then 7/14px, now this).
-  swarmRadius: 11,
+  // Doubled from 11 (22px hitbox diameter) on request - was already
+  // bigger than ASTEROID.small's 16px-across footprint, now comfortably
+  // so (was 12/24px pre-redesign, then 7/14px, then 11/22px, now this).
+  swarmRadius: 22,
   swarmSpeed: 0.9, // faster than fragmentSpeed - "smaller is faster," same as ASTEROID's own size tiers
   swarmCountPerFragment: 6, // 3 fragments x 6 = up to 18 total, reads as "dozens" across the whole Phase 3 escalation without ever having that many alive from one single fragment
   scrapCollectionMs: 10000, // "a 10 sec countdown," decided - starts once the last Fragment dies

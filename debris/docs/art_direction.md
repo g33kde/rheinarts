@@ -320,7 +320,7 @@ top of all of it.
 Dark fill under a stroke in whichever player was ejected (`COLORS.players`
 — the one place a "pickup"-family entity is owner-colored rather than a
 fixed hue, since it represents a specific person, not a shared item). A
-countdown to `COMMANDER.rescueWindowMs` (10s) renders directly beneath it
+countdown to `COMMANDER.rescueWindowMs` (15s) renders directly beneath it
 in the same color while adrift, and disappears the moment another player
 picks it up — pickup alone saves the life (decided); the trip to the
 Space Station afterward is no longer racing any clock.
@@ -474,20 +474,31 @@ instead of staying uniform red:
   "debris launcher" role until it's a real attack.
 
 A **Swarm** bit (Phase 3) drops the shared core/tether entirely and is
-no longer a jagged shard at all - **redesigned to "floating parts,"
-decided** (a live mockup comparison, `docs/roadmap.md` item 19's Pass 4):
-a small blocky tetromino-shaped fragment (one of the 7 standard Tetris
-layouts, randomized per spawn), dark metal plating, a slow pulsing
-muted-jade glow (`COLORS.scrap`, picked over gold/copper/green
-candidates - pure green ruled out, too close to Player 4's own
-acid-green), plus a gentle floating bob on top of its existing spin and
-drift. **Sizing has moved twice since**: originally bigger than the
+no longer a jagged shard at all - **redesigned twice since, decided
+both times after a live mockup comparison** (`docs/roadmap.md` item
+19's Pass 4, then the newest entry for the wireframe switch). The first
+redesign landed on a small blocky tetromino fragment (one of the 7
+standard Tetris layouts, randomized per spawn), dark metal plating, and
+a slow pulsing muted-jade glow (`COLORS.scrap`, picked over
+gold/copper/green candidates - pure green ruled out, too close to
+Player 4's own acid-green). That held up fine until `FRACTURE.swarmRadius`
+doubled (see below) and the blocky look started reading as a
+puzzle-game piece rather than debris - the second redesign drops the
+tetromino entirely in favor of an **unfilled wireframe prism tumbling in
+true 3D**, randomized per spawn between two forms: "Shattered Core," a
+cube standing in for a dead satellite's structural skeleton, and "Cargo
+Crate," an elongated box reading as a salvaged module by proportion
+alone. Both keep the same muted-jade glow and the same gentle floating
+bob on top of the tumble. Deliberately not another flat-shaded shape -
+an unfilled line-only silhouette is the same rendering language the
+original 1979 Asteroids ship itself used.
+**Sizing has moved three times since**: originally bigger than the
 smallest asteroid, corrected to read "at or under" it, then reported too
-small at that size and bumped again - now deliberately bigger than the
-smallest asteroid (`FRACTURE.swarmRadius`/`TARGET_SPAN_PX`, see
-`docs/roadmap.md`'s newest entry for the exact numbers), the opposite of
-the "at or under" call this paragraph originally made. Same entity
-(`entities/FractureSwarmBit.ts`)
+small at that size and bumped again, then doubled again on request - now
+deliberately much bigger than the smallest asteroid
+(`FRACTURE.swarmRadius`, see `docs/roadmap.md`'s newest entry for the
+exact numbers), the opposite of the "at or under" call this paragraph
+originally made. Same entity (`entities/FractureSwarmBit.ts`)
 now also drops from The Cardinal's own destroyed arms (`docs/roadmap.md`
 item 22), so this redesign applies to both bosses' scrap identically.
 All three of The Fracture's own tiers still materialize with the same

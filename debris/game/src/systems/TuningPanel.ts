@@ -3,12 +3,13 @@ import {
   COMBO,
   COMMANDER,
   CREW_SCALING,
+  DRIFT_MINE,
   EFFECTS,
   HULLS,
   HYPERSPACE,
+  SABOTEUR,
   STAGE_RANK,
   TERRAIN,
-  TETHER,
 } from '../config/GameConfig';
 import { GAME_VOICE } from './VoiceSynth';
 
@@ -138,16 +139,6 @@ function buildSchema(): TuningGroup[] {
       ],
     },
     {
-      title: 'Tether',
-      fields: [
-        field('TETHER.attachDistancePx', TETHER, 'attachDistancePx', 20, 400, 10),
-        field('TETHER.restLengthPx', TETHER, 'restLengthPx', 40, 600, 10),
-        field('TETHER.breakDistancePx', TETHER, 'breakDistancePx', 150, 1200, 10),
-        field('TETHER.stiffness', TETHER, 'stiffness', 0.00000002, 0.000002, 0.00000002),
-        field('TETHER.maxForce', TETHER, 'maxForce', 0.000005, 0.0003, 0.000005),
-      ],
-    },
-    {
       title: 'The Assembler',
       fields: [
         field('ASSEMBLER.platesToComplete', ASSEMBLER, 'platesToComplete', 2, 16, 1),
@@ -158,6 +149,22 @@ function buildSchema(): TuningGroup[] {
         field('ASSEMBLER.shardCooldownMs', ASSEMBLER, 'shardCooldownMs', 500, 8000, 100),
         field('ASSEMBLER.minStageElapsedMs', ASSEMBLER, 'minStageElapsedMs', 0, 120000, 5000, 'next stage'),
         field('ASSEMBLER.spawnChance', ASSEMBLER, 'spawnChance', 0, 1, 0.05, 'next stage'),
+      ],
+    },
+    {
+      title: 'The Saboteur',
+      fields: [
+        field('SABOTEUR.speed', SABOTEUR, 'speed', 0.1, 2, 0.05),
+        field('SABOTEUR.turnRateRadPerSec', SABOTEUR, 'turnRateRadPerSec', 0.1, 4, 0.05),
+        field('SABOTEUR.loiterDistancePx', SABOTEUR, 'loiterDistancePx', 20, 200, 10),
+        field('SABOTEUR.dropIntervalMs', SABOTEUR, 'dropIntervalMs', 1000, 12000, 250),
+        field('SABOTEUR.clusterSeekRadius', SABOTEUR, 'clusterSeekRadius', 80, 600, 10),
+        field('SABOTEUR.commanderPriorityRadius', SABOTEUR, 'commanderPriorityRadius', 80, 800, 10),
+        field('SABOTEUR.spawnIntervalMs', SABOTEUR, 'spawnIntervalMs', 4000, 40000, 1000, 'next spawn roll'),
+        field('SABOTEUR.firstNormalStageCount', SABOTEUR, 'firstNormalStageCount', 1, 12, 1, 'next stage'),
+        field('DRIFT_MINE.armDelayMs', DRIFT_MINE, 'armDelayMs', 0, 4000, 100),
+        field('DRIFT_MINE.blastRadius', DRIFT_MINE, 'blastRadius', 40, 400, 10),
+        field('DRIFT_MINE.chainPropagationMs', DRIFT_MINE, 'chainPropagationMs', 0, 1000, 20),
       ],
     },
     {

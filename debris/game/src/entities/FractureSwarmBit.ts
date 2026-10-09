@@ -5,71 +5,71 @@ import { wrapPosition } from '../systems/MovementSystem';
 import type { Vector2 } from '../utilities/Vector2';
 import type { MatterGameObject } from './MatterGameObject';
 
-// The 7 standard tetromino layouts, as [col, row] cell coordinates -
-// "make them look like Tetris pieces," decided, replacing the jagged
-// asteroid-shaped shell every earlier pass used. Deliberately file-local
-// data, not GameConfig - purely a rendering detail, same treatment
-// Fracture.ts's own SHARD_COUNT/SHARD_BASE_DIST already get.
-const TETROMINOES: readonly (readonly [number, number])[][] = [
-  [
-    [0, 0],
-    [1, 0],
-    [2, 0],
-    [3, 0],
-  ], // I
-  [
-    [0, 0],
-    [1, 0],
-    [0, 1],
-    [1, 1],
-  ], // O
-  [
-    [0, 0],
-    [1, 0],
-    [2, 0],
-    [1, 1],
-  ], // T
-  [
-    [1, 0],
-    [2, 0],
-    [0, 1],
-    [1, 1],
-  ], // S
-  [
-    [0, 0],
-    [1, 0],
-    [1, 1],
-    [2, 1],
-  ], // Z
-  [
-    [0, 0],
-    [0, 1],
-    [1, 1],
-    [2, 1],
-  ], // J
-  [
-    [2, 0],
-    [0, 1],
-    [1, 1],
-    [2, 1],
-  ], // L
-];
-
-// The overall footprint every tetromino piece is scaled to fit, regardless
-// of its own natural bounding box (a 4-wide I-piece and a 2x2 O-piece both
-// end up reading as "the same size class"). Reported too small at 12 -
-// bumped to 20 on request, chosen from a live size comparison against
-// ASTEROID.small's own 16px-across footprint (deliberately bigger now,
-// reversing the original "smaller than or the same size as the little
-// rocks" call). Comfortably under FRACTURE.swarmRadius's own 22px hitbox
-// diameter, leaving a small margin so the visual never pokes past the
-// (invisible) collision circle.
-const TARGET_SPAN_PX = 20;
-
-interface Cell {
+interface Vec3 {
   readonly x: number;
   readonly y: number;
-  readonly size: number;
+  readonly z: number;
+}
+
+/** The two pickup silhouettes a bit can roll, picked live against a mockup over the original tetromino blocks (too puzzle-game at FRACTURE.swarmRadius's doubled size) and over five other flat-fill candidates (ingot, coil, gear tooth, cluster, token) - these two won on being an unfilled wireframe, the same rendering language the original 1979 Asteroids ship itself used, rather than another flat-shaded shape. */
+type SwarmBitKind = 'core' | 'cargo';
+
+/** Half-extents (px) of the rectangular prism each kind draws - a cube for Core, a long thin box for Cargo. Both prisms share one vertex/edge topology (`PRISM_EDGES` below); only these three numbers differ. */
+const HALF_EXTENTS: Record<SwarmBitKind, Vec3> = {
+  core: { x: 15, y: 15, z: 15 },
+  cargo: { x: 19, y: 7.6, z: 7.6 },
+};
+
+// Fixed tilt around the horizontal axis, same purpose as an isometric
+// game's camera pitch: without it a Y-axis-only spin reads as a flat
+// shape on a turntable rather than a solid tumbling in space.
+const BASE_TILT = 0.55;
+
+// The 8 corners of a unit box, in the fixed generation order every index
+// below assumes: x sign outermost, then y, then z.
+const SIGNS: readonly number[] = [-1, 1];
+
+/** Index pairs into `prismVertices`'s output that are exactly one sign away from each other - the 12 edges of a rectangular prism, regardless of its half-extents. */
+const PRISM_EDGES: readonly (readonly [number, number])[] = [
+  [0, 1],
+  [0, 2],
+  [0, 4],
+  [1, 3],
+  [1, 5],
+  [2, 3],
+  [2, 6],
+  [3, 7],
+  [4, 5],
+  [4, 6],
+  [5, 7],
+  [6, 7],
+];
+
+function prismVertices(half: Vec3): Vec3[] {
+  const verts: Vec3[] = [];
+  for (const sx of SIGNS) {
+    for (const sy of SIGNS) {
+      for (const sz of SIGNS) {
+        verts.push({ x: sx * half.x, y: sy * half.y, z: sz * half.z });
+      }
+    }
+  }
+  return verts;
+}
+
+/** Rotates a local point around the vertical axis by `spin` (the tumble), then tilts the whole result by `tilt` (the fixed camera-pitch-equivalent) - same two-step rotation a flight-sim-style wireframe renderer would use, kept to exactly what's needed since there's no third axis or perspective divide here. */
+function project3D(p: Vec3, spin: number, tilt: number): Vec3 {
+  const cosSpin = Math.cos(spin);
+  const sinSpin = Math.sin(spin);
+  const x1 = p.x * cosSpin + p.z * sinSpin;
+  const z1 = -p.x * sinSpin + p.z * cosSpin;
+
+  const cosTilt = Math.cos(tilt);
+  const sinTilt = Math.sin(tilt);
+  const y2 = p.y * cosTilt - z1 * sinTilt;
+  const z2 = p.y * sinTilt + z1 * cosTilt;
+
+  return { x: x1, y: y2, z: z2 };
 }
 
 /**
@@ -84,16 +84,22 @@ interface Cell {
  * hitsRemaining, no shooting - its collision mask is `CATEGORY.SHIP`
  * only, a player's own shots pass straight through.
  *
- * Redesigned "floating parts," decided after a live mockup comparison -
- * a blocky tetromino-shaped fragment (dark metal plating, a pulsing
- * muted-jade glow, `COLORS.scrap`) instead of the jagged asteroid-shaped
- * shard every earlier pass used, so it reads as loose mechanical debris
- * rather than a small rock.
+ * Redesigned a second time, decided after a live mockup comparison: each
+ * pickup now rolls one of two unfilled wireframe prisms (`SwarmBitKind`
+ * above) tumbling in true 3D - "Shattered Core," a cube, standing in for
+ * a dead satellite's structural skeleton, and "Cargo Crate," an
+ * elongated box, reading as a salvaged module by proportion alone. Both
+ * replace the earlier tetromino-block look, which read fine at the
+ * original `FRACTURE.swarmRadius` but started looking like a
+ * puzzle-game piece once that radius doubled.
  */
 export class FractureSwarmBit {
   readonly visual: MatterGameObject<Phaser.GameObjects.Graphics>;
-  private readonly cells: Cell[];
+  private readonly kind: SwarmBitKind;
+  private readonly halfExtents: Vec3;
+  private readonly depthRange: number;
   private readonly spinSpeed: number;
+  private readonly spinPhase: number;
   private readonly bobPhase: number;
   private readonly spawnedAtMs: number;
   private alive = true;
@@ -106,8 +112,15 @@ export class FractureSwarmBit {
     rng: () => number = Math.random,
   ) {
     this.spawnedAtMs = nowMs;
-    this.cells = buildTetrominoCells(TETROMINOES[Math.floor(rng() * TETROMINOES.length)]!);
-    this.spinSpeed = (rng() - 0.5) * 0.8;
+    this.kind = rng() < 0.5 ? 'core' : 'cargo';
+    this.halfExtents = HALF_EXTENTS[this.kind];
+    // Edges near this (plus or minus) are treated as "facing the camera"
+    // for the depth-fade below - derived from the shape's own footprint
+    // rather than a shared constant, so Cargo's longer silhouette fades
+    // over the same proportional range Core's does.
+    this.depthRange = Math.hypot(this.halfExtents.x, this.halfExtents.z);
+    this.spinSpeed = (rng() - 0.5) * 0.8; // rad/sec, same slow-tumble range the old 2D spin used
+    this.spinPhase = rng() * Math.PI * 2; // random starting orientation, so a field of these doesn't spawn all facing identically
     this.bobPhase = rng() * Math.PI * 2;
 
     const visual = scene.add.graphics();
@@ -142,10 +155,13 @@ export class FractureSwarmBit {
     return nowMs - this.spawnedAtMs < FRACTURE.materializeDurationMs;
   }
 
-  update(nowMs: number, deltaSeconds: number, arenaWidth: number, arenaHeight: number): void {
+  // deltaSeconds is unused now that rotation is derived from nowMs directly
+  // (see `draw`'s spin calculation) rather than accumulated per frame, but
+  // the signature stays - GameScene calls every hazard's update() the same
+  // way, and changing just this one would be a worse inconsistency than an
+  // unused parameter.
+  update(nowMs: number, _deltaSeconds: number, arenaWidth: number, arenaHeight: number): void {
     if (!this.alive) return;
-
-    this.visual.setRotation(this.visual.rotation + this.spinSpeed * deltaSeconds);
 
     const wrapped = wrapPosition(this.position, FRACTURE.swarmRadius, arenaWidth, arenaHeight);
     if (wrapped.x !== this.position.x || wrapped.y !== this.position.y) {
@@ -175,25 +191,49 @@ export class FractureSwarmBit {
     // shards already use for their bob.
     const bobY = Math.sin(nowMs / 900 + this.bobPhase) * 1.5;
 
-    this.cells.forEach((cell) => {
-      const x = cell.x;
-      const y = cell.y + bobY;
-      const glowPad = 1.5 + pulse * 1.5;
+    // True 3D tumble rather than the flat 2D spin the tetromino look
+    // used - a slow yaw (this.spinSpeed) plus a gentle oscillation on
+    // top of the fixed camera tilt, so it reads as a solid tumbling in
+    // space rather than a shape spinning in place on a turntable.
+    const elapsedSec = (nowMs - this.spawnedAtMs) / 1000;
+    const spin = elapsedSec * this.spinSpeed + this.spinPhase;
+    const tilt = BASE_TILT + Math.sin(nowMs / 1300 + this.bobPhase) * 0.12;
 
-      // Graphics has no true blur - same "layered flat fills" stand-in
-      // Fracture's own core glow and BlackHole already use: a soft,
-      // low-alpha, slightly larger rect behind the solid cell.
-      g.fillStyle(COLORS.scrap, 0.18 + pulse * 0.12);
-      g.fillRect(x - glowPad, y - glowPad, cell.size + glowPad * 2, cell.size + glowPad * 2);
+    // Graphics has no true blur - same "layered flat fill" stand-in
+    // Fracture's own core glow and BlackHole already use: a soft,
+    // low-alpha circle behind the wireframe, standing in for a glow a
+    // hollow shape otherwise couldn't cast.
+    const glowRadius = this.depthRange * (0.85 + pulse * 0.3);
+    g.fillStyle(COLORS.scrap, 0.16 + pulse * 0.1);
+    g.fillCircle(0, bobY, glowRadius);
 
-      g.fillStyle(COLORS.cardinalFill, 1);
-      g.fillRect(x, y, cell.size, cell.size);
+    const projected = prismVertices(this.halfExtents).map((v) => project3D(v, spin, tilt));
 
-      g.lineStyle(1, 0x3c4560, 1); // structural edge tone - matches Cardinal.ts's own local METAL_LIGHT
-      g.strokeRect(x, y, cell.size, cell.size);
+    PRISM_EDGES.forEach(([ia, ib]) => {
+      const a = projected[ia]!;
+      const b = projected[ib]!;
+      // Edges facing the camera (positive z after projection) read
+      // brighter than ones facing away - the only concession to depth
+      // this wireframe makes, since true hidden-line removal would
+      // fight the "it's hollow" point of drawing it unfilled at all.
+      const depthT = Math.max(0, Math.min(1, ((a.z + b.z) / 2 + this.depthRange) / (this.depthRange * 2)));
+      const alpha = 0.5 + depthT * 0.5;
+      const ax = a.x;
+      const ay = a.y + bobY;
+      const bx = b.x;
+      const by = b.y + bobY;
 
-      g.lineStyle(1, COLORS.scrap, 0.45 + pulse * 0.55);
-      g.strokeRect(x, y, cell.size, cell.size);
+      g.lineStyle(1.4, 0x3c4560, alpha); // structural edge tone - matches Cardinal.ts's own local METAL_LIGHT
+      g.beginPath();
+      g.moveTo(ax, ay);
+      g.lineTo(bx, by);
+      g.strokePath();
+
+      g.lineStyle(1.4, COLORS.scrap, Math.min(1, (0.45 + pulse * 0.55) * alpha));
+      g.beginPath();
+      g.moveTo(ax, ay);
+      g.lineTo(bx, by);
+      g.strokePath();
     });
   }
 
@@ -202,20 +242,4 @@ export class FractureSwarmBit {
     this.alive = false;
     this.visual.destroy();
   }
-}
-
-/** Scales a tetromino's own natural bounding box (which varies - a 4-wide I vs. a 2x2 O) to a consistent TARGET_SPAN_PX footprint, and centers it on the entity's own local origin. */
-function buildTetrominoCells(shape: readonly (readonly [number, number])[]): Cell[] {
-  const cols = shape.map(([c]) => c);
-  const rows = shape.map(([, r]) => r);
-  const width = Math.max(...cols) + 1;
-  const height = Math.max(...rows) + 1;
-  const cellSize = TARGET_SPAN_PX / Math.max(width, height);
-  const inset = Math.max(0.5, cellSize * 0.08);
-
-  return shape.map(([col, row]) => ({
-    x: (col - width / 2) * cellSize + inset,
-    y: (row - height / 2) * cellSize + inset,
-    size: cellSize - inset * 2,
-  }));
 }
