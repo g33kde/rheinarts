@@ -986,12 +986,17 @@ export class GameScene extends Phaser.Scene {
     if (!this.hostSession) return;
 
     this.snapshotTick += 1;
-    // Excludes an eliminated (including disconnected - see
-    // handleRemotePlayerDisconnected) player's slot entirely, not just
-    // alive: false - their Ship has been destroy()'d, so reading
-    // .position/.heading off it here would reach into a dead object.
+    // Excludes anyone whose current Ship object is actually destroyed -
+    // not just eliminated (disconnected - see
+    // handleRemotePlayerDisconnected), but also a *Cooperative* hit
+    // that's still alive as a player: that ejects a Commander and
+    // destroys the ship outright, but doesn't set eliminated - player.ship
+    // keeps pointing at the dead object until respawnRescuedPlayer()
+    // replaces it at the station. Reading .position/.heading off a
+    // destroyed Ship here threw and froze the host's whole update loop -
+    // the actual bug behind "the game freezes on any hit in LAN mode."
     const ships: ShipSnapshot[] = this.players
-      .filter((player) => !player.eliminated)
+      .filter((player) => !player.eliminated && player.ship.isAlive)
       .map((player) => ({
         slotIndex: player.slotIndex,
         x: player.ship.position.x,
