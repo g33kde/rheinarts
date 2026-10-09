@@ -1,5 +1,52 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
+const dgram = require('node:dgram');
+
+// LAN discovery (docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+// 4) - deliberately protocol-ignorant. This is dumb UDP plumbing only;
+// everything about *what's in* a packet (encoding, validation, staleness)
+// lives in the renderer's own `systems/LanDiscoveryProtocol.ts`, tested
+// there. A plain browser page can't open a raw UDP socket at all - that's
+// the one reason any of this has to live in the main process rather than
+// the game code itself.
+let discoverySocket;
+
+function stopListening() {
+  if (discoverySocket) {
+    discoverySocket.close();
+    discoverySocket = undefined;
+  }
+}
+
+function startListening(event, port) {
+  stopListening();
+  const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  socket.on('message', (data, rinfo) => {
+    event.sender.send('lan:message', { address: rinfo.address, data: data.toString('utf8') });
+  });
+  socket.bind(port, () => {
+    socket.setBroadcast(true);
+  });
+  discoverySocket = socket;
+}
+
+function broadcast(_event, port, message) {
+  // A short-lived socket per send, not the long-lived listening one -
+  // broadcasting needs SO_BROADCAST set and no particular bound port of
+  // its own, and reusing `discoverySocket` here would tie a host's
+  // ability to announce itself to whether it also happens to be
+  // listening, which are genuinely independent roles (a host announces;
+  // a joiner listens; nothing stops either from doing both).
+  const socket = dgram.createSocket('udp4');
+  socket.bind(() => {
+    socket.setBroadcast(true);
+    socket.send(message, port, '255.255.255.255', () => socket.close());
+  });
+}
+
+ipcMain.on('lan:startListening', startListening);
+ipcMain.on('lan:stopListening', stopListening);
+ipcMain.on('lan:broadcast', broadcast);
 
 // Sprint 1 (docs/roadmap.md's "Windows + LAN multiplayer") - a bare
 // Electron shell around the existing web build, nothing else.
@@ -42,6 +89,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -55,6 +103,7 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
+  stopListening();
   // Windows/Linux convention - quit with the last window, unlike macOS.
   // Debris is Windows-first here, so this is the right default even
   // though Electron's own template guards it behind a platform check.

@@ -1014,3 +1014,20 @@ export const CARDINAL = {
 export const BOSS_STAGE_START = {
   invulnerabilityMs: 3000, // "3 seconds unbreakable," decided - longer than SHIP.respawnInvulnerabilityMs (2000ms), since a boss fight's opening moment is a higher-stakes spot to appear vulnerable in than an ordinary mid-round respawn
 } as const;
+
+/**
+ * LAN discovery (docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+ * 4) - a host (player-hosted client, or the future dedicated server)
+ * periodically broadcasts an announce packet (`LanDiscoveryProtocol.ts`);
+ * everyone else listens and keeps a live list, pruning anything that's
+ * gone quiet. Desktop-only - a plain browser tab can't open a raw UDP
+ * socket, so `systems/LanDiscovery.ts` no-ops entirely outside Electron,
+ * same "additive, not a replacement" rule the whole feature follows.
+ *
+ * Starting guesses, not playtested.
+ */
+export const LAN_DISCOVERY = {
+  broadcastPort: 47321, // arbitrary, chosen clear of the well-known range and of this project's own dev-server ports (5175, 8081)
+  announceIntervalMs: 1000, // "a live list," decided - frequent enough that a just-started host shows up within a second
+  staleTimeoutMs: 3500, // a few missed announces (not just one dropped packet) before a game drops off the list - UDP on a LAN is reliable but not perfectly so
+} as const;

@@ -46,3 +46,18 @@ Wine-on-non-Windows limitation, not a problem with the packaging config
 
 No code-signing certificate is configured yet, and no custom app icon -
 both deliberately deferred rather than blocking the first installer.
+
+## LAN discovery (Sprint 4)
+
+`main.js` opens a raw UDP socket (`node:dgram`) for broadcasting/
+listening - something a plain browser page can't do at all, which is
+why this lives here rather than in `../game`'s own code. `preload.js`
+exposes it to the game as `window.debrisLan`; the actual protocol
+(encoding, validation, staleness) lives in
+`../game/src/systems/LanDiscoveryProtocol.ts` and
+`../game/src/systems/LanDiscovery.ts`, not here - this file stays a
+dumb pipe on purpose.
+
+Not wired into any menu/UI yet - this sprint is the transport layer on
+its own, tested standalone (`npm --prefix ../game run test`), not yet
+driving an actual "Host Game"/"Join Game" screen.
