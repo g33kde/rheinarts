@@ -1048,6 +1048,42 @@ export class GameScene extends Phaser.Scene {
       });
     });
 
+    this.ufos.forEach((ufo) => {
+      if (!ufo.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(ufo),
+        type: 'ufo',
+        x: ufo.position.x,
+        y: ufo.position.y,
+        rotation: ufo.visual.rotation,
+        data: {},
+      });
+    });
+
+    this.ufoShots.forEach((shot) => {
+      if (!shot.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(shot),
+        type: 'ufoShot',
+        x: shot.position.x,
+        y: shot.position.y,
+        rotation: 0,
+        data: {},
+      });
+    });
+
+    this.shields.forEach((shield) => {
+      if (!shield.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(shield),
+        type: 'shield',
+        x: shield.position.x,
+        y: shield.position.y,
+        rotation: shield.visual.rotation,
+        data: {},
+      });
+    });
+
     return entities;
   }
 
@@ -1208,6 +1244,121 @@ export class GameScene extends Phaser.Scene {
       return {
         applySnapshot: (snapshot) => circle.setPosition(snapshot.x, snapshot.y),
         destroy: () => circle.destroy(),
+      };
+    });
+
+    // UFO's own tilt wobble is already carried in `entity.rotation` (the
+    // same value `Ufo.visual.rotation` holds host-side) - only the
+    // under-light pulse, which isn't part of the generic snapshot shape,
+    // needs a clock of its own. `scene.time.now` stands in for the host's
+    // per-instance `elapsedSec` - same period, different phase, which
+    // reads identically for a cosmetic pulse nobody's meant to compare
+    // frame-for-frame against the host's own screen.
+    this.entityMirrors.registerFactory('ufo', (scene) => {
+      const graphics = scene.add.graphics();
+      const scale = UFO.radius;
+      const bodyRx = 0.85 * scale;
+      const bodyRy = 0.24 * scale;
+      const bodyY = 0.05 * scale;
+      const domeRx = 0.4 * scale;
+      const domeRy = 0.3 * scale;
+      const domeY = -0.15 * scale;
+      const underLightXOffsets = [-0.32, 0, 0.32];
+      const underLightYOffset = 0.13;
+      const underLightPulsePerSec = 3;
+      const domeArcSegments = 16;
+
+      const redraw = (): void => {
+        graphics.clear();
+        graphics.fillStyle(COLORS.ufoFill, 1);
+        graphics.lineStyle(2, COLORS.ufo, 1);
+        graphics.fillEllipse(0, bodyY, bodyRx * 2, bodyRy * 2);
+        graphics.strokeEllipse(0, bodyY, bodyRx * 2, bodyRy * 2);
+
+        graphics.beginPath();
+        for (let i = 0; i <= domeArcSegments; i += 1) {
+          const t = Math.PI + (i / domeArcSegments) * Math.PI;
+          const px = domeRx * Math.cos(t);
+          const py = domeY + domeRy * Math.sin(t);
+          if (i === 0) graphics.moveTo(px, py);
+          else graphics.lineTo(px, py);
+        }
+        graphics.closePath();
+        graphics.fillPath();
+        graphics.strokePath();
+
+        const elapsedSec = scene.time.now / 1000;
+        underLightXOffsets.forEach((nx, i) => {
+          const phase = elapsedSec * underLightPulsePerSec + i * ((Math.PI * 2) / underLightXOffsets.length);
+          const brightness = 0.4 + (Math.sin(phase) * 0.5 + 0.5) * 0.6;
+          graphics.fillStyle(COLORS.ufo, brightness);
+          graphics.fillCircle(nx * scale, underLightYOffset * scale, scale * 0.06);
+        });
+      };
+      redraw();
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y).setRotation(snapshot.rotation);
+          redraw();
+        },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    this.entityMirrors.registerFactory('ufoShot', (scene, entity) => {
+      const circle = scene.add.circle(entity.x, entity.y, UFO.shotRadius, COLORS.ufo);
+      return {
+        applySnapshot: (snapshot) => circle.setPosition(snapshot.x, snapshot.y),
+        destroy: () => circle.destroy(),
+      };
+    });
+
+    // Shield's spin is carried in `entity.rotation` the same way UFO's
+    // tilt is; only the center dot's pulse (a scale animation, not a
+    // rotation, so it has no field of its own on the generic snapshot
+    // shape) is re-derived locally from `scene.time.now` - same
+    // approximation the UFO mirror's under-lights already make.
+    this.entityMirrors.registerFactory('shield', (scene) => {
+      const graphics = scene.add.graphics();
+      const diamondPoints: readonly Vector2[] = [
+        { x: 0, y: -0.68 },
+        { x: 0.46, y: 0 },
+        { x: 0, y: 0.68 },
+        { x: -0.46, y: 0 },
+      ];
+      const pulsePeriodSec = 2;
+      const pulseMinScale = 0.12;
+      const pulseMaxScale = 0.18;
+
+      const redraw = (): void => {
+        graphics.clear();
+        graphics.fillStyle(0x0d0d16, 1);
+        graphics.lineStyle(2, COLORS.shield, 1);
+        graphics.beginPath();
+        diamondPoints.forEach((p, i) => {
+          const px = p.x * SHIELD.radius;
+          const py = p.y * SHIELD.radius;
+          if (i === 0) graphics.moveTo(px, py);
+          else graphics.lineTo(px, py);
+        });
+        graphics.closePath();
+        graphics.fillPath();
+        graphics.strokePath();
+
+        const pulsePhase = ((scene.time.now / 1000) / pulsePeriodSec) * Math.PI * 2;
+        const pulseScale = pulseMinScale + (Math.sin(pulsePhase) * 0.5 + 0.5) * (pulseMaxScale - pulseMinScale);
+        graphics.fillStyle(COLORS.shield, 1);
+        graphics.fillCircle(0, 0, pulseScale * SHIELD.radius);
+      };
+      redraw();
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y).setRotation(snapshot.rotation);
+          redraw();
+        },
+        destroy: () => graphics.destroy(),
       };
     });
   }
