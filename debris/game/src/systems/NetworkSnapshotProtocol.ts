@@ -45,12 +45,31 @@ export interface ShipSnapshot {
   readonly invulnerableUntilMs: number;
 }
 
+/**
+ * One player slot's score/lives/combo/scrap/status (docs/roadmap.md's
+ * "Windows + LAN multiplayer," Sprint 10) - sent for every slot every
+ * tick, unlike `ships`, which drops a slot once its ship is actually
+ * destroyed. A player's HUD (score, "ELIMINATED", ...) still needs to
+ * read correctly after that point, so this list is never filtered by
+ * alive/eliminated the way `ships` is.
+ */
+export interface PlayerHudSnapshot {
+  readonly slotIndex: number;
+  readonly score: number;
+  readonly lives: number;
+  readonly comboMultiplier: number;
+  readonly scrap: number;
+  readonly eliminated: boolean;
+  readonly statusLine: string | null;
+}
+
 export interface GameSnapshot {
   readonly type: 'debris-snapshot';
   readonly tick: number;
   readonly nowMs: number;
   readonly ships: readonly ShipSnapshot[];
   readonly entities: readonly EntitySnapshot[];
+  readonly players: readonly PlayerHudSnapshot[];
 }
 
 export interface InputMessage {
@@ -77,6 +96,20 @@ function isShipSnapshot(value: unknown): value is ShipSnapshot {
     typeof s.alive === 'boolean' &&
     typeof s.thrusting === 'boolean' &&
     typeof s.invulnerableUntilMs === 'number'
+  );
+}
+
+function isPlayerHudSnapshot(value: unknown): value is PlayerHudSnapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const p = value as Record<string, unknown>;
+  return (
+    typeof p.slotIndex === 'number' &&
+    typeof p.score === 'number' &&
+    typeof p.lives === 'number' &&
+    typeof p.comboMultiplier === 'number' &&
+    typeof p.scrap === 'number' &&
+    typeof p.eliminated === 'boolean' &&
+    (p.statusLine === null || typeof p.statusLine === 'string')
   );
 }
 
@@ -116,6 +149,7 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
   if (typeof candidate.nowMs !== 'number') return undefined;
   if (!Array.isArray(candidate.ships) || !candidate.ships.every(isShipSnapshot)) return undefined;
   if (!Array.isArray(candidate.entities) || !candidate.entities.every(isEntitySnapshot)) return undefined;
+  if (!Array.isArray(candidate.players) || !candidate.players.every(isPlayerHudSnapshot)) return undefined;
 
   return {
     type: 'debris-snapshot',
@@ -123,6 +157,7 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
     nowMs: candidate.nowMs,
     ships: candidate.ships as ShipSnapshot[],
     entities: candidate.entities as EntitySnapshot[],
+    players: candidate.players as PlayerHudSnapshot[],
   };
 }
 

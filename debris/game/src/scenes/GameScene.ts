@@ -116,9 +116,11 @@ import {
   isNewerTick,
   type EntitySnapshot,
   type GameSnapshot,
+  type PlayerHudSnapshot,
   type ShipSnapshot,
 } from '../systems/NetworkSnapshotProtocol';
 import { EntityMirrorRegistry } from '../systems/EntityMirrorRegistry';
+import { formatPlayerHud, type PlayerHudData } from '../systems/PlayerHudFormat';
 import { generateAsteroidPoints, pickShapeFamily } from '../systems/AsteroidShape';
 import { RemoteInput } from '../input/RemoteInput';
 import {
@@ -1080,6 +1082,7 @@ export class GameScene extends Phaser.Scene {
       nowMs,
       ships,
       entities: this.buildEntitySnapshots(),
+      players: this.buildPlayerHudSnapshots(),
     });
   }
 
@@ -1236,6 +1239,10 @@ export class GameScene extends Phaser.Scene {
         player?.ship.applyNetworkSnapshot(shipSnapshot, snapshot.nowMs);
       });
       this.entityMirrors.reconcile(this, snapshot.entities);
+      snapshot.players.forEach((hud) => {
+        const player = this.players.find((p) => p.slotIndex === hud.slotIndex);
+        player?.hudText.setText(formatPlayerHud(this.mode, hud, LIVES_PER_PLAYER));
+      });
     }
 
     this.background.update(deltaSeconds);
@@ -4246,35 +4253,39 @@ export class GameScene extends Phaser.Scene {
    * `cooperativeStatusLine` shows what actually matters there instead.
    */
   private refreshAllPlayerHud(): void {
-    const pooledScore = this.scores.reduce((sum, score) => sum + score, 0);
-
     this.players.forEach((player) => {
-      const score =
-        this.mode === 'competitive' ? (this.scores[player.slotIndex] ?? 0) : pooledScore;
-      const lines = [`P${player.slotIndex + 1}`, `SCORE ${score}`];
-
-      // Kill chain, shown only while it's actually worth something -
-      // same "no line at all until it matters" rule SCRAP below already
-      // follows, so a player who isn't chaining sees no extra clutter.
-      const multiplier = comboMultiplier(player.combo, COMBO);
-      if (multiplier > 1) lines.push(`x${multiplier} COMBO`);
-
-      if (this.mode === 'cooperative') {
-        const status = this.cooperativeStatusLine(player);
-        if (status) lines.push(status);
-      } else {
-        const filled = '●'.repeat(Math.max(0, player.lives));
-        const hollow = '○'.repeat(Math.max(0, LIVES_PER_PLAYER - player.lives));
-        lines.push(`${filled}${hollow}`);
-      }
-
-      // "Next to their life status," decided - appended after the
-      // lives/cooperative-status line, only once nonzero so the HUD
-      // stays clean before The Fracture's Phase 3 is ever reached.
-      if (player.scrap > 0) lines.push(`SCRAP ${player.scrap}`);
-
-      player.hudText.setText(lines.join('\n'));
+      player.hudText.setText(
+        formatPlayerHud(this.mode, this.playerHudDataFor(player), LIVES_PER_PLAYER),
+      );
     });
+  }
+
+  /** Shared by `refreshAllPlayerHud` (host's own screen) and `buildPlayerHudSnapshots` (what a client's screen gets built from) - one source of truth for "what does this player's HUD actually say right now." */
+  private playerHudDataFor(player: PlayerSlot): PlayerHudData {
+    const pooledScore = this.scores.reduce((sum, score) => sum + score, 0);
+    return {
+      slotIndex: player.slotIndex,
+      score: this.mode === 'competitive' ? (this.scores[player.slotIndex] ?? 0) : pooledScore,
+      lives: player.lives,
+      comboMultiplier: comboMultiplier(player.combo, COMBO),
+      scrap: player.scrap,
+      statusLine: this.mode === 'cooperative' ? this.cooperativeStatusLine(player) : null,
+    };
+  }
+
+  /**
+   * Host only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 10)
+   * - every player slot's score/lives/combo/scrap/status, sent every
+   * tick regardless of whether that player's ship is currently alive
+   * (unlike `ships`, which drops a destroyed one) so a client keeps
+   * showing a correct HUD - including "ELIMINATED" - after a player's
+   * ship is gone.
+   */
+  private buildPlayerHudSnapshots(): PlayerHudSnapshot[] {
+    return this.players.map((player) => ({
+      ...this.playerHudDataFor(player),
+      eliminated: player.eliminated,
+    }));
   }
 
   /**

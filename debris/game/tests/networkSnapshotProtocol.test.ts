@@ -29,6 +29,17 @@ const SNAPSHOT: GameSnapshot = {
     { id: 1, type: 'asteroid', x: 100, y: 200, rotation: 0.3, data: { size: 'large' } },
     { id: 2, type: 'projectile', x: 50, y: 60, rotation: 0, data: { ownerIndex: 0 } },
   ],
+  players: [
+    {
+      slotIndex: 0,
+      score: 500,
+      lives: 2,
+      comboMultiplier: 1,
+      scrap: 0,
+      eliminated: false,
+      statusLine: null,
+    },
+  ],
 };
 
 const INPUT: InputMessage = {
@@ -76,6 +87,30 @@ describe('encodeSnapshot / decodeSnapshot', () => {
 
   it('rejects an entity missing required numeric fields', () => {
     const bad = { ...SNAPSHOT, entities: [{ id: 1, type: 'asteroid', x: 0, data: {} }] };
+    expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
+  });
+
+  it('round-trips a cooperative statusLine string', () => {
+    const withStatus: GameSnapshot = {
+      ...SNAPSHOT,
+      players: [{ ...SNAPSHOT.players[0]!, statusLine: 'EJECTED' }],
+    };
+    expect(decodeSnapshot(encodeSnapshot(withStatus))).toEqual(withStatus);
+  });
+
+  it('rejects a snapshot missing the players array', () => {
+    const withoutPlayers: Record<string, unknown> = { ...SNAPSHOT };
+    delete withoutPlayers.players;
+    expect(decodeSnapshot(JSON.stringify(withoutPlayers))).toBeUndefined();
+  });
+
+  it('rejects a player HUD entry with the wrong statusLine type', () => {
+    const bad = { ...SNAPSHOT, players: [{ ...SNAPSHOT.players[0], statusLine: 42 }] };
+    expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
+  });
+
+  it('rejects a player HUD entry missing required fields', () => {
+    const bad = { ...SNAPSHOT, players: [{ slotIndex: 0, score: 1 }] };
     expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
   });
 
