@@ -114,9 +114,12 @@ import { NetworkClientSession, NetworkHostSession } from '../systems/NetworkSess
 import type { RtcConnection } from '../systems/RtcConnection';
 import {
   isNewerTick,
+  type EntitySnapshot,
   type GameSnapshot,
   type ShipSnapshot,
 } from '../systems/NetworkSnapshotProtocol';
+import { EntityMirrorRegistry } from '../systems/EntityMirrorRegistry';
+import { generateAsteroidPoints, pickShapeFamily } from '../systems/AsteroidShape';
 import { RemoteInput } from '../input/RemoteInput';
 import {
   ASTEROID_HIT_SFX_KEY,
@@ -474,6 +477,18 @@ export class GameScene extends Phaser.Scene {
   private latestSnapshot: GameSnapshot | undefined;
   /** Client only - this machine's own real input device, always the full P1 binding set (not split P1/P2 the way local co-op shares one keyboard) since a dedicated network client has nobody else to share it with. */
   private localInput: KeyboardInput | undefined;
+  /**
+   * Host only - every synced non-ship entity (asteroid, projectile, and
+   * every type after it, Sprint 8 onward) gets a stable network id the
+   * first time it's seen in `buildEntitySnapshots()`, reused for the
+   * rest of that entity's lifetime. A `WeakMap` keyed on the entity
+   * object itself needs zero changes to any entity class and nothing to
+   * clean up - an entity that's destroyed just stops being looked up.
+   */
+  private entityNetworkIds = new WeakMap<object, number>();
+  private nextEntityNetworkId = 1;
+  /** Client only - reconciles each frame's `GameSnapshot.entities` into visual-only mirrors (`EntityMirrorRegistry.ts`). Factories registered once in `createNetworkClient()`. */
+  private entityMirrors = new EntityMirrorRegistry();
   private isDemo = false;
   private demoStartedAtMs = 0;
   private demoInputSeen = false;
@@ -679,6 +694,9 @@ export class GameScene extends Phaser.Scene {
     this.remoteConnectionsBySlot = data?.remoteConnectionsBySlot ?? new Map();
     this.snapshotTick = 0;
     this.latestSnapshot = undefined;
+    this.entityNetworkIds = new WeakMap();
+    this.nextEntityNetworkId = 1;
+    this.entityMirrors.clear();
   }
 
   create(): void {
@@ -982,6 +1000,55 @@ export class GameScene extends Phaser.Scene {
    * completely ordinary simulation just produced - this method doesn't
    * run any gameplay logic of its own, only serializes the result.
    */
+  /** Mints a stable network id the first time an entity is seen, reused for the rest of its lifetime - see `entityNetworkIds`' own doc comment. */
+  private networkIdFor(entity: object): number {
+    let id = this.entityNetworkIds.get(entity);
+    if (id === undefined) {
+      id = this.nextEntityNetworkId;
+      this.nextEntityNetworkId += 1;
+      this.entityNetworkIds.set(entity, id);
+    }
+    return id;
+  }
+
+  /**
+   * Host only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 8) -
+   * the generic entity list every `GameSnapshot` now carries alongside
+   * ships. Scoped to asteroids and projectiles for this sprint; every
+   * later entity type (UFOs, hazards, bosses, ...) just appends another
+   * `.map()` here, same shape, no new protocol or client-side plumbing
+   * required beyond registering that type's own mirror factory.
+   */
+  private buildEntitySnapshots(): EntitySnapshot[] {
+    const entities: EntitySnapshot[] = [];
+
+    this.asteroids.forEach((asteroid) => {
+      if (!asteroid.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(asteroid),
+        type: 'asteroid',
+        x: asteroid.position.x,
+        y: asteroid.position.y,
+        rotation: asteroid.visual.rotation,
+        data: { size: asteroid.size },
+      });
+    });
+
+    this.projectiles.forEach((projectile) => {
+      if (!projectile.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(projectile),
+        type: 'projectile',
+        x: projectile.position.x,
+        y: projectile.position.y,
+        rotation: projectile.headingRad,
+        data: { ownerIndex: projectile.ownerIndex },
+      });
+    });
+
+    return entities;
+  }
+
   private broadcastHostSnapshot(nowMs: number): void {
     if (!this.hostSession) return;
 
@@ -1012,6 +1079,7 @@ export class GameScene extends Phaser.Scene {
       tick: this.snapshotTick,
       nowMs,
       ships,
+      entities: this.buildEntitySnapshots(),
     });
   }
 
@@ -1039,6 +1107,7 @@ export class GameScene extends Phaser.Scene {
       }
     });
     this.clientSession?.onDisconnected(() => this.handleHostDisconnected());
+    this.registerEntityMirrorFactories();
 
     this.players = this.hulls.map((hullId, slotIndex) => {
       const offset = this.spawnOffsetFor(slotIndex);
@@ -1086,6 +1155,61 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * Client only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 8)
+   * - registers how to draw each generic `EntitySnapshot.type` this
+   * client knows about. No Matter body for either: a client never
+   * simulates physics for anything, including entities it isn't the
+   * local player's own ship, so these are plain Graphics/Arc objects
+   * repositioned from the snapshot each frame, nothing else.
+   *
+   * The asteroid mirror re-rolls its own procedural silhouette locally
+   * (`generateAsteroidPoints`/`pickShapeFamily`, the same pure functions
+   * `Asteroid.ts` itself uses) rather than the host transmitting one -
+   * cheaper than syncing a vertex list, and "a jagged rock" reads the
+   * same regardless of whose RNG picked its exact silhouette.
+   */
+  private registerEntityMirrorFactories(): void {
+    this.entityMirrors.registerFactory('asteroid', (scene, entity) => {
+      const size = (typeof entity.data.size === 'string' ? entity.data.size : 'large') as AsteroidSize;
+      const radius = ASTEROID[size].radius;
+      const family = pickShapeFamily(ASTEROID.shapeFamilies);
+      const vertexCount = Math.round(
+        family.vertexCountRange[0] + Math.random() * (family.vertexCountRange[1] - family.vertexCountRange[0]),
+      );
+      const points = generateAsteroidPoints(vertexCount, family.jaggedness);
+
+      const graphics = scene.add.graphics();
+      graphics.fillStyle(COLORS.asteroidFill, 1);
+      graphics.lineStyle(2, COLORS.asteroid, 1);
+      graphics.beginPath();
+      points.forEach((p, i) => {
+        const px = p.x * radius;
+        const py = p.y * radius;
+        if (i === 0) graphics.moveTo(px, py);
+        else graphics.lineTo(px, py);
+      });
+      graphics.closePath();
+      graphics.fillPath();
+      graphics.strokePath();
+
+      return {
+        applySnapshot: (snapshot) => graphics.setPosition(snapshot.x, snapshot.y).setRotation(snapshot.rotation),
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    this.entityMirrors.registerFactory('projectile', (scene, entity) => {
+      const ownerIndex = typeof entity.data.ownerIndex === 'number' ? entity.data.ownerIndex : 0;
+      const color = COLORS.players[ownerIndex] ?? COLORS.players[0]!;
+      const circle = scene.add.circle(entity.x, entity.y, PROJECTILE.radius, color);
+      return {
+        applySnapshot: (snapshot) => circle.setPosition(snapshot.x, snapshot.y),
+        destroy: () => circle.destroy(),
+      };
+    });
+  }
+
+  /**
    * Client only - the entire per-frame loop for a network client,
    * standing in for the ordinary `update()` below exactly once (see
    * `update()`'s own early-return). Sends this machine's own local
@@ -1111,6 +1235,7 @@ export class GameScene extends Phaser.Scene {
         const player = this.players.find((p) => p.slotIndex === shipSnapshot.slotIndex);
         player?.ship.applyNetworkSnapshot(shipSnapshot, snapshot.nowMs);
       });
+      this.entityMirrors.reconcile(this, snapshot.entities);
     }
 
     this.background.update(deltaSeconds);
@@ -1126,6 +1251,7 @@ export class GameScene extends Phaser.Scene {
    */
   private handleHostDisconnected(): void {
     this.clientSession?.stop();
+    this.entityMirrors.clear();
     stopSound(this, GAMEPLAY_MUSIC_KEY);
     this.scene.start('Menu');
   }

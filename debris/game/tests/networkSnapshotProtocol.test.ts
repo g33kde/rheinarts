@@ -25,6 +25,10 @@ const SNAPSHOT: GameSnapshot = {
   tick: 42,
   nowMs: 123456,
   ships: [SHIP],
+  entities: [
+    { id: 1, type: 'asteroid', x: 100, y: 200, rotation: 0.3, data: { size: 'large' } },
+    { id: 2, type: 'projectile', x: 50, y: 60, rotation: 0, data: { ownerIndex: 0 } },
+  ],
 };
 
 const INPUT: InputMessage = {
@@ -49,6 +53,30 @@ describe('encodeSnapshot / decodeSnapshot', () => {
   it('round-trips multiple ships', () => {
     const multi: GameSnapshot = { ...SNAPSHOT, ships: [SHIP, { ...SHIP, slotIndex: 1, alive: false }] };
     expect(decodeSnapshot(encodeSnapshot(multi))).toEqual(multi);
+  });
+
+  it('round-trips an empty entities list', () => {
+    const empty: GameSnapshot = { ...SNAPSHOT, entities: [] };
+    expect(decodeSnapshot(encodeSnapshot(empty))).toEqual(empty);
+  });
+
+  it('rejects a snapshot missing the entities array', () => {
+    const withoutEntities: Record<string, unknown> = { ...SNAPSHOT };
+    delete withoutEntities.entities;
+    expect(decodeSnapshot(JSON.stringify(withoutEntities))).toBeUndefined();
+  });
+
+  it('rejects an entity with a non-primitive data value', () => {
+    const bad = {
+      ...SNAPSHOT,
+      entities: [{ id: 1, type: 'asteroid', x: 0, y: 0, rotation: 0, data: { nested: { x: 1 } } }],
+    };
+    expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
+  });
+
+  it('rejects an entity missing required numeric fields', () => {
+    const bad = { ...SNAPSHOT, entities: [{ id: 1, type: 'asteroid', x: 0, data: {} }] };
+    expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
   });
 
   it('rejects garbage input instead of throwing', () => {

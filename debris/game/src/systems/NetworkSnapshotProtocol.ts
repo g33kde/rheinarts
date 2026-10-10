@@ -4,12 +4,15 @@
  * Sprint 6) - no RtcConnection, no GameScene, same convention every
  * other protocol module in this codebase follows.
  *
- * **Scoped to ship positions only, deliberately.** Proving host-to-
- * client position sync for the one thing every multiplayer match
- * absolutely needs (seeing the other players move) is this sprint's
- * whole goal - asteroids, hazards, and scoring staying in sync is
- * real, separate follow-up work, not assumed to fall out of this for
- * free.
+ * Ships kept their own dedicated `ShipSnapshot` shape (alive/thrusting/
+ * invulnerability aren't generic concepts, and there are only ever 4) -
+ * everything else the client needs to see (asteroids, projectiles, and
+ * every entity type after it, Sprint 8 onward) rides the generic
+ * `EntitySnapshot` shape below instead of each getting its own bespoke
+ * sync path. `data` is a loose, type-tagged bag rather than a
+ * discriminated union so a new synced entity type never needs to touch
+ * this protocol file - only the host-side builder and the client-side
+ * mirror factory for that `type` string.
  *
  * Both messages travel over a connection's *unreliable* channel
  * (`RtcConnection.ts`) - a dropped one is simply superseded by the next,
@@ -18,6 +21,18 @@
  * (unreliable + unordered means that can happen) rather than briefly
  * rendering a stale position after a newer one already arrived.
  */
+
+export type EntityDataValue = number | string | boolean;
+
+export interface EntitySnapshot {
+  /** Host-assigned, stable for the entity's lifetime, unique within its own `type` (not globally) - see `GameScene.networkIdFor`. */
+  readonly id: number;
+  readonly type: string;
+  readonly x: number;
+  readonly y: number;
+  readonly rotation: number;
+  readonly data: Readonly<Record<string, EntityDataValue>>;
+}
 
 export interface ShipSnapshot {
   readonly slotIndex: number;
@@ -35,6 +50,7 @@ export interface GameSnapshot {
   readonly tick: number;
   readonly nowMs: number;
   readonly ships: readonly ShipSnapshot[];
+  readonly entities: readonly EntitySnapshot[];
 }
 
 export interface InputMessage {
@@ -64,6 +80,25 @@ function isShipSnapshot(value: unknown): value is ShipSnapshot {
   );
 }
 
+function isEntityDataValue(value: unknown): value is EntityDataValue {
+  return typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean';
+}
+
+function isEntitySnapshot(value: unknown): value is EntitySnapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const e = value as Record<string, unknown>;
+  return (
+    typeof e.id === 'number' &&
+    typeof e.type === 'string' &&
+    typeof e.x === 'number' &&
+    typeof e.y === 'number' &&
+    typeof e.rotation === 'number' &&
+    typeof e.data === 'object' &&
+    e.data !== null &&
+    Object.values(e.data).every(isEntityDataValue)
+  );
+}
+
 /** `undefined` for anything that isn't a well-formed `GameSnapshot` - a malformed packet is silently ignored, not a crash, same convention every other decode function in this codebase follows. */
 export function decodeSnapshot(raw: string): GameSnapshot | undefined {
   let parsed: unknown;
@@ -80,12 +115,14 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
   if (typeof candidate.tick !== 'number') return undefined;
   if (typeof candidate.nowMs !== 'number') return undefined;
   if (!Array.isArray(candidate.ships) || !candidate.ships.every(isShipSnapshot)) return undefined;
+  if (!Array.isArray(candidate.entities) || !candidate.entities.every(isEntitySnapshot)) return undefined;
 
   return {
     type: 'debris-snapshot',
     tick: candidate.tick,
     nowMs: candidate.nowMs,
     ships: candidate.ships as ShipSnapshot[],
+    entities: candidate.entities as EntitySnapshot[],
   };
 }
 
