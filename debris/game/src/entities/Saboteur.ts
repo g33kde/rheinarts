@@ -11,6 +11,7 @@ const METAL_FILL = 0x14141c;
 const DANGER = 0xe0463c;
 const NODE_COUNT = 5;
 const RING_ROTATE_PERIOD_MS = 7000;
+const JUST_DROPPED_FLASH_MS = 150;
 
 /**
  * "The Layer," picked over two other mine-deployment mockups (rack-
@@ -68,6 +69,11 @@ export class Saboteur {
 
   get minesLeft(): number {
     return this.minesRemaining;
+  }
+
+  /** The hull's brief red tint right after a drop (`draw()`'s own `justDropped` check) - exposed so the network snapshot's mirror (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 12) can reproduce the same tell without needing `lastDropAtMs` itself. */
+  hasJustDroppedAt(nowMs: number): boolean {
+    return nowMs - this.lastDropAtMs < JUST_DROPPED_FLASH_MS;
   }
 
   readyToDrop(nowMs: number): boolean {
@@ -134,7 +140,7 @@ export class Saboteur {
     const g = this.visual;
     g.clear();
 
-    const justDropped = nowMs - this.lastDropAtMs < 150;
+    const justDropped = this.hasJustDroppedAt(nowMs);
     const hullFill = justDropped ? 0x2a1414 : METAL_FILL;
 
     // Slab hull, same chamfered silhouette as the mockup.

@@ -136,6 +136,16 @@ export class Commander {
     return COMMANDER.puffFuelSeconds <= 0 ? 0 : this.puffFuelSeconds / COMMANDER.puffFuelSeconds;
   }
 
+  /** Where the next puff would push - the only directional cue this entity has, since its body is never itself rotated (see the class doc comment). Exposed for the network snapshot's own thruster-tell mirror (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 12). */
+  get facingAngleRad(): number {
+    return this.facingRad;
+  }
+
+  /** Whether this frame's thrust key press actually spent fuel - same Sprint 12 network-snapshot use as `facingAngleRad`. */
+  get isThrusterFiring(): boolean {
+    return this.isPuffing;
+  }
+
   /**
    * The downed player's own input, applied to their adrift pilot
    * (COMMANDER.puff*) - GameScene routes the matching slot's turn/thrust

@@ -1021,7 +1021,7 @@ export class GameScene extends Phaser.Scene {
    * `.map()` here, same shape, no new protocol or client-side plumbing
    * required beyond registering that type's own mirror factory.
    */
-  private buildEntitySnapshots(): EntitySnapshot[] {
+  private buildEntitySnapshots(nowMs: number): EntitySnapshot[] {
     const entities: EntitySnapshot[] = [];
 
     this.asteroids.forEach((asteroid) => {
@@ -1084,6 +1084,73 @@ export class GameScene extends Phaser.Scene {
       });
     });
 
+    this.commanders.forEach((commander) => {
+      if (!commander.isAlive) return;
+      const remainingMs = Math.max(0, COMMANDER.rescueWindowMs - (nowMs - commander.ejectedAtMs));
+      entities.push({
+        id: this.networkIdFor(commander),
+        type: 'commander',
+        x: commander.position.x,
+        y: commander.position.y,
+        rotation: 0, // the body itself is never rotated (Commander.ts's own doc comment) - facingAngleRad below drives the thruster-tell direction instead
+        data: {
+          slotIndex: commander.slotIndex,
+          isAdrift: commander.isAdrift,
+          hasBeenRescuedOnce: commander.hasBeenRescuedOnce,
+          remainingSeconds: Math.ceil(remainingMs / 1000),
+          isThrusterFiring: commander.isThrusterFiring,
+          facingAngleRad: commander.facingAngleRad,
+          puffFuelRatio: commander.remainingPuffFuelRatio,
+        },
+      });
+    });
+
+    this.saboteurs.forEach((saboteur) => {
+      if (!saboteur.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(saboteur),
+        type: 'saboteur',
+        x: saboteur.position.x,
+        y: saboteur.position.y,
+        rotation: 0, // the hull's own draw() never rotates by heading either (same "drifts without turning to face it" look)
+        data: { minesRemaining: saboteur.minesLeft, justDropped: saboteur.hasJustDroppedAt(nowMs) },
+      });
+    });
+
+    this.driftMines.forEach((mine) => {
+      if (!mine.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(mine),
+        type: 'driftMine',
+        x: mine.position.x,
+        y: mine.position.y,
+        rotation: 0,
+        data: { armed: mine.isArmed(nowMs) },
+      });
+    });
+
+    if (this.spaceStation) {
+      entities.push({
+        id: this.networkIdFor(this.spaceStation),
+        type: 'spaceStation',
+        x: this.spaceStation.position.x,
+        y: this.spaceStation.position.y,
+        rotation: 0,
+        data: {},
+      });
+    }
+
+    if (this.blackHole?.isAlive) {
+      entities.push({
+        id: this.networkIdFor(this.blackHole),
+        type: 'blackHole',
+        x: this.blackHole.position.x,
+        y: this.blackHole.position.y,
+        rotation: 0,
+        data: {},
+      });
+    }
+
     return entities;
   }
 
@@ -1117,7 +1184,7 @@ export class GameScene extends Phaser.Scene {
       tick: this.snapshotTick,
       nowMs,
       ships,
-      entities: this.buildEntitySnapshots(),
+      entities: this.buildEntitySnapshots(nowMs),
       players: this.buildPlayerHudSnapshots(),
     });
   }
@@ -1356,6 +1423,452 @@ export class GameScene extends Phaser.Scene {
       return {
         applySnapshot: (snapshot) => {
           graphics.setPosition(snapshot.x, snapshot.y).setRotation(snapshot.rotation);
+          redraw();
+        },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // Commander's body is never itself rotated (its own doc comment) -
+    // `facingAngleRad`/`isThrusterFiring`/`puffFuelRatio` in `data` drive
+    // the thruster-tell chevron/flame/bar the same way the host's own
+    // draw() does; `remainingSeconds` is computed host-side rather than
+    // the client deriving it from `ejectedAtMs`, so there's no clock-
+    // alignment to get right. Limb sway/bob have no per-instance
+    // randomness at all (fixed phase offsets baked into the numbers
+    // below), so driving them from the local clock instead of the host's
+    // reproduces them exactly, same as the body itself never needing a
+    // sync'd value.
+    this.entityMirrors.registerFactory('commander', (scene, entity) => {
+      const slotIndex = typeof entity.data.slotIndex === 'number' ? entity.data.slotIndex : 0;
+      const color = COLORS.players[slotIndex] ?? COLORS.players[0]!;
+      const scale = COMMANDER.visualScale;
+      const graphics = scene.add.graphics();
+      const timerText = scene.add
+        .text(entity.x, entity.y + scale * 1.7, '', {
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          fontStyle: 'bold',
+          color: toCssHex(color),
+        })
+        .setOrigin(0.5, 0);
+
+      const drawLimb = (
+        g: Phaser.GameObjects.Graphics,
+        shoulderX: number,
+        shoulderY: number,
+        baseAngle: number,
+        sway: number,
+        length: number,
+      ): void => {
+        const angle = baseAngle + sway;
+        const elbowX = shoulderX + Math.cos(angle) * length * 0.55;
+        const elbowY = shoulderY + Math.sin(angle) * length * 0.55;
+        const tipAngle = angle + sway * 0.6;
+        const tipX = elbowX + Math.cos(tipAngle) * length * 0.5;
+        const tipY = elbowY + Math.sin(tipAngle) * length * 0.5;
+        g.lineStyle(2.2, color, 1);
+        g.beginPath();
+        g.moveTo(shoulderX, shoulderY);
+        g.lineTo(elbowX, elbowY);
+        g.lineTo(tipX, tipY);
+        g.strokePath();
+      };
+
+      const redraw = (data: EntitySnapshot['data']): void => {
+        const nowMs = scene.time.now;
+        const g = graphics;
+        g.clear();
+
+        const bob = Math.sin(nowMs / 500) * scale * 0.04;
+        g.save();
+        g.translateCanvas(0, bob);
+
+        drawLimb(g, -scale * 0.4, scale * 0.22, Math.PI * 0.85, Math.sin(nowMs / 900) * 0.35, scale * 0.85);
+        drawLimb(g, scale * 0.4, scale * 0.22, Math.PI * 0.15, Math.sin(nowMs / 760 + 1.4) * 0.35, scale * 0.85);
+        drawLimb(g, -scale * 0.24, scale * 0.95, Math.PI * 0.6, Math.sin(nowMs / 1100 + 2.6) * 0.3, scale * 0.9);
+        drawLimb(g, scale * 0.24, scale * 0.95, Math.PI * 0.4, Math.sin(nowMs / 980 + 0.7) * 0.3, scale * 0.9);
+
+        g.fillStyle(0x0d0d16, 1);
+        g.lineStyle(2, color, 1);
+        g.beginPath();
+        g.moveTo(-scale * 0.4, scale * 0.2);
+        g.lineTo(scale * 0.4, scale * 0.2);
+        g.lineTo(scale * 0.26, scale * 0.95);
+        g.lineTo(-scale * 0.26, scale * 0.95);
+        g.closePath();
+        g.fillPath();
+        g.strokePath();
+
+        g.fillStyle(0x0d0d16, 1);
+        g.lineStyle(2, color, 1);
+        g.fillCircle(0, -scale * 0.28, scale * 0.42);
+        g.strokeCircle(0, -scale * 0.28, scale * 0.42);
+
+        g.fillStyle(color, 0.5);
+        g.fillCircle(-scale * 0.08, -scale * 0.34, scale * 0.14);
+
+        g.restore();
+
+        const isAdrift = data.isAdrift === true;
+        const puffFuelRatio = typeof data.puffFuelRatio === 'number' ? data.puffFuelRatio : 0;
+        if (isAdrift && puffFuelRatio > 0) {
+          const facingRad = typeof data.facingAngleRad === 'number' ? data.facingAngleRad : 0;
+          const isThrusterFiring = data.isThrusterFiring === true;
+
+          const aimDistance = scale * 1.25;
+          const aimX = Math.cos(facingRad) * aimDistance;
+          const aimY = Math.sin(facingRad) * aimDistance;
+          const wingAngle = 0.6;
+          const wing = scale * 0.32;
+          g.lineStyle(2, color, 0.75);
+          g.beginPath();
+          g.moveTo(aimX - Math.cos(facingRad - wingAngle) * wing, aimY - Math.sin(facingRad - wingAngle) * wing);
+          g.lineTo(aimX, aimY);
+          g.lineTo(aimX - Math.cos(facingRad + wingAngle) * wing, aimY - Math.sin(facingRad + wingAngle) * wing);
+          g.strokePath();
+
+          if (isThrusterFiring) {
+            const backX = -Math.cos(facingRad) * scale * 0.7;
+            const backY = -Math.sin(facingRad) * scale * 0.7;
+            const flame = scale * (0.45 + Math.random() * 0.2);
+            g.fillStyle(COLORS.flame, 0.85);
+            g.beginPath();
+            g.moveTo(
+              backX - Math.cos(facingRad + 1.4) * scale * 0.18,
+              backY - Math.sin(facingRad + 1.4) * scale * 0.18,
+            );
+            g.lineTo(backX - Math.cos(facingRad) * flame, backY - Math.sin(facingRad) * flame);
+            g.lineTo(
+              backX - Math.cos(facingRad - 1.4) * scale * 0.18,
+              backY - Math.sin(facingRad - 1.4) * scale * 0.18,
+            );
+            g.closePath();
+            g.fillPath();
+          }
+
+          const barWidth = scale * 0.9;
+          const barY = scale * 2.6;
+          g.lineStyle(1, color, 0.35);
+          g.strokeRect(-barWidth / 2, barY, barWidth, 3);
+          g.fillStyle(color, 0.8);
+          g.fillRect(-barWidth / 2, barY, barWidth * puffFuelRatio, 3);
+        }
+
+        const hasBeenRescuedOnce = data.hasBeenRescuedOnce === true;
+        if (isAdrift && !hasBeenRescuedOnce) {
+          const remainingSeconds = typeof data.remainingSeconds === 'number' ? data.remainingSeconds : 0;
+          timerText.setText(`${remainingSeconds}`);
+          timerText.setVisible(true);
+        } else {
+          timerText.setVisible(false);
+        }
+      };
+      redraw(entity.data);
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          timerText.setPosition(snapshot.x, snapshot.y + scale * 1.7);
+          redraw(snapshot.data);
+        },
+        destroy: () => {
+          graphics.destroy();
+          timerText.destroy();
+        },
+      };
+    });
+
+    // The hull's own draw() never rotates by heading either (it drifts
+    // without visually turning to face it) - only the carousel ring's
+    // ambient rotation and node pulsing change, and both are already a
+    // pure function of the clock, same as the asteroid/UFO/Shield
+    // mirrors' own cosmetic animations.
+    this.entityMirrors.registerFactory('saboteur', (scene, entity) => {
+      const METAL = 0x3c4560;
+      const METAL_FILL = 0x14141c;
+      const DANGER = 0xe0463c;
+      const NODE_COUNT = 5;
+      const RING_ROTATE_PERIOD_MS = 7000;
+      const graphics = scene.add.graphics();
+
+      const drawNode = (
+        g: Phaser.GameObjects.Graphics,
+        x: number,
+        y: number,
+        filled: boolean,
+        nowMs: number,
+      ): void => {
+        const pulse = 0.5 + Math.sin(nowMs / 500) * 0.5;
+        g.lineStyle(1.3, METAL, filled ? 1 : 0.35);
+        for (let i = 0; i < 6; i += 1) {
+          const a = (i / 6) * Math.PI * 2;
+          g.beginPath();
+          g.moveTo(x + Math.cos(a) * 1.8, y + Math.sin(a) * 1.8);
+          g.lineTo(x + Math.cos(a) * 4, y + Math.sin(a) * 4);
+          g.strokePath();
+        }
+        g.fillStyle(METAL_FILL, filled ? 1 : 0.25);
+        g.fillCircle(x, y, 2.2);
+        g.lineStyle(1, METAL, filled ? 1 : 0.35);
+        g.strokeCircle(x, y, 2.2);
+        if (filled) {
+          g.fillStyle(DANGER, 0.5 + pulse * 0.4);
+          g.fillCircle(x, y, 1);
+        }
+      };
+
+      const redraw = (data: EntitySnapshot['data']): void => {
+        const nowMs = scene.time.now;
+        const minesRemaining = typeof data.minesRemaining === 'number' ? data.minesRemaining : 0;
+        const justDropped = data.justDropped === true;
+        const g = graphics;
+        g.clear();
+        const hullFill = justDropped ? 0x2a1414 : METAL_FILL;
+
+        g.lineStyle(1.5, METAL, 1);
+        g.fillStyle(hullFill, 1);
+        g.beginPath();
+        g.moveTo(-20, -8);
+        g.lineTo(14, -10);
+        g.lineTo(20, -4);
+        g.lineTo(20, 4);
+        g.lineTo(14, 10);
+        g.lineTo(-20, 8);
+        g.closePath();
+        g.fillPath();
+        g.strokePath();
+        g.lineStyle(1.5, DANGER, 0.35);
+        g.strokePath();
+
+        const ringRotation = (nowMs / RING_ROTATE_PERIOD_MS) * Math.PI * 2;
+        for (let i = 0; i < NODE_COUNT; i += 1) {
+          const angle = (i / NODE_COUNT) * Math.PI * 2 + ringRotation;
+          const nx = Math.cos(angle) * 15;
+          const ny = Math.sin(angle) * 15 * 0.55;
+          drawNode(g, nx, ny, i < minesRemaining, nowMs);
+        }
+      };
+      redraw(entity.data);
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          redraw(snapshot.data);
+        },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // `armed` is the one real gameplay fact this entity's visual depends
+    // on (the blast-radius ring only shows once armed) - sent straight
+    // from the host's own `isArmed(nowMs)` rather than the client trying
+    // to re-derive it from a dropped-at timestamp and its own clock. The
+    // prong spin's per-instance phase offset isn't synced (same
+    // "re-roll it locally" choice the asteroid mirror already makes) -
+    // just a different-looking spin, not a different gameplay fact.
+    this.entityMirrors.registerFactory('driftMine', (scene) => {
+      const graphics = scene.add.graphics();
+      const ringGraphics = scene.add.graphics();
+      const spinPhase = Math.random() * Math.PI * 2;
+      let ringDrawnForArmedState: boolean | undefined;
+
+      const drawRing = (armed: boolean): void => {
+        if (ringDrawnForArmedState === armed) return;
+        ringDrawnForArmedState = armed;
+        const g = ringGraphics;
+        g.clear();
+        if (!armed) return;
+        g.lineStyle(1.2, COLORS.ufo, 0.5);
+        const dashLength = 4;
+        const gapLength = 5;
+        const circumference = 2 * Math.PI * DRIFT_MINE.blastRadius;
+        const segments = Math.max(8, Math.floor(circumference / (dashLength + gapLength)));
+        g.beginPath();
+        for (let i = 0; i < segments; i += 1) {
+          const a0 = (i / segments) * Math.PI * 2;
+          const a1 = a0 + (dashLength / circumference) * Math.PI * 2;
+          g.moveTo(Math.cos(a0) * DRIFT_MINE.blastRadius, Math.sin(a0) * DRIFT_MINE.blastRadius);
+          g.arc(0, 0, DRIFT_MINE.blastRadius, a0, a1, false);
+        }
+        g.strokePath();
+      };
+
+      const redraw = (armed: boolean): void => {
+        const nowMs = scene.time.now;
+        drawRing(armed);
+
+        const g = graphics;
+        g.clear();
+        const spin = nowMs / 2600 + spinPhase;
+        const pulse = 0.5 + Math.sin(nowMs / 500) * 0.5;
+
+        g.save();
+        g.rotateCanvas(spin);
+        for (let i = 0; i < 8; i += 1) {
+          const a = (i / 8) * Math.PI * 2;
+          const inner = DRIFT_MINE.radius * 0.5;
+          const outer = DRIFT_MINE.radius * 1.3;
+          g.lineStyle(1.6, 0x3c4560, 1);
+          g.beginPath();
+          g.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
+          g.lineTo(Math.cos(a) * outer, Math.sin(a) * outer);
+          g.strokePath();
+          g.fillStyle(0x3c4560, 1);
+          g.fillCircle(Math.cos(a) * outer, Math.sin(a) * outer, 1.3);
+        }
+
+        g.fillStyle(0x14141c, 1);
+        g.fillCircle(0, 0, DRIFT_MINE.radius * 0.65);
+        g.lineStyle(1.4, 0x3c4560, 1);
+        g.strokeCircle(0, 0, DRIFT_MINE.radius * 0.65);
+
+        g.fillStyle(COLORS.ufo, armed ? 0.55 + pulse * 0.45 : 0.3);
+        g.fillCircle(0, 0, DRIFT_MINE.radius * 0.3 * (0.8 + pulse * 0.35));
+        g.restore();
+      };
+      redraw(false);
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          ringGraphics.setPosition(snapshot.x, snapshot.y);
+          redraw(snapshot.data.armed === true);
+        },
+        destroy: () => {
+          graphics.destroy();
+          ringGraphics.destroy();
+        },
+      };
+    });
+
+    // Singleton, purely cosmetic beyond position (GameScene owns every
+    // actual drop-off/relocate decision) - the pulsing center light is a
+    // pure function of the clock, same as every other ambient-pulse
+    // mirror above.
+    this.entityMirrors.registerFactory('spaceStation', (scene) => {
+      const graphics = scene.add.graphics();
+      const pulsePeriodMs = 1800;
+      const armWidth = SPACE_STATION.armLength * 0.32;
+      const armLength = SPACE_STATION.armLength;
+
+      const redraw = (): void => {
+        const nowMs = scene.time.now;
+        const g = graphics;
+        g.clear();
+        for (let i = 0; i < 4; i += 1) {
+          g.save();
+          g.rotateCanvas((Math.PI / 2) * i);
+          g.fillStyle(0x0d0d16, 1);
+          g.lineStyle(2.5, COLORS.shield, 1);
+          g.beginPath();
+          g.moveTo(-armWidth / 2, armWidth);
+          g.lineTo(armWidth / 2, armWidth);
+          g.lineTo(armWidth / 2, armLength);
+          g.lineTo(-armWidth / 2, armLength);
+          g.closePath();
+          g.fillPath();
+          g.strokePath();
+          g.restore();
+        }
+
+        g.fillStyle(0x0d0d16, 1);
+        g.lineStyle(2.5, COLORS.shield, 1);
+        g.beginPath();
+        g.moveTo(-armWidth, -armWidth);
+        g.lineTo(armWidth, -armWidth);
+        g.lineTo(armWidth, armWidth);
+        g.lineTo(-armWidth, armWidth);
+        g.closePath();
+        g.fillPath();
+        g.strokePath();
+
+        const pulsePhase = (nowMs / pulsePeriodMs) * Math.PI * 2;
+        const pulse = 0.6 + 0.4 * (Math.sin(pulsePhase) * 0.5 + 0.5);
+        g.fillStyle(COLORS.shield, 0.6);
+        g.fillCircle(0, 0, armWidth * 0.4 * pulse);
+      };
+      redraw();
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          redraw();
+        },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // The disk's spiraling particles are genuinely host-simulated random
+    // state (`BlackHole.ts`'s own `update()`), not a pure function of
+    // time - syncing all 16 every tick would cost far more than the
+    // effect is worth, so this mirror runs its own independent particle
+    // sim instead (own RNG, own local delta clock) - "a similar swirl,"
+    // not "the exact same particles," same tradeoff the asteroid
+    // mirror's re-rolled silhouette already makes.
+    this.entityMirrors.registerFactory('blackHole', (scene) => {
+      const diskRadius = BLACK_HOLE.eventHorizonRadius * 1.4;
+      const diskSquash = 0.4;
+      const particleCount = 16;
+      const glowLayers = 4;
+      const graphics = scene.add.graphics();
+      const particles = Array.from({ length: particleCount }, () => ({
+        angle: Math.random() * Math.PI * 2,
+        radiusFraction: Math.random(),
+      }));
+      let lastUpdateMs = scene.time.now;
+
+      const redraw = (): void => {
+        const nowMs = scene.time.now;
+        const deltaSeconds = Math.max(0, (nowMs - lastUpdateMs) / 1000);
+        lastUpdateMs = nowMs;
+        particles.forEach((particle) => {
+          particle.radiusFraction -= deltaSeconds * 0.25;
+          if (particle.radiusFraction <= 0) {
+            particle.radiusFraction = 1;
+            particle.angle = Math.random() * Math.PI * 2;
+          }
+        });
+
+        const g = graphics;
+        g.clear();
+        for (let i = glowLayers; i >= 1; i -= 1) {
+          const t = i / glowLayers;
+          const radius = BLACK_HOLE.eventHorizonRadius + (BLACK_HOLE.glowRadius - BLACK_HOLE.eventHorizonRadius) * t;
+          g.fillStyle(COLORS.blackHole, 0.05 * (1 - t * 0.6));
+          g.fillCircle(0, 0, radius);
+        }
+
+        g.save();
+        g.rotateCanvas(nowMs / 6000);
+        g.lineStyle(3, COLORS.blackHole, 1);
+        g.strokeEllipse(0, 0, diskRadius * 2, diskRadius * 2 * diskSquash);
+        g.restore();
+
+        particles.forEach((particle) => {
+          const radius = diskRadius * (0.2 + particle.radiusFraction * 0.8);
+          const x = Math.cos(particle.angle) * radius;
+          const y = Math.sin(particle.angle) * radius * diskSquash;
+          g.fillStyle(COLORS.blackHole, 0.5 + particle.radiusFraction * 0.5);
+          g.fillCircle(x, y, 2);
+        });
+
+        g.fillStyle(0x000000, 1);
+        g.fillCircle(0, 0, BLACK_HOLE.lethalRadius);
+
+        const horizonPulse = 0.7 + 0.3 * Math.sin(nowMs / 450);
+        g.lineStyle(2.5, COLORS.ufo, horizonPulse);
+        g.strokeCircle(0, 0, BLACK_HOLE.eventHorizonRadius);
+
+        const corePulse = 0.5 + 0.5 * Math.sin(nowMs / 300);
+        g.fillStyle(COLORS.ufo, 0.6 + 0.4 * corePulse);
+        g.fillCircle(0, 0, BLACK_HOLE.lethalRadius * 0.35 * (0.8 + 0.4 * corePulse));
+      };
+      redraw();
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
           redraw();
         },
         destroy: () => graphics.destroy(),
