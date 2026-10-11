@@ -1,6 +1,8 @@
 import type Phaser from 'phaser';
+import { ARENA_HEIGHT, ARENA_WIDTH } from '../config/GameConfig';
 import { diffEntityMirrors, entityMirrorKey } from './EntityMirrorDiff';
 import type { EntitySnapshot } from './NetworkSnapshotProtocol';
+import { smoothedPosition } from './PositionSmoothing';
 
 /**
  * One client-side visual standing in for a host-side entity it has no
@@ -33,6 +35,8 @@ export type EntityMirrorFactory = (scene: Phaser.Scene, entity: EntitySnapshot) 
 export class EntityMirrorRegistry {
   private readonly factories = new Map<string, EntityMirrorFactory>();
   private readonly mirrors = new Map<string, EntityMirror>();
+  /** Last smoothed (not raw snapshot) position per mirror key (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 15) - every entity type gets position smoothing for free here, with no changes to any individual factory's own `applySnapshot`. */
+  private readonly smoothedPositions = new Map<string, { x: number; y: number }>();
 
   registerFactory(type: string, factory: EntityMirrorFactory): void {
     this.factories.set(type, factory);
@@ -44,6 +48,7 @@ export class EntityMirrorRegistry {
     removedKeys.forEach((key) => {
       this.mirrors.get(key)?.destroy();
       this.mirrors.delete(key);
+      this.smoothedPositions.delete(key);
     });
 
     entities.forEach((entity) => {
@@ -54,8 +59,17 @@ export class EntityMirrorRegistry {
         if (!factory) return;
         mirror = factory(scene, entity);
         this.mirrors.set(key, mirror);
+        // A brand-new mirror has no "current" position to smooth from -
+        // start it exactly where the entity already is, same reasoning
+        // `Ship.applyNetworkSnapshot` snaps on its own just-became-visible
+        // case, rather than gliding in from the arena's (0, 0) corner.
+        this.smoothedPositions.set(key, { x: entity.x, y: entity.y });
       }
-      mirror.applySnapshot(entity);
+
+      const previous = this.smoothedPositions.get(key) ?? { x: entity.x, y: entity.y };
+      const smoothed = smoothedPosition(previous, { x: entity.x, y: entity.y }, ARENA_WIDTH, ARENA_HEIGHT);
+      this.smoothedPositions.set(key, smoothed);
+      mirror.applySnapshot({ ...entity, x: smoothed.x, y: smoothed.y });
     });
   }
 
@@ -63,5 +77,6 @@ export class EntityMirrorRegistry {
   clear(): void {
     this.mirrors.forEach((mirror) => mirror.destroy());
     this.mirrors.clear();
+    this.smoothedPositions.clear();
   }
 }

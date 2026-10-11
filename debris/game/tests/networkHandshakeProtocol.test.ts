@@ -6,6 +6,7 @@ const WELCOME: WelcomeMessage = {
   slotIndex: 1,
   mode: 'cooperative',
   hulls: ['interceptor', 'gunship', 'rescue', 'interceptor'],
+  protocolVersion: 2,
 };
 
 describe('encodeWelcome / decodeWelcome', () => {
@@ -33,5 +34,15 @@ describe('encodeWelcome / decodeWelcome', () => {
 
   it('rejects a non-array hulls field', () => {
     expect(decodeWelcome(JSON.stringify({ ...WELCOME, hulls: 'interceptor' }))).toBeUndefined();
+  });
+
+  it('rejects a non-numeric protocolVersion', () => {
+    expect(decodeWelcome(JSON.stringify({ ...WELCOME, protocolVersion: '2' }))).toBeUndefined();
+  });
+
+  it('rejects a message missing protocolVersion entirely', () => {
+    const withoutVersion: Record<string, unknown> = { ...WELCOME };
+    delete withoutVersion.protocolVersion;
+    expect(decodeWelcome(JSON.stringify(withoutVersion))).toBeUndefined();
   });
 });

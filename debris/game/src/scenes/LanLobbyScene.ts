@@ -122,8 +122,24 @@ export class LanLobbyScene extends Phaser.Scene {
         this.remoteInputsBySlot.set(slotIndex, input);
         this.remoteConnectionsBySlot.set(slotIndex, connection);
         connection.sendReliable(
-          encodeWelcome({ type: 'debris-welcome', slotIndex, mode: this.mode, hulls: HULLS }),
+          encodeWelcome({
+            type: 'debris-welcome',
+            slotIndex,
+            mode: this.mode,
+            hulls: HULLS,
+            protocolVersion: PROTOCOL_VERSION,
+          }),
         );
+        // A drop before START is pressed (docs/roadmap.md's "Windows +
+        // LAN multiplayer," Sprint 15) - GameScene's own
+        // registerRemoteDisconnectHandlers() doesn't exist yet at this
+        // point (the host hasn't started that scene), so without this
+        // the slot would sit phantom-"connected" in this lobby forever.
+        connection.onClosed(() => {
+          this.remoteInputsBySlot.delete(slotIndex);
+          this.remoteConnectionsBySlot.delete(slotIndex);
+          this.refreshHostStatus();
+        });
         this.refreshHostStatus();
       },
       (message) => {
@@ -224,6 +240,21 @@ export class LanLobbyScene extends Phaser.Scene {
 
     this.clientSession = new NetworkClientSession();
     this.clientSession.onWelcome((welcome) => {
+      // Second line of defense (docs/roadmap.md's "Windows + LAN
+      // multiplayer," Sprint 15's version-gating) - `decodeAnnounce`
+      // already keeps a mismatched build out of the join list in the
+      // first place (LanDiscoveryProtocol.ts), so reaching this point
+      // at all means something unusual (a cached/stale discovered-game
+      // entry, say). Refusing here rather than proceeding avoids a
+      // client limping along against a `GameSnapshot` shape it might
+      // not actually understand.
+      if (welcome.protocolVersion !== PROTOCOL_VERSION) {
+        this.clientSession?.stop();
+        this.statusText.setText(
+          `${game.packet.hostName} is running a different version of Debris - can't join.`,
+        );
+        return;
+      }
       this.scene.start('Game', {
         mode: welcome.mode,
         hulls: welcome.hulls,

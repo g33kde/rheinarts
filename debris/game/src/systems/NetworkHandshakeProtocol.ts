@@ -17,6 +17,19 @@ export interface WelcomeMessage {
   readonly slotIndex: number;
   readonly mode: 'cooperative' | 'competitive';
   readonly hulls: readonly HullId[];
+  /**
+   * The host's own `LanDiscoveryProtocol.PROTOCOL_VERSION` (docs/
+   * roadmap.md's "Windows + LAN multiplayer," Sprint 15's version-
+   * gating) - not referenced by type here to keep this file free of a
+   * dependency on that one, but a client compares it against its own
+   * copy of the same constant and refuses to proceed into a mismatched
+   * match rather than limping along against a `GameSnapshot` shape it
+   * doesn't actually understand. A second line of defense: the LAN
+   * discovery layer's own `decodeAnnounce` already filters a mismatched
+   * host out of the join list before a connection is ever attempted -
+   * this only matters for the rarer case one happens anyway.
+   */
+  readonly protocolVersion: number;
 }
 
 export function encodeWelcome(message: WelcomeMessage): string {
@@ -40,11 +53,13 @@ export function decodeWelcome(raw: string): WelcomeMessage | undefined {
   if (!Array.isArray(candidate.hulls) || !candidate.hulls.every((hull) => HULL_IDS.includes(hull as HullId))) {
     return undefined;
   }
+  if (typeof candidate.protocolVersion !== 'number') return undefined;
 
   return {
     type: 'debris-welcome',
     slotIndex: candidate.slotIndex,
     mode: candidate.mode,
     hulls: candidate.hulls as HullId[],
+    protocolVersion: candidate.protocolVersion,
   };
 }

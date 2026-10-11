@@ -15,7 +15,17 @@
  * can't send one either way.
  */
 
-export const PROTOCOL_VERSION = 1;
+/**
+ * Bumped to 2 for docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+ * 8-14 work - the wire format changed substantially since this was last
+ * 1 (ships-only `GameSnapshot` grew entities/players/state/overlayLines/
+ * shop). `decodeAnnounce` below already silently drops a mismatched
+ * announce, so a stale build simply never appears in another build's
+ * join list; `NetworkHandshakeProtocol.ts`'s own `WelcomeMessage` carries
+ * this same number as a second check for the rarer case a connection
+ * happens anyway (Sprint 15's version-gating).
+ */
+export const PROTOCOL_VERSION = 2;
 
 export interface AnnouncePacket {
   readonly type: 'debris-announce';

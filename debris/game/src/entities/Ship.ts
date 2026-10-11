@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { SHIP, SHIP_HULL_SCALE, COLORS, HULLS, type HullId, type HullStats } from '../config/GameConfig';
+import { ARENA_HEIGHT, ARENA_WIDTH, SHIP, SHIP_HULL_SCALE, COLORS, HULLS, type HullId, type HullStats } from '../config/GameConfig';
 import { CATEGORY } from '../systems/CollisionCategories';
 import { clampSpeed, wrapPosition } from '../systems/MovementSystem';
+import { smoothedPosition } from '../systems/PositionSmoothing';
 import type { Vector2 } from '../utilities/Vector2';
 import type { MatterGameObject } from './MatterGameObject';
 
@@ -142,10 +143,19 @@ export class Ship {
     snapshot: { x: number; y: number; heading: number; alive: boolean; thrusting: boolean; invulnerableUntilMs: number },
     nowMs: number,
   ): void {
+    const wasVisible = this.visual.visible;
     this.visual.setVisible(snapshot.alive);
     if (!snapshot.alive) return;
 
-    this.visual.setPosition(snapshot.x, snapshot.y);
+    // A ship that was just hidden (just respawned/reappeared) has no
+    // meaningful "current" position to smooth from - snap straight to
+    // the host's own spot instead of gliding in from wherever it sat
+    // while invisible (docs/roadmap.md's "Windows + LAN multiplayer,"
+    // Sprint 15's position-smoothing polish).
+    const smoothed = wasVisible
+      ? smoothedPosition(this.position, { x: snapshot.x, y: snapshot.y }, ARENA_WIDTH, ARENA_HEIGHT)
+      : { x: snapshot.x, y: snapshot.y };
+    this.visual.setPosition(smoothed.x, smoothed.y);
     this.visual.setRotation(snapshot.heading);
     this.thrusting = snapshot.thrusting;
     this.invulnerableUntilMs = snapshot.invulnerableUntilMs;
