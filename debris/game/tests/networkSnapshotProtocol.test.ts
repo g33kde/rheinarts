@@ -8,6 +8,7 @@ import {
   type GameSnapshot,
   type InputMessage,
   type ShipSnapshot,
+  type ShopPanelSnapshot,
 } from '../src/systems/NetworkSnapshotProtocol';
 
 const SHIP: ShipSnapshot = {
@@ -40,6 +41,20 @@ const SNAPSHOT: GameSnapshot = {
       statusLine: null,
     },
   ],
+  state: 'playing',
+  overlayLines: [],
+  shop: undefined,
+};
+
+const SHOP_PANEL: ShopPanelSnapshot = {
+  slotIndex: 0,
+  eliminated: false,
+  headerText: 'P1   SCRAP 3',
+  rows: [{ text: '  HEAVY SHOT   3', colorHex: '#dfe1ef' }],
+  voteLabel: '- VOTE: NEXT STAGE -',
+  voteRows: [{ text: ' *STANDARD      1', colorHex: '#ff0000' }],
+  readyText: 'READY?',
+  readyColorHex: '#6a6a80',
 };
 
 const INPUT: InputMessage = {
@@ -111,6 +126,67 @@ describe('encodeSnapshot / decodeSnapshot', () => {
 
   it('rejects a player HUD entry missing required fields', () => {
     const bad = { ...SNAPSHOT, players: [{ slotIndex: 0, score: 1 }] };
+    expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
+  });
+
+  it('round-trips overlay lines', () => {
+    const withOverlay: GameSnapshot = { ...SNAPSHOT, overlayLines: ['THE FRACTURE'] };
+    expect(decodeSnapshot(encodeSnapshot(withOverlay))).toEqual(withOverlay);
+  });
+
+  it('rejects a snapshot missing state', () => {
+    const withoutState: Record<string, unknown> = { ...SNAPSHOT };
+    delete withoutState.state;
+    expect(decodeSnapshot(JSON.stringify(withoutState))).toBeUndefined();
+  });
+
+  it('rejects a non-array overlayLines field', () => {
+    expect(decodeSnapshot(JSON.stringify({ ...SNAPSHOT, overlayLines: 'nope' }))).toBeUndefined();
+  });
+
+  it('round-trips a snapshot with no shop open (shop omitted entirely)', () => {
+    const encoded = encodeSnapshot(SNAPSHOT);
+    expect(JSON.parse(encoded)).not.toHaveProperty('shop');
+    expect(decodeSnapshot(encoded)).toEqual(SNAPSHOT);
+  });
+
+  it('round-trips a full shop snapshot', () => {
+    const withShop: GameSnapshot = {
+      ...SNAPSHOT,
+      state: 'shop',
+      shop: {
+        headline: 'STAGE CLEARED   -   RANK A',
+        subheadline: 'SHOP - SPEND YOUR SCRAP',
+        hint: 'TURN: select   FIRE: buy / vote / toggle ready',
+        panels: [SHOP_PANEL],
+      },
+    };
+    expect(decodeSnapshot(encodeSnapshot(withShop))).toEqual(withShop);
+  });
+
+  it('round-trips an eliminated panel with null vote/ready fields', () => {
+    const eliminatedPanel: ShopPanelSnapshot = {
+      slotIndex: 1,
+      eliminated: true,
+      headerText: 'P2\nOUT',
+      rows: [],
+      voteLabel: null,
+      voteRows: [],
+      readyText: null,
+      readyColorHex: null,
+    };
+    const withShop: GameSnapshot = {
+      ...SNAPSHOT,
+      shop: { headline: 'h', subheadline: 's', hint: 'i', panels: [eliminatedPanel] },
+    };
+    expect(decodeSnapshot(encodeSnapshot(withShop))).toEqual(withShop);
+  });
+
+  it('rejects a shop panel with a malformed row', () => {
+    const bad = {
+      ...SNAPSHOT,
+      shop: { headline: 'h', subheadline: 's', hint: 'i', panels: [{ ...SHOP_PANEL, rows: [{ text: 1 }] }] },
+    };
     expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
   });
 

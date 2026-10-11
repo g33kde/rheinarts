@@ -63,6 +63,31 @@ export interface PlayerHudSnapshot {
   readonly statusLine: string | null;
 }
 
+/** One pre-formatted line of shop text plus the exact color the host would draw it in - sent fully rendered (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 14) rather than the raw ingredients (owned/affordable/selected/...), so the client never re-derives shop text-coloring rules that could drift from the host's own `refreshShopPanel`. */
+export interface ShopRowSnapshot {
+  readonly text: string;
+  readonly colorHex: string;
+}
+
+export interface ShopPanelSnapshot {
+  readonly slotIndex: number;
+  readonly eliminated: boolean;
+  readonly headerText: string;
+  readonly rows: readonly ShopRowSnapshot[];
+  readonly voteLabel: string | null;
+  readonly voteRows: readonly ShopRowSnapshot[];
+  readonly readyText: string | null;
+  readonly readyColorHex: string | null;
+}
+
+/** The whole stage-clear shop screen, `undefined` whenever the host isn't actually showing it - a client tears its own shop UI down the instant this goes missing, regardless of `state`. */
+export interface ShopSnapshot {
+  readonly headline: string;
+  readonly subheadline: string;
+  readonly hint: string;
+  readonly panels: readonly ShopPanelSnapshot[];
+}
+
 export interface GameSnapshot {
   readonly type: 'debris-snapshot';
   readonly tick: number;
@@ -70,6 +95,11 @@ export interface GameSnapshot {
   readonly ships: readonly ShipSnapshot[];
   readonly entities: readonly EntitySnapshot[];
   readonly players: readonly PlayerHudSnapshot[];
+  /** GameScene's own `SessionState` - carried as a plain string rather than importing that type here (it lives in the scene, not a systems module) so this protocol file never depends on Phaser-coupled code. */
+  readonly state: string;
+  /** Whatever `this.overlayTexts` currently shows host-side (boss announcement, game over, paused, ...) - empty when no overlay is up. */
+  readonly overlayLines: readonly string[];
+  readonly shop: ShopSnapshot | undefined;
 }
 
 export interface InputMessage {
@@ -113,6 +143,41 @@ function isPlayerHudSnapshot(value: unknown): value is PlayerHudSnapshot {
   );
 }
 
+function isShopRowSnapshot(value: unknown): value is ShopRowSnapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return typeof r.text === 'string' && typeof r.colorHex === 'string';
+}
+
+function isShopPanelSnapshot(value: unknown): value is ShopPanelSnapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const p = value as Record<string, unknown>;
+  return (
+    typeof p.slotIndex === 'number' &&
+    typeof p.eliminated === 'boolean' &&
+    typeof p.headerText === 'string' &&
+    Array.isArray(p.rows) &&
+    p.rows.every(isShopRowSnapshot) &&
+    (p.voteLabel === null || typeof p.voteLabel === 'string') &&
+    Array.isArray(p.voteRows) &&
+    p.voteRows.every(isShopRowSnapshot) &&
+    (p.readyText === null || typeof p.readyText === 'string') &&
+    (p.readyColorHex === null || typeof p.readyColorHex === 'string')
+  );
+}
+
+function isShopSnapshot(value: unknown): value is ShopSnapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return (
+    typeof s.headline === 'string' &&
+    typeof s.subheadline === 'string' &&
+    typeof s.hint === 'string' &&
+    Array.isArray(s.panels) &&
+    s.panels.every(isShopPanelSnapshot)
+  );
+}
+
 function isEntityDataValue(value: unknown): value is EntityDataValue {
   return typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean';
 }
@@ -150,6 +215,11 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
   if (!Array.isArray(candidate.ships) || !candidate.ships.every(isShipSnapshot)) return undefined;
   if (!Array.isArray(candidate.entities) || !candidate.entities.every(isEntitySnapshot)) return undefined;
   if (!Array.isArray(candidate.players) || !candidate.players.every(isPlayerHudSnapshot)) return undefined;
+  if (typeof candidate.state !== 'string') return undefined;
+  if (!Array.isArray(candidate.overlayLines) || !candidate.overlayLines.every((l) => typeof l === 'string')) {
+    return undefined;
+  }
+  if (candidate.shop !== undefined && !isShopSnapshot(candidate.shop)) return undefined;
 
   return {
     type: 'debris-snapshot',
@@ -158,6 +228,9 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
     ships: candidate.ships as ShipSnapshot[],
     entities: candidate.entities as EntitySnapshot[],
     players: candidate.players as PlayerHudSnapshot[],
+    state: candidate.state,
+    overlayLines: candidate.overlayLines as string[],
+    shop: candidate.shop as ShopSnapshot | undefined,
   };
 }
 

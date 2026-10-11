@@ -118,6 +118,9 @@ import {
   type GameSnapshot,
   type PlayerHudSnapshot,
   type ShipSnapshot,
+  type ShopPanelSnapshot,
+  type ShopRowSnapshot,
+  type ShopSnapshot,
 } from '../systems/NetworkSnapshotProtocol';
 import { EntityMirrorRegistry } from '../systems/EntityMirrorRegistry';
 import { formatPlayerHud, type PlayerHudData } from '../systems/PlayerHudFormat';
@@ -493,6 +496,25 @@ export class GameScene extends Phaser.Scene {
   private nextEntityNetworkId = 1;
   /** Client only - reconciles each frame's `GameSnapshot.entities` into visual-only mirrors (`EntityMirrorRegistry.ts`). Factories registered once in `createNetworkClient()`. */
   private entityMirrors = new EntityMirrorRegistry();
+  /** Client only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 14) - mirrors the host's own `this.overlayTexts` (boss announcement/game over/paused/...). Built once per overlay, text/color refreshed every tick thereafter; torn down the instant a snapshot reports no overlay lines at all. */
+  private clientOverlayTexts: Phaser.GameObjects.Text[] = [];
+  /** Client only - mirrors the host's own `this.shop` (headline/subheadline/hint + per-player panels). Built once per shop session (panel count/layout never changes mid-shop), refreshed every tick thereafter; torn down the instant a snapshot reports no shop at all. */
+  private clientShop:
+    | {
+        headlineText: Phaser.GameObjects.Text;
+        subheadlineText: Phaser.GameObjects.Text;
+        hintText: Phaser.GameObjects.Text;
+        panels: {
+          slotIndex: number;
+          bg: Phaser.GameObjects.Rectangle;
+          headerText: Phaser.GameObjects.Text;
+          rowTexts: Phaser.GameObjects.Text[];
+          voteLabelText: Phaser.GameObjects.Text | undefined;
+          voteTexts: Phaser.GameObjects.Text[];
+          readyText: Phaser.GameObjects.Text | undefined;
+        }[];
+      }
+    | undefined;
   private isDemo = false;
   private demoStartedAtMs = 0;
   private demoInputSeen = false;
@@ -701,6 +723,8 @@ export class GameScene extends Phaser.Scene {
     this.entityNetworkIds = new WeakMap();
     this.nextEntityNetworkId = 1;
     this.entityMirrors.clear();
+    this.teardownClientOverlay();
+    this.teardownClientShop();
   }
 
   create(): void {
@@ -1286,7 +1310,113 @@ export class GameScene extends Phaser.Scene {
       ships,
       entities: this.buildEntitySnapshots(nowMs),
       players: this.buildPlayerHudSnapshots(),
+      state: this.state,
+      overlayLines: this.overlayTexts.map((text) => text.text),
+      shop: this.buildShopSnapshot(),
     });
+  }
+
+  /**
+   * Host only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 14)
+   * - `undefined` whenever `this.shop` isn't up, same lifecycle signal a
+   * client's own shop UI tears down on. Every row is sent as the exact
+   * already-formatted text + color `refreshShopPanel` would draw, not
+   * the raw owned/affordable/selected/vote-count ingredients - so a
+   * client's shop screen can never drift from the host's own coloring
+   * rules, it just displays what the host already decided.
+   */
+  private buildShopSnapshot(): ShopSnapshot | undefined {
+    const shop = this.shop;
+    if (!shop) return undefined;
+
+    const panels: ShopPanelSnapshot[] = shop.panels.map((panel) => {
+      if (panel.eliminated) {
+        return {
+          slotIndex: panel.slotIndex,
+          eliminated: true,
+          headerText: `P${panel.slotIndex + 1}\nOUT`,
+          rows: [],
+          voteLabel: null,
+          voteRows: [],
+          readyText: null,
+          readyColorHex: null,
+        };
+      }
+
+      const player = this.players.find((p) => p.slotIndex === panel.slotIndex);
+      if (!player) {
+        return {
+          slotIndex: panel.slotIndex,
+          eliminated: true,
+          headerText: `P${panel.slotIndex + 1}\nOUT`,
+          rows: [],
+          voteLabel: null,
+          voteRows: [],
+          readyText: null,
+          readyColorHex: null,
+        };
+      }
+
+      const rows: ShopRowSnapshot[] = ALL_WEAPON_UPGRADE_IDS.map((id) => {
+        const owned = hasUpgrade({ active: player.weapon.active }, id);
+        const affordable = player.scrap >= WEAPON_UPGRADES.costs[id];
+        const selected = panel.cursor === id;
+        const marker = selected ? '> ' : '  ';
+        const state = owned ? 'OWNED' : String(WEAPON_UPGRADES.costs[id]);
+        const colorHex = owned
+          ? toCssHex(COLORS.scrap)
+          : affordable
+            ? selected
+              ? toCssHex(COLORS.players[panel.slotIndex]!)
+              : '#dfe1ef'
+            : '#5a5a6e';
+        return { text: `${marker}${WEAPON_UPGRADE_LABELS[id].padEnd(12)}${state}`, colorHex };
+      });
+
+      const voteRows: ShopRowSnapshot[] = this.stageChoiceOptions.map((option) => {
+        const rowId = `vote:${option.id}`;
+        const selected = panel.cursor === rowId;
+        const votedForThis = player.stageVote === option.id;
+        const votes = this.players.filter((p) => p.stageVote === option.id).length;
+        const marker = selected ? '>' : ' ';
+        const chosen = votedForThis ? '*' : ' ';
+        const colorHex = votedForThis
+          ? toCssHex(COLORS.players[panel.slotIndex]!)
+          : selected
+            ? '#dfe1ef'
+            : '#6a6a80';
+        return {
+          text: `${marker}${chosen}${option.label.padEnd(14)}${votes > 0 ? votes : ''}`,
+          colorHex,
+        };
+      });
+
+      const readySelected = panel.cursor === 'ready';
+      const readyText = panel.ready ? 'READY' : readySelected ? '> READY? <' : 'READY?';
+      const readyColorHex = panel.ready
+        ? toCssHex(COLORS.scrap)
+        : readySelected
+          ? toCssHex(COLORS.players[panel.slotIndex]!)
+          : '#6a6a80';
+
+      return {
+        slotIndex: panel.slotIndex,
+        eliminated: false,
+        headerText: `P${panel.slotIndex + 1}   SCRAP ${player.scrap}`,
+        rows,
+        voteLabel: this.stageChoiceOptions.length > 0 ? '- VOTE: NEXT STAGE -' : null,
+        voteRows,
+        readyText,
+        readyColorHex,
+      };
+    });
+
+    return {
+      headline: shop.headlineText.text,
+      subheadline: shop.subheadlineText.text,
+      hint: shop.hintText.text,
+      panels,
+    };
   }
 
   /**
@@ -2657,9 +2787,243 @@ export class GameScene extends Phaser.Scene {
         const player = this.players.find((p) => p.slotIndex === hud.slotIndex);
         player?.hudText.setText(formatPlayerHud(this.mode, hud, LIVES_PER_PLAYER));
       });
+      this.applyClientOverlay(snapshot.state, snapshot.overlayLines);
+      this.applyClientShop(snapshot.shop);
     }
 
     this.background.update(deltaSeconds);
+  }
+
+  /**
+   * Client only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+   * 14) - mirrors whatever `this.overlayTexts` currently shows
+   * host-side (boss announcement/game over/paused/...). Torn down the
+   * instant a snapshot reports no overlay at all, regardless of
+   * `state` - presence of actual lines is the lifecycle signal, `state`
+   * only picks which of the two styles below to use.
+   *
+   * `enteringInitials` is the one host state with no `overlayTexts`
+   * equivalent at all - it's the host's own local high-score entry
+   * (its own machine's keyboard, its own leaderboard file), genuinely
+   * nothing for a remote client to do there. A plain "GAME OVER" is
+   * shown instead of leaving the client's screen with no explanation
+   * at all for why nothing's moving.
+   */
+  private applyClientOverlay(state: string, lines: readonly string[]): void {
+    const linesToShow = lines.length === 0 && state === 'enteringInitials' ? ['GAME OVER'] : lines;
+
+    if (linesToShow.length === 0) {
+      this.teardownClientOverlay();
+      return;
+    }
+
+    if (this.clientOverlayTexts.length !== linesToShow.length) {
+      this.teardownClientOverlay();
+      // "A bigger, boss-colored variant," same distinction
+      // `showBossAnnouncement` draws host-side versus the plain
+      // multi-line `showOverlay` every other overlay state uses.
+      if (state === 'bossAnnouncement' && linesToShow.length === 1) {
+        this.clientOverlayTexts = [
+          this.add
+            .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2, linesToShow[0]!, {
+              fontFamily: 'monospace',
+              fontSize: '96px',
+              fontStyle: 'bold',
+              color: toCssHex(COLORS.ufo),
+            })
+            .setOrigin(0.5),
+        ];
+      } else {
+        const startY = ARENA_HEIGHT / 2 - (linesToShow.length - 1) * 24;
+        this.clientOverlayTexts = linesToShow.map((line, i) =>
+          this.add
+            .text(ARENA_WIDTH / 2, startY + i * 48, line, {
+              fontFamily: 'monospace',
+              fontSize: i === 0 ? '48px' : '20px',
+              color: '#ffffff',
+            })
+            .setOrigin(0.5),
+        );
+      }
+      return;
+    }
+
+    this.clientOverlayTexts.forEach((text, i) => text.setText(linesToShow[i]!));
+  }
+
+  private teardownClientOverlay(): void {
+    this.clientOverlayTexts.forEach((text) => text.destroy());
+    this.clientOverlayTexts = [];
+  }
+
+  /**
+   * Client only (docs/roadmap.md's "Windows + LAN multiplayer," Sprint
+   * 14) - mirrors the host's own shop screen from `ShopSnapshot`'s
+   * already-fully-formatted text/color, same layout math
+   * `enterShop`/`buildShopPanel` use host-side. Built once per shop
+   * session (the panel count/layout never changes mid-shop) and just
+   * text/color-refreshed every tick after that; torn down the instant a
+   * snapshot stops carrying one at all.
+   */
+  private applyClientShop(shop: ShopSnapshot | undefined): void {
+    if (!shop) {
+      this.teardownClientShop();
+      return;
+    }
+
+    if (!this.clientShop) {
+      this.clientShop = this.buildClientShop(shop);
+    }
+    this.refreshClientShop(shop);
+  }
+
+  private buildClientShop(shop: ShopSnapshot): NonNullable<typeof this.clientShop> {
+    const headlineText = this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 220, shop.headline, {
+        fontFamily: 'monospace',
+        fontSize: '48px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    const subheadlineText = this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - 168, shop.subheadline, {
+        fontFamily: 'monospace',
+        fontSize: '18px',
+        color: '#9a9ab0',
+      })
+      .setOrigin(0.5);
+    const hintText = this.add
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + 230, shop.hint, {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        color: '#6a6a80',
+      })
+      .setOrigin(0.5);
+
+    const panelCount = shop.panels.length;
+    const totalWidth = panelCount * SHOP_PANEL_WIDTH + (panelCount - 1) * SHOP_PANEL_GAP;
+    const startX = ARENA_WIDTH / 2 - totalWidth / 2 + SHOP_PANEL_WIDTH / 2;
+    const panelY = ARENA_HEIGHT / 2 + 10;
+
+    const panels = shop.panels.map((panelSnapshot, i) =>
+      this.buildClientShopPanel(panelSnapshot, startX + i * (SHOP_PANEL_WIDTH + SHOP_PANEL_GAP), panelY),
+    );
+
+    return { headlineText, subheadlineText, hintText, panels };
+  }
+
+  private buildClientShopPanel(
+    panel: ShopPanelSnapshot,
+    x: number,
+    y: number,
+  ): NonNullable<typeof this.clientShop>['panels'][number] {
+    const color = COLORS.players[panel.slotIndex]!;
+    const bg = this.add
+      .rectangle(x, y, SHOP_PANEL_WIDTH, SHOP_PANEL_HEIGHT, 0x0a0a12, 1)
+      .setStrokeStyle(2, color, panel.eliminated ? 0.35 : 1);
+
+    const headerY = y - SHOP_PANEL_HEIGHT / 2 + 26;
+    const headerText = this.add
+      .text(x, headerY, panel.headerText, {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        fontStyle: 'bold',
+        color: toCssHex(color),
+        align: 'center',
+      })
+      .setOrigin(0.5);
+
+    if (panel.eliminated) {
+      return { slotIndex: panel.slotIndex, bg, headerText, rowTexts: [], voteLabelText: undefined, voteTexts: [], readyText: undefined };
+    }
+
+    const rowStartY = headerY + 40;
+    const rowTexts = panel.rows.map((row, i) =>
+      this.add
+        .text(x - SHOP_PANEL_WIDTH / 2 + 24, rowStartY + i * SHOP_ROW_HEIGHT, row.text, {
+          fontFamily: 'monospace',
+          fontSize: '16px',
+          color: row.colorHex,
+        })
+        .setOrigin(0, 0.5),
+    );
+
+    const voteLabelY = rowStartY + panel.rows.length * SHOP_ROW_HEIGHT + 6;
+    const voteLabelText = panel.voteLabel
+      ? this.add
+          .text(x, voteLabelY, panel.voteLabel, {
+            fontFamily: 'monospace',
+            fontSize: '14px',
+            color: '#6a6a80',
+          })
+          .setOrigin(0.5)
+      : undefined;
+    const voteStartY = voteLabelY + 26;
+    const voteTexts = panel.voteRows.map((row, i) =>
+      this.add
+        .text(x - SHOP_PANEL_WIDTH / 2 + 24, voteStartY + i * SHOP_ROW_HEIGHT, row.text, {
+          fontFamily: 'monospace',
+          fontSize: '15px',
+          color: row.colorHex,
+        })
+        .setOrigin(0, 0.5),
+    );
+
+    const readyText = this.add
+      .text(x, voteStartY + panel.voteRows.length * SHOP_ROW_HEIGHT + 14, panel.readyText ?? '', {
+        fontFamily: 'monospace',
+        fontSize: '17px',
+        fontStyle: 'bold',
+        color: panel.readyColorHex ?? '#6a6a80',
+      })
+      .setOrigin(0.5);
+
+    return { slotIndex: panel.slotIndex, bg, headerText, rowTexts, voteLabelText, voteTexts, readyText };
+  }
+
+  private refreshClientShop(shop: ShopSnapshot): void {
+    const clientShop = this.clientShop;
+    if (!clientShop) return;
+
+    clientShop.headlineText.setText(shop.headline);
+    clientShop.subheadlineText.setText(shop.subheadline);
+    clientShop.hintText.setText(shop.hint);
+
+    clientShop.panels.forEach((panel) => {
+      const snapshot = shop.panels.find((p) => p.slotIndex === panel.slotIndex);
+      if (!snapshot) return;
+      panel.headerText.setText(snapshot.headerText);
+      snapshot.rows.forEach((row, i) => {
+        const text = panel.rowTexts[i];
+        if (!text) return;
+        text.setText(row.text).setColor(row.colorHex);
+      });
+      snapshot.voteRows.forEach((row, i) => {
+        const text = panel.voteTexts[i];
+        if (!text) return;
+        text.setText(row.text).setColor(row.colorHex);
+      });
+      if (panel.readyText && snapshot.readyText !== null) {
+        panel.readyText.setText(snapshot.readyText).setColor(snapshot.readyColorHex ?? '#6a6a80');
+      }
+    });
+  }
+
+  private teardownClientShop(): void {
+    if (!this.clientShop) return;
+    this.clientShop.headlineText.destroy();
+    this.clientShop.subheadlineText.destroy();
+    this.clientShop.hintText.destroy();
+    this.clientShop.panels.forEach((panel) => {
+      panel.bg.destroy();
+      panel.headerText.destroy();
+      panel.rowTexts.forEach((text) => text.destroy());
+      panel.voteLabelText?.destroy();
+      panel.voteTexts.forEach((text) => text.destroy());
+      panel.readyText?.destroy();
+    });
+    this.clientShop = undefined;
   }
 
   /**
@@ -2673,6 +3037,8 @@ export class GameScene extends Phaser.Scene {
   private handleHostDisconnected(): void {
     this.clientSession?.stop();
     this.entityMirrors.clear();
+    this.teardownClientOverlay();
+    this.teardownClientShop();
     stopSound(this, GAMEPLAY_MUSIC_KEY);
     this.scene.start('Menu');
   }
