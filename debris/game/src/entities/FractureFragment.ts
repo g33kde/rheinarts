@@ -122,6 +122,17 @@ export class FractureFragment {
     return nowMs - this.spawnedAtMs < FRACTURE.materializeDurationMs;
   }
 
+  /** Same exact eased curve as `Fracture.materializeProgress` - see that getter's own doc comment. */
+  materializeProgress(nowMs: number): number {
+    const t = Math.min(1, (nowMs - this.spawnedAtMs) / FRACTURE.materializeDurationMs);
+    return 1 - (1 - t) ** 3;
+  }
+
+  /** Aggressive only - elapsed time since the current ring cycle started, for a network snapshot mirror to reproduce `draw()`'s own ring-phase logic via the same pure `FractureRing.ts` functions this class itself uses (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 13). Meaningless for any other role. */
+  ringElapsedMsAt(nowMs: number): number {
+    return nowMs - this.ringStartedAtMs;
+  }
+
   /** `damage` defaults to 1 (a normal shot) - Heavy Shot passes more, see FractureCombat.applyHit's own doc comment. */
   takeHit(nowMs: number, damage = 1): boolean {
     if (this.isMaterializing(nowMs)) return false;

@@ -122,6 +122,8 @@ import {
 import { EntityMirrorRegistry } from '../systems/EntityMirrorRegistry';
 import { formatPlayerHud, type PlayerHudData } from '../systems/PlayerHudFormat';
 import { generateAsteroidPoints, pickShapeFamily } from '../systems/AsteroidShape';
+import { ringLethalRadiusAt, ringPhaseAt } from '../systems/FractureRing';
+import type { SwarmBitKind } from '../entities/FractureSwarmBit';
 import { RemoteInput } from '../input/RemoteInput';
 import {
   ASTEROID_HIT_SFX_KEY,
@@ -1151,6 +1153,104 @@ export class GameScene extends Phaser.Scene {
       });
     }
 
+    if (this.fracture?.isAlive) {
+      entities.push({
+        id: this.networkIdFor(this.fracture),
+        type: 'fracture',
+        x: this.fracture.position.x,
+        y: this.fracture.position.y,
+        rotation: 0,
+        data: { materializeProgress: this.fracture.materializeProgress(nowMs) },
+      });
+    }
+
+    this.fractureFragments.forEach((fragment) => {
+      if (!fragment.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(fragment),
+        type: 'fractureFragment',
+        x: fragment.position.x,
+        y: fragment.position.y,
+        rotation: 0,
+        data: {
+          role: fragment.role,
+          materializeProgress: fragment.materializeProgress(nowMs),
+          ringElapsedMs: fragment.ringElapsedMsAt(nowMs),
+        },
+      });
+    });
+
+    this.fractureShards.forEach((shard) => {
+      if (!shard.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(shard),
+        type: 'fractureShard',
+        x: shard.position.x,
+        y: shard.position.y,
+        rotation: shard.visual.rotation,
+        data: {},
+      });
+    });
+
+    this.fractureSwarm.forEach((bit) => {
+      if (!bit.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(bit),
+        type: 'fractureSwarmBit',
+        x: bit.position.x,
+        y: bit.position.y,
+        rotation: 0,
+        data: { kind: bit.kind, materializeProgress: bit.materializeProgress(nowMs) },
+      });
+    });
+
+    this.fractureLasers.forEach((laser) => {
+      if (!laser.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(laser),
+        type: 'fractureLaser',
+        x: laser.origin.x,
+        y: laser.origin.y,
+        rotation: laser.angleRad,
+        data: { elapsedMs: laser.elapsedMsAt(nowMs) },
+      });
+    });
+
+    if (this.cardinal?.isAlive) {
+      const healthFraction =
+        this.cardinal.phase === 'armed' ? this.cardinal.armHpFraction() : this.cardinal.coreHpFraction();
+      const healthLabel =
+        this.cardinal.phase === 'armed' ? 'ARMS' : this.cardinal.phase === 'coreExposed' ? 'CORE' : 'CRITICAL';
+      entities.push({
+        id: this.networkIdFor(this.cardinal),
+        type: 'cardinal',
+        x: this.cardinal.position.x,
+        y: this.cardinal.position.y,
+        rotation: this.cardinal.rotationRad,
+        data: {
+          phase: this.cardinal.phase,
+          armAliveMask: this.cardinal.armAliveMask(),
+          materializeProgress: this.cardinal.materializeProgress(nowMs),
+          cycleElapsedMs: this.cardinal.cycleElapsedMsAt(nowMs),
+          detonationProgress: this.cardinal.detonationProgress(nowMs),
+          healthFraction,
+          healthLabel,
+        },
+      });
+    }
+
+    this.cardinalPlasmaBalls.forEach((plasma) => {
+      if (!plasma.isAlive) return;
+      entities.push({
+        id: this.networkIdFor(plasma),
+        type: 'cardinalPlasma',
+        x: plasma.position.x,
+        y: plasma.position.y,
+        rotation: 0,
+        data: {},
+      });
+    });
+
     return entities;
   }
 
@@ -1871,6 +1971,656 @@ export class GameScene extends Phaser.Scene {
           graphics.setPosition(snapshot.x, snapshot.y);
           redraw();
         },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // Phase 1 Core - its 6 shards are per-instance random layout
+    // (`Fracture.ts`'s own constructor), re-rolled locally rather than
+    // synced (same "a similar one" tradeoff the asteroid mirror already
+    // makes); `materializeProgress` rides the snapshot precomputed, so
+    // this mirror never needs `spawnedAtMs` or a clock aligned with the
+    // host's at all.
+    this.entityMirrors.registerFactory('fracture', (scene) => {
+      const shardCount = 6;
+      const baseDist = 46;
+      const distVariance = 16;
+      const minRadius = 15;
+      const radiusVariance = 7;
+      const shards = Array.from({ length: shardCount }, (_, i) => ({
+        angle: (i / shardCount) * Math.PI * 2 + 0.3,
+        dist: baseDist + (i % 2) * distVariance,
+        bobPhase: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.0004,
+        points: generateAsteroidPoints(6, 0.4),
+        radius: minRadius + Math.random() * radiusVariance,
+      }));
+      const graphics = scene.add.graphics();
+
+      const redraw = (data: EntitySnapshot['data']): void => {
+        const nowMs = scene.time.now;
+        const progress = typeof data.materializeProgress === 'number' ? data.materializeProgress : 1;
+        const g = graphics;
+        g.clear();
+        g.setAlpha(progress);
+        g.setScale(0.3 + 0.7 * progress);
+
+        const pulse = 0.55 + 0.45 * Math.sin(nowMs / 500);
+
+        shards.forEach((s) => {
+          const bob = Math.sin(nowMs / 1400 + s.bobPhase) * 4;
+          const x = Math.cos(s.angle) * (s.dist + bob);
+          const y = Math.sin(s.angle) * (s.dist + bob);
+
+          g.lineStyle(1, COLORS.ufo, 0.2 + 0.3 * pulse);
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(x, y);
+          g.strokePath();
+
+          g.save();
+          g.translateCanvas(x, y);
+          g.rotateCanvas(nowMs * s.rotSpeed);
+          g.fillStyle(COLORS.fractureFill, 1);
+          g.lineStyle(1.6, COLORS.fracture, 1);
+          g.beginPath();
+          s.points.forEach((p, i) => {
+            const px = p.x * s.radius;
+            const py = p.y * s.radius;
+            if (i === 0) g.moveTo(px, py);
+            else g.lineTo(px, py);
+          });
+          g.closePath();
+          g.fillPath();
+          g.strokePath();
+          g.restore();
+        });
+
+        g.fillStyle(COLORS.ufo, 0.12 * pulse);
+        g.fillCircle(0, 0, 18 + 6 * pulse);
+        g.fillStyle(COLORS.ufo, 0.6 + 0.4 * pulse);
+        g.fillCircle(0, 0, 8 + 2 * pulse);
+      };
+      redraw({});
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          redraw(snapshot.data);
+        },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // Phase 2 Fragment - `role` and the aggressive ring's `ringElapsedMs`
+    // are real gameplay facts (hit-testing happens host-side, but the
+    // ring telegraph/expand/fade is a fairness cue every player needs to
+    // see correctly) and ride the snapshot exactly; the shard layout and
+    // gravity-particle swirl are per-instance cosmetic randomness,
+    // re-rolled/re-simulated locally, same tradeoff `blackHole`'s own
+    // mirror already makes for its particle disk.
+    this.entityMirrors.registerFactory('fractureFragment', (scene, entity) => {
+      const shardCount = 3;
+      const baseDist = 24;
+      const distVariance = 10;
+      const minRadius = 9;
+      const radiusVariance = 5;
+      const gravityParticleCount = 4;
+      const shards = Array.from({ length: shardCount }, (_, i) => ({
+        angle: (i / shardCount) * Math.PI * 2 + Math.random(),
+        dist: baseDist + Math.random() * distVariance,
+        bobPhase: Math.random() * Math.PI * 2,
+        points: generateAsteroidPoints(6, 0.4),
+        radius: minRadius + Math.random() * radiusVariance,
+      }));
+      const gravityParticles = Array.from({ length: gravityParticleCount }, (_, i) => ({
+        angle: (i / gravityParticleCount) * Math.PI * 2,
+        frac: Math.random(),
+      }));
+      const graphics = scene.add.graphics();
+      let lastUpdateMs = scene.time.now;
+
+      const roleColor = (role: string): number => {
+        if (role === 'aggressive') return COLORS.ufo;
+        if (role === 'gravity') return COLORS.blackHole;
+        return COLORS.fractureLauncher;
+      };
+
+      const redraw = (data: EntitySnapshot['data']): void => {
+        const nowMs = scene.time.now;
+        const deltaSeconds = Math.max(0, (nowMs - lastUpdateMs) / 1000);
+        lastUpdateMs = nowMs;
+        const role = typeof data.role === 'string' ? data.role : 'aggressive';
+        const progress = typeof data.materializeProgress === 'number' ? data.materializeProgress : 1;
+        const ringElapsedMs = typeof data.ringElapsedMs === 'number' ? data.ringElapsedMs : 0;
+
+        const g = graphics;
+        g.clear();
+        g.setAlpha(progress);
+        g.setScale(0.3 + 0.7 * progress);
+
+        const pulse = 0.55 + 0.45 * Math.sin(nowMs / 500);
+        const color = roleColor(role);
+
+        shards.forEach((s) => {
+          const jitter = role === 'aggressive' ? Math.sin(nowMs / 90 + s.bobPhase * 10) * 0.3 : 0;
+          const bob = Math.sin(nowMs / 1200 + s.bobPhase) * 3;
+          const x = Math.cos(s.angle + jitter) * (s.dist + bob);
+          const y = Math.sin(s.angle + jitter) * (s.dist + bob);
+
+          g.lineStyle(1, color, 0.25 + 0.35 * pulse);
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(x, y);
+          g.strokePath();
+
+          g.save();
+          g.translateCanvas(x, y);
+          g.fillStyle(COLORS.fractureFill, 1);
+          g.lineStyle(1.4, COLORS.fracture, 1);
+          g.beginPath();
+          s.points.forEach((p, i) => {
+            const px = p.x * s.radius;
+            const py = p.y * s.radius;
+            if (i === 0) g.moveTo(px, py);
+            else g.lineTo(px, py);
+          });
+          g.closePath();
+          g.fillPath();
+          g.strokePath();
+          g.restore();
+        });
+
+        if (role === 'gravity') {
+          gravityParticles.forEach((p) => {
+            p.frac -= deltaSeconds * 0.5;
+            if (p.frac <= 0) {
+              p.frac = 1;
+              p.angle = Math.random() * Math.PI * 2;
+            }
+            const r = 22 * p.frac;
+            const px = Math.cos(p.angle) * r;
+            const py = Math.sin(p.angle) * r;
+            g.fillStyle(COLORS.blackHole, 0.3 + 0.6 * p.frac);
+            g.fillCircle(px, py, 1.6);
+          });
+          g.lineStyle(1, COLORS.blackHole, 0.15);
+          g.strokeCircle(0, 0, FRACTURE.fragmentRadius * FRACTURE.gravityPullRadiusMultiplier);
+        }
+
+        if (role === 'aggressive') {
+          const ringMaxRadius = FRACTURE.fragmentRadius * FRACTURE.ringMaxRadiusMultiplier;
+          const phase = ringPhaseAt(ringElapsedMs, FRACTURE.ringTelegraphMs, FRACTURE.ringExpandMs, FRACTURE.ringFadeMs);
+          if (phase === 'telegraph') {
+            g.lineStyle(1.5, COLORS.ufo, 0.2 + 0.4 * (ringElapsedMs / FRACTURE.ringTelegraphMs));
+            g.strokeCircle(0, 0, ringMaxRadius);
+          } else if (phase === 'expanding') {
+            const r = ringLethalRadiusAt(ringElapsedMs, FRACTURE.ringTelegraphMs, FRACTURE.ringExpandMs, ringMaxRadius);
+            g.lineStyle(3, COLORS.ufo, 0.85);
+            g.strokeCircle(0, 0, r ?? 0);
+          } else if (phase === 'fading') {
+            const fadeT = (ringElapsedMs - FRACTURE.ringTelegraphMs - FRACTURE.ringExpandMs) / FRACTURE.ringFadeMs;
+            g.lineStyle(3, COLORS.ufo, 0.85 * (1 - fadeT));
+            g.strokeCircle(0, 0, ringMaxRadius);
+          }
+        }
+
+        g.fillStyle(color, 0.12 * pulse);
+        g.fillCircle(0, 0, 14 + 5 * pulse);
+        g.fillStyle(color, 0.6 + 0.4 * pulse);
+        g.fillCircle(0, 0, 6 + 1.5 * pulse);
+      };
+      redraw(entity.data);
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          redraw(snapshot.data);
+        },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    this.entityMirrors.registerFactory('fractureShard', (scene) => {
+      const points = generateAsteroidPoints(6, 0.4);
+      const graphics = scene.add.graphics();
+      graphics.fillStyle(COLORS.fractureFill, 1);
+      graphics.lineStyle(1.3, COLORS.fractureLauncher, 1);
+      graphics.beginPath();
+      points.forEach((p, i) => {
+        const px = p.x * FRACTURE.swarmRadius;
+        const py = p.y * FRACTURE.swarmRadius;
+        if (i === 0) graphics.moveTo(px, py);
+        else graphics.lineTo(px, py);
+      });
+      graphics.closePath();
+      graphics.fillPath();
+      graphics.strokePath();
+
+      return {
+        applySnapshot: (snapshot) => graphics.setPosition(snapshot.x, snapshot.y).setRotation(snapshot.rotation),
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // Phase 3 pickup - `kind` is synced (it's this instance's fixed
+    // identity, same reasoning asteroid `size` is synced but its
+    // silhouette isn't); the tumble itself (spin/bob phase/speed) is
+    // per-instance cosmetic randomness, re-rolled locally.
+    this.entityMirrors.registerFactory('fractureSwarmBit', (scene, entity) => {
+      const halfExtentsByKind: Record<SwarmBitKind, { x: number; y: number; z: number }> = {
+        core: { x: 15, y: 15, z: 15 },
+        cargo: { x: 19, y: 7.6, z: 7.6 },
+      };
+      const baseTilt = 0.55;
+      const signs = [-1, 1];
+      const prismEdges: readonly (readonly [number, number])[] = [
+        [0, 1], [0, 2], [0, 4], [1, 3], [1, 5], [2, 3], [2, 6], [3, 7], [4, 5], [4, 6], [5, 7], [6, 7],
+      ];
+      const prismVertices = (half: { x: number; y: number; z: number }) => {
+        const verts: { x: number; y: number; z: number }[] = [];
+        for (const sx of signs) {
+          for (const sy of signs) {
+            for (const sz of signs) {
+              verts.push({ x: sx * half.x, y: sy * half.y, z: sz * half.z });
+            }
+          }
+        }
+        return verts;
+      };
+      const project3D = (p: { x: number; y: number; z: number }, spin: number, tilt: number) => {
+        const cosSpin = Math.cos(spin);
+        const sinSpin = Math.sin(spin);
+        const x1 = p.x * cosSpin + p.z * sinSpin;
+        const z1 = -p.x * sinSpin + p.z * cosSpin;
+        const cosTilt = Math.cos(tilt);
+        const sinTilt = Math.sin(tilt);
+        const y2 = p.y * cosTilt - z1 * sinTilt;
+        const z2 = p.y * sinTilt + z1 * cosTilt;
+        return { x: x1, y: y2, z: z2 };
+      };
+
+      const kind: SwarmBitKind = entity.data.kind === 'cargo' ? 'cargo' : 'core';
+      const halfExtents = halfExtentsByKind[kind];
+      const depthRange = Math.hypot(halfExtents.x, halfExtents.z);
+      const spinSpeed = (Math.random() - 0.5) * 0.8;
+      const spinPhase = Math.random() * Math.PI * 2;
+      const bobPhase = Math.random() * Math.PI * 2;
+      const spawnedAtMs = scene.time.now;
+      const graphics = scene.add.graphics();
+
+      const redraw = (data: EntitySnapshot['data']): void => {
+        const nowMs = scene.time.now;
+        const progress = typeof data.materializeProgress === 'number' ? data.materializeProgress : 1;
+        const pulse = 0.5 + Math.sin(nowMs / 700) * 0.5;
+        const g = graphics;
+        g.clear();
+        g.setAlpha(progress);
+        g.setScale((0.3 + 0.7 * progress) * (1 + pulse * 0.08));
+
+        const bobY = Math.sin(nowMs / 900 + bobPhase) * 1.5;
+        const elapsedSec = (nowMs - spawnedAtMs) / 1000;
+        const spin = elapsedSec * spinSpeed + spinPhase;
+        const tilt = baseTilt + Math.sin(nowMs / 1300 + bobPhase) * 0.12;
+
+        const glowRadius = depthRange * (0.85 + pulse * 0.3);
+        g.fillStyle(COLORS.scrap, 0.16 + pulse * 0.1);
+        g.fillCircle(0, bobY, glowRadius);
+
+        const projected = prismVertices(halfExtents).map((v) => project3D(v, spin, tilt));
+
+        prismEdges.forEach(([ia, ib]) => {
+          const a = projected[ia]!;
+          const b = projected[ib]!;
+          const depthT = Math.max(0, Math.min(1, ((a.z + b.z) / 2 + depthRange) / (depthRange * 2)));
+          const alpha = 0.5 + depthT * 0.5;
+          const ax = a.x;
+          const ay = a.y + bobY;
+          const bx = b.x;
+          const by = b.y + bobY;
+
+          g.lineStyle(1.4, 0x3c4560, alpha);
+          g.beginPath();
+          g.moveTo(ax, ay);
+          g.lineTo(bx, by);
+          g.strokePath();
+
+          g.lineStyle(1.4, COLORS.scrap, Math.min(1, (0.45 + pulse * 0.55) * alpha));
+          g.beginPath();
+          g.moveTo(ax, ay);
+          g.lineTo(bx, by);
+          g.strokePath();
+        });
+      };
+      redraw(entity.data);
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          redraw(snapshot.data);
+        },
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // The Core's laser - not Matter-backed host-side either (pure beam
+    // math), so this mirror is purely `elapsedMs`-driven, reproducing
+    // `FractureLaser.draw()`'s own telegraph/active/fading phases exactly
+    // since that elapsed value rides the snapshot precomputed.
+    this.entityMirrors.registerFactory('fractureLaser', (scene, entity) => {
+      const graphics = scene.add.graphics();
+
+      const redraw = (snapshot: EntitySnapshot): void => {
+        const elapsedMs = typeof snapshot.data.elapsedMs === 'number' ? snapshot.data.elapsedMs : 0;
+        const direction = fromAngle(snapshot.rotation);
+        const end = { x: direction.x * FRACTURE.laserLength, y: direction.y * FRACTURE.laserLength };
+        const g = graphics;
+        g.clear();
+        g.setPosition(snapshot.x, snapshot.y);
+
+        if (elapsedMs < FRACTURE.laserTelegraphMs) {
+          const t = elapsedMs / FRACTURE.laserTelegraphMs;
+          g.lineStyle(1.5, COLORS.ufo, 0.25 + 0.35 * t);
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(end.x, end.y);
+          g.strokePath();
+          return;
+        }
+
+        if (elapsedMs < FRACTURE.laserTelegraphMs + FRACTURE.laserActiveMs) {
+          g.lineStyle(FRACTURE.laserWidth, COLORS.ufo, 0.95);
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(end.x, end.y);
+          g.strokePath();
+          g.lineStyle(Math.max(2, FRACTURE.laserWidth * 0.35), 0xffffff, 0.85);
+          g.beginPath();
+          g.moveTo(0, 0);
+          g.lineTo(end.x, end.y);
+          g.strokePath();
+          return;
+        }
+
+        const fadeT =
+          (elapsedMs - FRACTURE.laserTelegraphMs - FRACTURE.laserActiveMs) / FRACTURE.laserFadeMs;
+        g.lineStyle(FRACTURE.laserWidth, COLORS.ufo, 0.9 * Math.max(0, 1 - fadeT));
+        g.beginPath();
+        g.moveTo(0, 0);
+        g.lineTo(end.x, end.y);
+        g.strokePath();
+      };
+      redraw(entity);
+
+      return {
+        applySnapshot: (snapshot) => redraw(snapshot),
+        destroy: () => graphics.destroy(),
+      };
+    });
+
+    // The Cardinal - singleton, fixed at arena-center. Bundles its boss
+    // health bar UI (`createCardinalHealthBar`/`updateCardinalHealthBar`'s
+    // own host-side counterparts) into this same mirror rather than a
+    // separate one, since both only ever exist exactly while this entity
+    // does - one create, one destroy, same lifecycle.
+    this.entityMirrors.registerFactory('cardinal', (scene, entity) => {
+      const armTrussWidth = 34;
+      const cannonLen = 60;
+      const cannonWidth = 56;
+      const metalMid = 0x232a3c;
+      const metalLight = 0x3c4560;
+      const coreSides = 8;
+
+      const graphics = scene.add.graphics();
+      graphics.setPosition(entity.x, entity.y);
+      const countdownText = scene.add
+        .text(entity.x, entity.y, '', {
+          fontFamily: 'monospace',
+          fontStyle: 'bold',
+          fontSize: '56px',
+          color: '#0a0b13',
+        })
+        .setOrigin(0.5)
+        .setVisible(false);
+
+      const centerX = entity.x;
+      const barY = entity.y + CARDINAL.coreRadius + CARDINAL_HEALTH_BAR.marginTop;
+      const barLeft = centerX - CARDINAL_HEALTH_BAR.width / 2;
+      const healthLabelText = scene.add
+        .text(centerX, barY - 18, 'ARMS', {
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          color: toCssHex(COLORS.cardinal),
+        })
+        .setOrigin(0.5);
+      const healthBorder = scene.add
+        .rectangle(centerX, barY, CARDINAL_HEALTH_BAR.width, CARDINAL_HEALTH_BAR.height)
+        .setStrokeStyle(2, COLORS.cardinal);
+      const healthFill = scene.add
+        .rectangle(barLeft, barY, CARDINAL_HEALTH_BAR.width, CARDINAL_HEALTH_BAR.height - 4, COLORS.cardinal)
+        .setOrigin(0, 0.5);
+
+      const drawArm = (
+        g: Phaser.GameObjects.Graphics,
+        glowColor: number,
+        glowStrength: number,
+        targetAlpha: number,
+        beamAlpha: number,
+      ): void => {
+        const innerX = CARDINAL.armInnerRadius;
+        const trussLen = CARDINAL.armReach - cannonLen - innerX;
+
+        g.fillStyle(COLORS.cardinalFill, 1);
+        g.lineStyle(3, metalLight, 1);
+        g.fillRect(innerX, -armTrussWidth / 2, trussLen, armTrussWidth);
+        g.strokeRect(innerX, -armTrussWidth / 2, trussLen, armTrussWidth);
+
+        g.lineStyle(4, glowColor, 0.5 + glowStrength * 0.5);
+        g.beginPath();
+        g.moveTo(innerX + 6, 0);
+        g.lineTo(innerX + trussLen - 4, 0);
+        g.strokePath();
+
+        g.lineStyle(2, metalLight, 1);
+        g.strokeCircle(innerX + trussLen * 0.55, 0, armTrussWidth * 0.42);
+
+        const cannonX = CARDINAL.armReach - cannonLen;
+        g.fillStyle(COLORS.cardinalFill, 1);
+        g.lineStyle(3, metalLight, 1);
+        g.fillRect(cannonX, -cannonWidth / 2, cannonLen, cannonWidth);
+        g.strokeRect(cannonX, -cannonWidth / 2, cannonLen, cannonWidth);
+
+        g.fillStyle(glowColor, 0.35 + glowStrength * 0.65);
+        g.fillCircle(CARDINAL.armReach - 10, 0, cannonWidth * 0.28);
+
+        if (targetAlpha > 0) {
+          g.lineStyle(1.5, COLORS.ufo, targetAlpha);
+          g.beginPath();
+          g.moveTo(innerX + 40, 0);
+          g.lineTo(CARDINAL.armReach, 0);
+          g.strokePath();
+        }
+
+        if (beamAlpha > 0) {
+          g.fillStyle(COLORS.ufo, beamAlpha);
+          g.fillRect(
+            CARDINAL.armReach,
+            -CARDINAL.laserWidth / 2,
+            CARDINAL.laserLength - CARDINAL.armReach,
+            CARDINAL.laserWidth,
+          );
+          g.fillStyle(0xffffff, beamAlpha * 0.85);
+          g.fillRect(
+            CARDINAL.armReach,
+            -Math.max(2, CARDINAL.laserWidth * 0.35) / 2,
+            CARDINAL.laserLength - CARDINAL.armReach,
+            Math.max(2, CARDINAL.laserWidth * 0.35),
+          );
+        }
+      };
+
+      const drawArmWreck = (g: Phaser.GameObjects.Graphics): void => {
+        const stubLen = 44;
+        const innerX = CARDINAL.armInnerRadius;
+
+        g.fillStyle(COLORS.cardinalFill, 1);
+        g.lineStyle(3, metalMid, 1);
+        g.fillRect(innerX, -armTrussWidth / 2, stubLen, armTrussWidth);
+        g.strokeRect(innerX, -armTrussWidth / 2, stubLen, armTrussWidth);
+
+        const bx = innerX + stubLen;
+        g.lineStyle(2, metalLight, 1);
+        g.beginPath();
+        g.moveTo(bx, -armTrussWidth / 2);
+        g.lineTo(bx + 14, -armTrussWidth / 4);
+        g.lineTo(bx + 4, 0);
+        g.lineTo(bx + 18, armTrussWidth / 4);
+        g.lineTo(bx, armTrussWidth / 2);
+        g.strokePath();
+
+        g.fillStyle(COLORS.fractureLauncher, 0.35);
+        g.fillCircle(bx - 10, 0, 3);
+      };
+
+      const drawCore = (g: Phaser.GameObjects.Graphics, glowColor: number, glowStrength: number): void => {
+        const radius = CARDINAL.coreRadius;
+
+        g.fillStyle(COLORS.cardinalFill, 1);
+        g.lineStyle(3, metalLight, 1);
+        g.beginPath();
+        for (let i = 0; i < coreSides; i += 1) {
+          const a = (i / coreSides) * Math.PI * 2 + Math.PI / coreSides;
+          const px = Math.cos(a) * radius;
+          const py = Math.sin(a) * radius;
+          if (i === 0) g.moveTo(px, py);
+          else g.lineTo(px, py);
+        }
+        g.closePath();
+        g.fillPath();
+        g.strokePath();
+
+        const innerR = radius * 0.55;
+        g.fillStyle(glowColor, 0.55 + glowStrength * 0.45);
+        g.beginPath();
+        for (let i = 0; i < coreSides; i += 1) {
+          const a = (i / coreSides) * Math.PI * 2 + Math.PI / coreSides;
+          const px = Math.cos(a) * innerR;
+          const py = Math.sin(a) * innerR;
+          if (i === 0) g.moveTo(px, py);
+          else g.lineTo(px, py);
+        }
+        g.closePath();
+        g.fillPath();
+      };
+
+      const redraw = (snapshot: EntitySnapshot): void => {
+        const nowMs = scene.time.now;
+        const data = snapshot.data;
+        const phase = typeof data.phase === 'string' ? data.phase : 'armed';
+        const armAliveMask = typeof data.armAliveMask === 'number' ? data.armAliveMask : 0;
+        const progress = typeof data.materializeProgress === 'number' ? data.materializeProgress : 1;
+        const cycleElapsedMs = typeof data.cycleElapsedMs === 'number' ? data.cycleElapsedMs : 0;
+        const detonationProgress = typeof data.detonationProgress === 'number' ? data.detonationProgress : 0;
+        const healthFraction = typeof data.healthFraction === 'number' ? data.healthFraction : 0;
+        const healthLabel = typeof data.healthLabel === 'string' ? data.healthLabel : 'ARMS';
+
+        const g = graphics;
+        g.clear();
+        g.setAlpha(progress);
+        g.setScale(0.3 + 0.7 * progress);
+        g.setRotation(snapshot.rotation);
+
+        let glowColor: number = COLORS.cardinal;
+        let glowStrength = 0.2 + Math.sin(nowMs / 500) * 0.05;
+        let targetAlpha = 0;
+        let beamAlpha = 0;
+
+        if (phase === 'armed') {
+          if (cycleElapsedMs < CARDINAL.laserCooldownMs) {
+            // idle - defaults above stand
+          } else if (cycleElapsedMs < CARDINAL.laserCooldownMs + CARDINAL.laserTelegraphMs) {
+            const t = (cycleElapsedMs - CARDINAL.laserCooldownMs) / CARDINAL.laserTelegraphMs;
+            glowColor = COLORS.fractureLauncher;
+            glowStrength = 0.3 + t * 0.7;
+            targetAlpha = (Math.max(0, t - 0.3) / 0.7) * 0.6;
+          } else if (cycleElapsedMs < CARDINAL.laserCooldownMs + CARDINAL.laserTelegraphMs + CARDINAL.laserActiveMs) {
+            glowColor = COLORS.ufo;
+            glowStrength = 1;
+            beamAlpha = 1;
+          } else {
+            const t =
+              (cycleElapsedMs - CARDINAL.laserCooldownMs - CARDINAL.laserTelegraphMs - CARDINAL.laserActiveMs) /
+              CARDINAL.laserFadeMs;
+            glowColor = COLORS.ufo;
+            glowStrength = 1 - t;
+            beamAlpha = 1 - t;
+          }
+        } else if (phase === 'critical') {
+          const pulse = 0.5 + Math.sin(nowMs / 180) * 0.5;
+          glowColor = COLORS.ufo;
+          glowStrength = 0.6 + pulse * 0.4;
+        }
+
+        for (let i = 0; i < CARDINAL.armCount; i += 1) {
+          g.save();
+          g.rotateCanvas(i * (Math.PI / 2));
+          if ((armAliveMask & (1 << i)) !== 0) {
+            drawArm(g, glowColor, glowStrength, targetAlpha, beamAlpha);
+          } else {
+            drawArmWreck(g);
+          }
+          g.restore();
+        }
+
+        drawCore(g, glowColor, glowStrength);
+
+        if (phase === 'critical') {
+          const r = detonationProgress * CARDINAL.detonationMaxRadius;
+          g.fillStyle(COLORS.ufo, 0.05 + detonationProgress * 0.05);
+          g.fillCircle(0, 0, r);
+          g.lineStyle(3 + detonationProgress * 2, COLORS.ufo, 0.45 + detonationProgress * 0.4);
+          g.strokeCircle(0, 0, r);
+
+          const secondsLeft = Math.max(
+            1,
+            Math.ceil((CARDINAL.detonationCountdownMs - detonationProgress * CARDINAL.detonationCountdownMs) / 1000),
+          );
+          countdownText.setText(String(secondsLeft)).setVisible(true);
+        } else {
+          countdownText.setVisible(false);
+        }
+
+        healthFill.width = Math.max(0, CARDINAL_HEALTH_BAR.width * healthFraction);
+        healthLabelText.setText(healthLabel);
+      };
+      redraw(entity);
+
+      return {
+        applySnapshot: (snapshot) => {
+          graphics.setPosition(snapshot.x, snapshot.y);
+          countdownText.setPosition(snapshot.x, snapshot.y);
+          redraw(snapshot);
+        },
+        destroy: () => {
+          graphics.destroy();
+          countdownText.destroy();
+          healthLabelText.destroy();
+          healthBorder.destroy();
+          healthFill.destroy();
+        },
+      };
+    });
+
+    this.entityMirrors.registerFactory('cardinalPlasma', (scene, entity) => {
+      const graphics = scene.add.graphics();
+      graphics.fillStyle(COLORS.fractureLauncher, 0.18);
+      graphics.fillCircle(0, 0, CARDINAL.plasmaRadius * 1.8);
+      graphics.fillStyle(COLORS.fractureLauncher, 1);
+      graphics.fillCircle(0, 0, CARDINAL.plasmaRadius);
+      graphics.setPosition(entity.x, entity.y);
+
+      return {
+        applySnapshot: (snapshot) => graphics.setPosition(snapshot.x, snapshot.y),
         destroy: () => graphics.destroy(),
       };
     });

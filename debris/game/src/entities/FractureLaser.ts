@@ -40,6 +40,11 @@ export class FractureLaser {
     return this.phaseAt(nowMs) === 'active';
   }
 
+  /** Elapsed time since spawn - exposed so a network snapshot mirror (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 13) can reproduce `draw()`'s own telegraph/active/fading phase logic exactly, without needing `spawnedAtMs` itself or a clock aligned with the host's. */
+  elapsedMsAt(nowMs: number): number {
+    return nowMs - this.spawnedAtMs;
+  }
+
   update(nowMs: number): void {
     if (!this.alive) return;
     if (this.phaseAt(nowMs) === 'done') {

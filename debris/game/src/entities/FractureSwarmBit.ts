@@ -12,7 +12,7 @@ interface Vec3 {
 }
 
 /** The two pickup silhouettes a bit can roll, picked live against a mockup over the original tetromino blocks (too puzzle-game at FRACTURE.swarmRadius's doubled size) and over five other flat-fill candidates (ingot, coil, gear tooth, cluster, token) - these two won on being an unfilled wireframe, the same rendering language the original 1979 Asteroids ship itself used, rather than another flat-shaded shape. */
-type SwarmBitKind = 'core' | 'cargo';
+export type SwarmBitKind = 'core' | 'cargo';
 
 /** Half-extents (px) of the rectangular prism each kind draws - a cube for Core, a long thin box for Cargo. Both prisms share one vertex/edge topology (`PRISM_EDGES` below); only these three numbers differ. */
 const HALF_EXTENTS: Record<SwarmBitKind, Vec3> = {
@@ -95,7 +95,7 @@ function project3D(p: Vec3, spin: number, tilt: number): Vec3 {
  */
 export class FractureSwarmBit {
   readonly visual: MatterGameObject<Phaser.GameObjects.Graphics>;
-  private readonly kind: SwarmBitKind;
+  private readonly kind_: SwarmBitKind;
   private readonly halfExtents: Vec3;
   private readonly depthRange: number;
   private readonly spinSpeed: number;
@@ -112,8 +112,8 @@ export class FractureSwarmBit {
     rng: () => number = Math.random,
   ) {
     this.spawnedAtMs = nowMs;
-    this.kind = rng() < 0.5 ? 'core' : 'cargo';
-    this.halfExtents = HALF_EXTENTS[this.kind];
+    this.kind_ = rng() < 0.5 ? 'core' : 'cargo';
+    this.halfExtents = HALF_EXTENTS[this.kind_];
     // Edges near this (plus or minus) are treated as "facing the camera"
     // for the depth-fade below - derived from the shape's own footprint
     // rather than a shared constant, so Cargo's longer silhouette fades
@@ -150,9 +150,20 @@ export class FractureSwarmBit {
     return this.alive;
   }
 
+  /** Which of the two wireframe prisms this pickup rolled at spawn - exposed so a network snapshot mirror (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 13) draws the correct silhouette instead of guessing; the tumble's per-instance phase/speed stay un-synced, same "re-roll it locally" tradeoff the asteroid mirror already makes. */
+  get kind(): SwarmBitKind {
+    return this.kind_;
+  }
+
   /** Not collectible in the first instant it appears - a beat to actually see it before it can be scooped, same spirit as every other Fracture tier's materialize grace period. */
   isMaterializing(nowMs: number): boolean {
     return nowMs - this.spawnedAtMs < FRACTURE.materializeDurationMs;
+  }
+
+  /** Same exact eased curve as `Fracture.materializeProgress` - see that getter's own doc comment. */
+  materializeProgress(nowMs: number): number {
+    const t = Math.min(1, (nowMs - this.spawnedAtMs) / FRACTURE.materializeDurationMs);
+    return 1 - (1 - t) ** 3;
   }
 
   // Pure position/wrap simulation now - rotation is derived from nowMs

@@ -108,8 +108,24 @@ export class Cardinal {
     return nowMs - this.spawnedAtMs < CARDINAL.materializeDurationMs;
   }
 
+  /** Same exact eased curve as `Fracture.materializeProgress` - see that getter's own doc comment (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 13). */
+  materializeProgress(nowMs: number): number {
+    const t = Math.min(1, (nowMs - this.spawnedAtMs) / CARDINAL.materializeDurationMs);
+    return 1 - (1 - t) ** 3;
+  }
+
   isArmAlive(armIndex: number): boolean {
     return (this.armHp[armIndex] ?? 0) > 0;
+  }
+
+  /** All 4 arms' alive/dead state as one bitmask (bit `i` set = arm `i` alive) - a compact stand-in for an array on the network snapshot's data bag, which only accepts scalar primitives (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 13). */
+  armAliveMask(): number {
+    return this.armIsAliveFlags().reduce((mask, alive, i) => (alive ? mask | (1 << i) : mask), 0);
+  }
+
+  /** Elapsed time within the current attack cycle - exposed so a network snapshot mirror can reproduce `draw()`'s own charging/firing/fading glow logic via `attackSubPhase`'s exact same thresholds (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 13). Meaningless outside the `armed` phase. */
+  cycleElapsedMsAt(nowMs: number): number {
+    return this.cycleElapsedMs(nowMs);
   }
 
   /** This arm's current absolute firing/hit-test direction - the body's own rotation plus its fixed 0/90/180/270 local offset. */

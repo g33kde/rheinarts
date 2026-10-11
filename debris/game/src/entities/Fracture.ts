@@ -93,6 +93,12 @@ export class Fracture {
     return nowMs - this.spawnedAtMs < FRACTURE.materializeDurationMs;
   }
 
+  /** The exact eased 0..1 `draw()` uses for its own alpha/scale materialize-in - exposed so the network snapshot's mirror (docs/roadmap.md's "Windows + LAN multiplayer," Sprint 13) applies the identical curve instead of re-deriving it from a synced timestamp. */
+  materializeProgress(nowMs: number): number {
+    const t = Math.min(1, (nowMs - this.spawnedAtMs) / FRACTURE.materializeDurationMs);
+    return 1 - (1 - t) ** 3;
+  }
+
   /** No-op (returns `destroyed: false`) while still materializing - the caller still gets a definite answer either way. `damage` defaults to 1 (a normal shot) - Heavy Shot passes more, see FractureCombat.applyHit's own doc comment. */
   takeHit(nowMs: number, damage = 1): boolean {
     if (this.isMaterializing(nowMs)) return false;
