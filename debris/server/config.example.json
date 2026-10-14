@@ -1,0 +1,29 @@
+{
+  "name": "Debris Server",
+  "motd": "Welcome to Debris",
+  "password": "",
+
+  "network": {
+    "bindAddress": "0.0.0.0",
+    "signalingPort": 8765,
+    "udpPortRange": [50000, 50100],
+    "stunServers": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+  },
+
+  "gameplay": {
+    "defaultMode": "cooperative",
+    "maxPlayers": 4
+  },
+
+  "ops": {
+    "logLevel": "info",
+    "logFile": null,
+    "snapshotHz": 30,
+    "highscoreApiUrl": null,
+    "highscoreApiKey": null
+  },
+
+  "dev": {
+    "autoStartDelayMs": 3000
+  }
+}

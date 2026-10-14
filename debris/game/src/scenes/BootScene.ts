@@ -29,6 +29,7 @@ import {
   THRUST_SFX_KEY,
 } from '../systems/Sfx';
 import { RHEIN_ARTS_LOGO_TEXTURE_KEY, SPLASH_TEXTURE_KEY } from './SplashScene';
+import { isServerMode } from '../systems/ServerBridge';
 
 /**
  * Every in-game visual (ship, asteroids, projectiles) is still vector-
@@ -63,6 +64,7 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.scene.start('Splash');
+    // The dedicated server (`?server=1`) has no splash/menu - it goes straight to its lobby.
+    this.scene.start(isServerMode() ? 'DedicatedServer' : 'Splash');
   }
 }

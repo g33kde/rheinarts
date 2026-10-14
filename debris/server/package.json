@@ -1,0 +1,21 @@
+{
+  "name": "debris-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Debris dedicated server - the unchanged game running headless in Electron, reached over WebSocket signaling + WebRTC data channels.",
+  "main": "src/main.js",
+  "scripts": {
+    "build-game": "npm --prefix ../game run build:desktop",
+    "start": "electron . --config=config.json",
+    "start:linux": "xvfb-run -a electron . --no-sandbox --config=config.json",
+    "smoke": "electron tools/smoke-main.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "electron": "^33.2.0",
+    "ws": "^8.18.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

@@ -50,9 +50,13 @@ export class RtcConnection {
    * whoever creates the offer to also create the data channels; the
    * other side (`false`, the joining player) receives them via the
    * `datachannel` event instead of creating its own.
+   *
+   * `iceServers` is empty for a LAN (nothing to traverse); the online
+   * dedicated server passes its configured STUN list so a peer behind NAT
+   * can learn its public address.
    */
-  constructor(isInitiator: boolean) {
-    this.peer = new RTCPeerConnection({ iceServers: [] });
+  constructor(isInitiator: boolean, iceServers: RTCIceServer[] = []) {
+    this.peer = new RTCPeerConnection({ iceServers });
 
     this.peer.onicecandidate = (event) => {
       if (event.candidate)

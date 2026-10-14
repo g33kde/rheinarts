@@ -1,6 +1,7 @@
 import { LAN_DISCOVERY } from '../config/GameConfig';
 import { RtcConnection } from './RtcConnection';
 import { decodeSignal, encodeSignal, type SignalKind } from './RtcSignalingProtocol';
+import { LanHostSignalingChannel, type HostSignalingChannel } from './SignalingChannel';
 
 /**
  * Wires `RtcConnection` (Sprint 5's WebRTC wrapper) to the LAN discovery
@@ -27,35 +28,42 @@ function send(address: string, port: number, connectionId: string, kind: SignalK
   window.debrisLan?.sendTo(address, port, encodeSignal({ type: 'debris-signal', connectionId, kind, payload }));
 }
 
-/** The host side - listens for incoming offers, answers each one, and hands back a connection per successful handshake. Handles more than one in-flight join attempt at once via `connectionId`. */
+/**
+ * The host side - listens for incoming offers, answers each one, and hands back a connection per successful handshake. Handles more than one in-flight join attempt at once via `connectionId`.
+ *
+ * What actually carries the messages is a `HostSignalingChannel` (LAN UDP by default, the dedicated server's WebSocket bridge online); `iceServers` is the STUN list handed to every connection it creates (empty on a LAN).
+ */
 export class RtcSignalingHost {
   private readonly pending = new Map<string, RtcConnection>();
-  private unsubscribe: (() => void) | undefined;
 
-  listen(onConnected: (connection: RtcConnection) => void, sender: Sender = send): void {
-    if (!window.debrisLan) return;
+  constructor(
+    private readonly channel: HostSignalingChannel = new LanHostSignalingChannel(),
+    private readonly iceServers: RTCIceServer[] = [],
+  ) {}
 
-    window.debrisLan.startListening(LAN_DISCOVERY.broadcastPort);
-    this.unsubscribe = window.debrisLan.onMessage(({ address, data }) => {
+  listen(onConnected: (connection: RtcConnection) => void): void {
+    this.channel.open((peer, data) => {
       const envelope = decodeSignal(data);
       if (!envelope) return;
 
+      const reply = (kind: SignalKind, payload: string): void =>
+        this.channel.send(
+          peer,
+          encodeSignal({ type: 'debris-signal', connectionId: envelope.connectionId, kind, payload }),
+        );
+
       if (envelope.kind === 'offer') {
-        const connection = new RtcConnection(false);
+        const connection = new RtcConnection(false, this.iceServers);
         this.pending.set(envelope.connectionId, connection);
 
-        connection.onLocalIceCandidate((candidate) => {
-          sender(address, LAN_DISCOVERY.broadcastPort, envelope.connectionId, 'ice-candidate', JSON.stringify(candidate));
-        });
+        connection.onLocalIceCandidate((candidate) => reply('ice-candidate', JSON.stringify(candidate)));
         connection.onConnected(() => {
           this.pending.delete(envelope.connectionId);
           onConnected(connection);
         });
 
         const offer = JSON.parse(envelope.payload) as RTCSessionDescriptionInit;
-        void connection.createAnswer(offer).then((answer) => {
-          sender(address, LAN_DISCOVERY.broadcastPort, envelope.connectionId, 'answer', JSON.stringify(answer));
-        });
+        void connection.createAnswer(offer).then((answer) => reply('answer', JSON.stringify(answer)));
         return;
       }
 
@@ -68,9 +76,7 @@ export class RtcSignalingHost {
   }
 
   stop(): void {
-    window.debrisLan?.stopListening();
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+    this.channel.close();
     this.pending.forEach((connection) => connection.close());
     this.pending.clear();
   }

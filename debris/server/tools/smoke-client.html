@@ -1,0 +1,104 @@
+<!doctype html><meta charset="utf-8"><body>
+<script>
+const q = new URLSearchParams(location.search);
+const URL_ = q.get('url') || 'ws://127.0.0.1:8765';
+const SECONDS = Number(q.get('seconds') || 8);
+const PLAYERS = Number(q.get('players') || 1);
+const STUN = q.get('stun') === '1' ? [{ urls: 'stun:stun.l.google.com:19302' }] : [];
+const say = (...a) => console.log(...a);
+const exit = (code) => { console.log(`__EXIT__ ${code}`); };
+
+// One simulated player: signaling over WebSocket, two data channels.
+function connectPlayer(index) {
+  const out = {
+    index, welcome: null, firstSnapshotAt: null, count: 0, regressions: 0, lastTick: -1,
+    firstShip: null, lastShip: null, entityTypes: new Set(), states: new Set(), bytes: 0, windowStart: null, windowCount: 0,
+  };
+  const t0 = performance.now();
+  const connectionId = crypto.randomUUID();
+  const ws = new WebSocket(URL_);
+  const pc = new RTCPeerConnection({ iceServers: STUN });
+  const reliable = pc.createDataChannel('reliable');
+  const unreliable = pc.createDataChannel('unreliable', { ordered: false, maxRetransmits: 0 });
+  const env = (kind, payload) => JSON.stringify({ type: 'debris-signal', connectionId, kind, payload: JSON.stringify(payload) });
+
+  pc.onicecandidate = (e) => { if (e.candidate && ws.readyState === 1) ws.send(env('ice-candidate', e.candidate.toJSON())); };
+  ws.onopen = async () => { const o = await pc.createOffer(); await pc.setLocalDescription(o); ws.send(env('offer', o)); };
+  ws.onmessage = async (e) => {
+    const m = JSON.parse(e.data);
+    if (m.connectionId !== connectionId) return;
+    const payload = JSON.parse(m.payload);
+    if (m.kind === 'answer') await pc.setRemoteDescription(payload);
+    else if (m.kind === 'ice-candidate') await pc.addIceCandidate(payload);
+  };
+  ws.onerror = () => { say(`[p${index}] signaling error - is the server running at ${URL_}?`); out.failed = true; };
+
+  reliable.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'debris-welcome') {
+      out.welcome = m;
+      say(`[p${index}] welcome: slot ${m.slotIndex}, mode ${m.mode}, protocol v${m.protocolVersion}, +${(performance.now() - t0).toFixed(0)}ms`);
+    }
+  };
+  unreliable.onopen = () => {
+    // Hold turn + thrust + fire, so a working sim visibly moves this ship.
+    setInterval(() => {
+      if (!out.welcome || unreliable.readyState !== 'open') return;
+      unreliable.send(JSON.stringify({ type: 'debris-input', slotIndex: out.welcome.slotIndex, turnDirection: 1, isThrusting: true, isFiring: true, isHyperspacing: false }));
+    }, 50);
+  };
+  unreliable.onmessage = (e) => {
+    const s = JSON.parse(e.data);
+    if (s.type !== 'debris-snapshot') return;
+    const now = performance.now();
+    if (out.firstSnapshotAt === null) { out.firstSnapshotAt = now - t0; out.windowStart = now; }
+    out.count += 1; out.windowCount += 1; out.bytes += e.data.length;
+    if (s.tick <= out.lastTick) out.regressions += 1;
+    out.lastTick = Math.max(out.lastTick, s.tick);
+    out.states.add(s.state);
+    s.entities.forEach((en) => out.entityTypes.add(en.type));
+    const ship = s.ships.find((sh) => out.welcome && sh.slotIndex === out.welcome.slotIndex);
+    if (ship) { out.firstShip ??= ship; out.lastShip = ship; }
+    out.lastNow = now;
+  };
+  out.close = () => { ws.close(); pc.close(); };
+  return out;
+}
+
+const players = Array.from({ length: PLAYERS }, (_, i) => connectPlayer(i));
+say(`smoke: ${PLAYERS} player(s) -> ${URL_}, collecting for ${SECONDS}s after the first snapshot (waits up to 30s for the match to start)`);
+
+let collectingSince = null;
+const poll = setInterval(() => {
+  const started = players.every((p) => p.count > 0);
+  if (started && collectingSince === null) collectingSince = performance.now();
+  if (players.some((p) => p.failed)) { clearInterval(poll); exit(1); return; }
+  if (collectingSince !== null && performance.now() - collectingSince >= SECONDS * 1000) { clearInterval(poll); finish(); }
+  if (collectingSince === null && performance.now() > 30000) { clearInterval(poll); say('FAIL: no snapshots within 30s'); exit(1); }
+}, 200);
+
+function finish() {
+  let ok = true;
+  const check = (cond, msg) => { if (!cond) { ok = false; say(`  FAIL: ${msg}`); } };
+  players.forEach((p) => {
+    const span = (p.lastNow - p.windowStart) / 1000;
+    say(`[p${p.index}] snapshots: ${p.count} in ${span.toFixed(1)}s = ${(p.windowCount / span).toFixed(1)} Hz, ${(p.bytes / span / 1024).toFixed(0)} KB/s, first after ${p.firstSnapshotAt.toFixed(0)}ms, tick regressions ${p.regressions}`);
+    say(`[p${p.index}] game states: ${[...p.states].join(', ')}; entity types seen: ${[...p.entityTypes].join(', ') || 'none'}`);
+    if (p.firstShip && p.lastShip) {
+      const moved = Math.hypot(p.lastShip.x - p.firstShip.x, p.lastShip.y - p.firstShip.y);
+      const turned = Math.abs(p.lastShip.heading - p.firstShip.heading);
+      say(`[p${p.index}] ship slot ${p.welcome.slotIndex}: moved ${moved.toFixed(1)}px, heading changed ${turned.toFixed(2)}rad (input was turn+thrust+fire)`);
+      check(moved > 5 || turned > 0.1, 'ship did not respond to input - the host is not applying remote input');
+    } else {
+      check(false, 'never saw this player\'s own ship in a snapshot');
+    }
+    check(!!p.welcome, 'no welcome message received');
+    check(p.count >= SECONDS * 5, `too few snapshots (${p.count})`);
+  });
+  const slots = players.map((p) => p.welcome?.slotIndex);
+  check(new Set(slots).size === slots.length, `duplicate slot assignments: ${slots}`);
+  say(ok ? 'PASS' : 'FAIL');
+  players.forEach((p) => p.close());
+  exit(ok ? 0 : 1);
+}
+</script>

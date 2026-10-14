@@ -1,5 +1,6 @@
 import type { RtcConnection } from './RtcConnection';
 import { RtcSignalingClient, RtcSignalingHost } from './RtcSignaling';
+import type { HostSignalingChannel } from './SignalingChannel';
 import {
   decodeInput,
   decodeSnapshot,
@@ -21,15 +22,28 @@ import { decodeWelcome, type WelcomeMessage } from './NetworkHandshakeProtocol';
  * "this layer doesn't know about gameplay" boundary every networking
  * module here keeps.
  */
+export interface HostSessionOptions {
+  /** Picks the default snapshot rate (`NETWORK_SYNC`) - a LAN keeps the full simulation rate, an online match is throttled to save upload. */
+  readonly transport?: 'lan' | 'online';
+  /** Overrides the transport's default snapshot rate (the server's config file). */
+  readonly snapshotHz?: number;
+  /** How signaling reaches this host - LAN UDP by default, the dedicated server's WebSocket bridge online. */
+  readonly channel?: HostSignalingChannel;
+  /** STUN servers handed to every incoming connection (empty on a LAN). */
+  readonly iceServers?: RTCIceServer[];
+}
+
 export class NetworkHostSession {
-  private readonly host = new RtcSignalingHost();
+  private readonly host: RtcSignalingHost;
   private readonly connections: RtcConnection[] = [];
-  /** How often `GameScene` should call `broadcastSnapshot` - a LAN keeps the full simulation rate, an online match is throttled to save upload (`NETWORK_SYNC`). */
+  /** How often `GameScene` should call `broadcastSnapshot` (`NETWORK_SYNC`, or the options' override). */
   readonly snapshotHz: number;
 
-  constructor(transport: 'lan' | 'online' = 'lan') {
+  constructor(options: HostSessionOptions = {}) {
     this.snapshotHz =
-      transport === 'online' ? NETWORK_SYNC.onlineSnapshotHz : NETWORK_SYNC.lanSnapshotHz;
+      options.snapshotHz ??
+      (options.transport === 'online' ? NETWORK_SYNC.onlineSnapshotHz : NETWORK_SYNC.lanSnapshotHz);
+    this.host = new RtcSignalingHost(options.channel, options.iceServers);
   }
 
   /**

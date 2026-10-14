@@ -23,6 +23,50 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-14 — Online play, phase 3: the dedicated server shell
+
+`debris/server`: the unchanged game running headless in Electron, behind a
+WebSocket signaling endpoint. A smoke client joined 1 and then 4 players
+locally and **PASSED**: welcome + distinct slots, snapshots at 30.2 Hz
+(36 KB/s for 1 player, 111 KB/s each with 4 ships), ticks monotonic, and
+each ship moved and turned in response to the input the client sent - so
+the host really applies remote input with no local player at all.
+Verified on macOS against `127.0.0.1` only; not yet on the Linux server
+or over the internet (that is phase 7's real test).
+
+- **Server shell** (`server/src/`): `main.js` (Electron main: config,
+  logging, lifecycle, `setWebRTCUDPPortRange`, exits 1 on any startup
+  failure for systemd), `signaling.js` (WebSocket endpoint, 64 KB message
+  cap, text only, random per-socket peer ids), `config.js` (defaults +
+  validation, **unknown keys are errors**, all problems reported at once),
+  `logger.js`, `preload.js` (`window.debrisServer` bridge). A ready
+  handshake holds signaling messages that arrive before the page's
+  listener exists instead of dropping them.
+- **Game side**: `?server=1` boots Phaser `HEADLESS` with no audio and
+  `fps.forceSetTimeOut` (a hidden window gets requestAnimationFrame
+  paused) into `DedicatedServerScene`. It is a **temporary** lobby: lowest
+  free slot + welcome per client, match auto-starts
+  `dev.autoStartDelayMs` after the first join, host `GameScene` runs with
+  `sources: []` (no local ship). Phase 4 replaces it with the leader lobby.
+- **Signaling seam**: `RtcSignalingHost` now takes a `HostSignalingChannel`
+  (`SignalingChannel.ts`) - LAN UDP (`LanHostSignalingChannel`, behaviour
+  unchanged) or the server's bridge (`BridgeHostSignalingChannel`).
+  `RtcConnection` takes optional `iceServers`; the server passes its
+  configured STUN list. `NetworkHostSession` takes an options object
+  (`transport`, `snapshotHz`, `channel`, `iceServers`).
+- **Findings worth knowing**: the existing `GameScene` host path needed no
+  change for a zero-local-player host. Phaser `HEADLESS` creates every
+  texture and scene it needs. `sources: []` works because `??` only
+  replaces null/undefined.
+- **Known gaps, listed in `server/README.md`**: a connection arriving after
+  the match started would still be handed a slot (phase 4); half-open
+  handshakes leak until the connection closes (phase 8); no password or
+  rate limiting yet (phases 5, 8).
+- Tests: 18 `node --test` cases (config, signaling) plus the smoke client
+  (`npm run smoke`); the game's 356 tests, `tsc`, eslint and builds pass.
+- Node note: Electron's installer silently skipped writing `path.txt`
+  under Node 26; use Node 20/22 for `npm install` (also in the README).
+
 ## 2026-10-14 — Online play, phases 1-2: snapshot diet + MULTIPLAYER hub
 
 First two steps toward a dedicated internet server (`debris.rheinarts.de`).

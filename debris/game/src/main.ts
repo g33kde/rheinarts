@@ -1,12 +1,14 @@
 import Phaser from 'phaser';
 import { ARENA_HEIGHT, ARENA_WIDTH, COLORS } from './config/GameConfig';
 import { BootScene } from './scenes/BootScene';
+import { DedicatedServerScene } from './scenes/DedicatedServerScene';
 import { GameScene } from './scenes/GameScene';
 import { HighScoreScene } from './scenes/HighScoreScene';
 import { LanLobbyScene } from './scenes/LanLobbyScene';
 import { MultiplayerScene } from './scenes/MultiplayerScene';
 import { MenuScene } from './scenes/MenuScene';
 import { SplashScene } from './scenes/SplashScene';
+import { isServerMode } from './systems/ServerBridge';
 import { patchPhaserGamepadHoleBug } from './systems/PhaserGamepadPatch';
 import { mountTuningPanel } from './systems/TuningPanel';
 
@@ -15,8 +17,14 @@ import { mountTuningPanel } from './systems/TuningPanel';
 // works around.
 patchPhaserGamepadHoleBug();
 
+// Loaded by the dedicated server's hidden window (`debris/server`): no
+// renderer, no audio, and timer-driven frames - a hidden window gets
+// requestAnimationFrame paused/throttled, which would freeze the sim.
+const serverMode = isServerMode();
+
 new Phaser.Game({
-  type: Phaser.AUTO,
+  type: serverMode ? Phaser.HEADLESS : Phaser.AUTO,
+  ...(serverMode ? { audio: { noAudio: true }, fps: { forceSetTimeOut: true, target: 60 } } : {}),
   parent: 'app',
   width: ARENA_WIDTH,
   height: ARENA_HEIGHT,
@@ -40,7 +48,7 @@ new Phaser.Game({
       debug: false,
     },
   },
-  scene: [BootScene, SplashScene, MenuScene, GameScene, HighScoreScene, LanLobbyScene, MultiplayerScene],
+  scene: [BootScene, SplashScene, MenuScene, GameScene, HighScoreScene, LanLobbyScene, MultiplayerScene, DedicatedServerScene],
 });
 
 // Dev-only balance overlay for the v2 tuning pass - a no-op unless the
