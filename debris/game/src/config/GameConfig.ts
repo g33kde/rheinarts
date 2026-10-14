@@ -1031,3 +1031,38 @@ export const LAN_DISCOVERY = {
   announceIntervalMs: 1000, // "a live list," decided - frequent enough that a just-started host shows up within a second
   staleTimeoutMs: 3500, // a few missed announces (not just one dropped packet) before a game drops off the list - UDP on a LAN is reliable but not perfectly so
 } as const;
+
+/**
+ * How often a hosting simulation sends a `GameSnapshot`, per transport
+ * (docs/roadmap.md's "Windows + LAN multiplayer" - online phase 1).
+ * Measured over a real internet link: one 60 Hz stream of a mid-game
+ * snapshot is ~2.4 Mbps per client, so a 4-player server pays ~7 Mbps of
+ * upload. Online halves that; a LAN has bandwidth to spare, so it keeps
+ * the full 60 Hz. The host's own simulation always runs at full rate
+ * either way - this only throttles what clients get to see.
+ *
+ * The decimals trim the JSON a snapshot is encoded as: positions to a
+ * tenth of a pixel and angles to ~0.06 degrees are both far below what a
+ * screen can show. Timing fields are deliberately never rounded (see
+ * `roundForWire`).
+ *
+ * Starting guesses, not playtested over a long internet session.
+ */
+export const NETWORK_SYNC = {
+  lanSnapshotHz: 60,
+  onlineSnapshotHz: 30,
+  positionDecimals: 1,
+  angleDecimals: 3,
+} as const;
+
+/**
+ * The dedicated server the "Online" menu entry connects to. The address
+ * is baked in at build time (`VITE_DEBRIS_SERVER`, e.g. in `.env` or the
+ * CI environment) with this as the fallback; `OnlineServerConfig.ts`
+ * layers a localStorage override on top for testing against another
+ * server. Plain `ws://` for now - TLS is a later config change.
+ */
+export const ONLINE_SERVER = {
+  defaultUrl: 'ws://debris.rheinarts.de:8765',
+  storageKey: 'debris.onlineServerUrl',
+} as const;

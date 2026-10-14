@@ -629,19 +629,19 @@ export class MenuScene extends Phaser.Scene {
     this.scene.start('Game', { mode: this.mode, sources: this.sources, hulls: this.hulls });
   }
 
-  /** Desktop-only entry point for docs/roadmap.md's "Windows + LAN multiplayer" - absent entirely in a plain browser tab, same `isLanAvailable()` check `LanLobbyScene.ts` itself falls back on. */
+  /** Desktop-only entry point for docs/roadmap.md's "Windows + LAN multiplayer" (opens the LAN / ONLINE hub in `MultiplayerScene.ts`) - absent entirely in a plain browser tab, same `isLanAvailable()` check `LanLobbyScene.ts` itself falls back on. */
   private createLanLobbyLink(): void {
     if (!isLanAvailable()) return;
 
     this.add
-      .text(ARENA_WIDTH / 2, ARENA_HEIGHT - 40, 'LAN MULTIPLAYER', {
+      .text(ARENA_WIDTH / 2, ARENA_HEIGHT - 40, 'MULTIPLAYER', {
         fontFamily: 'monospace',
         fontSize: '20px',
         color: '#6b6f82',
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => this.scene.start('LanLobby'));
+      .on('pointerdown', () => this.scene.start('Multiplayer'));
   }
 
   /**

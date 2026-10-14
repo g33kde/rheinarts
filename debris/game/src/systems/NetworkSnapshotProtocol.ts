@@ -22,6 +22,8 @@
  * rendering a stale position after a newer one already arrived.
  */
 
+import { NETWORK_SYNC } from '../config/GameConfig';
+
 export type EntityDataValue = number | string | boolean;
 
 export interface EntitySnapshot {
@@ -111,8 +113,30 @@ export interface InputMessage {
   readonly isHyperspacing: boolean;
 }
 
+const POSITION_KEYS: ReadonlySet<string> = new Set(['x', 'y']);
+const ANGLE_KEYS: ReadonlySet<string> = new Set(['rotation', 'heading', 'facingAngleRad']);
+
+function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+/**
+ * `JSON.stringify` replacer that trims the float noise a snapshot would
+ * otherwise carry (17-digit positions and angles dominate its size).
+ * Keyed by property name on purpose, not "round every number": the timing
+ * fields (`nowMs`, `invulnerableUntilMs`, elapsed/phase timers) are
+ * compared against each other on the client and must stay exact.
+ */
+export function roundForWire(key: string, value: unknown): unknown {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return value;
+  if (POSITION_KEYS.has(key)) return roundTo(value, NETWORK_SYNC.positionDecimals);
+  if (ANGLE_KEYS.has(key)) return roundTo(value, NETWORK_SYNC.angleDecimals);
+  return value;
+}
+
 export function encodeSnapshot(snapshot: GameSnapshot): string {
-  return JSON.stringify(snapshot);
+  return JSON.stringify(snapshot, roundForWire);
 }
 
 function isShipSnapshot(value: unknown): value is ShipSnapshot {

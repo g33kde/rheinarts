@@ -23,6 +23,49 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-14 — Online play, phases 1-2: snapshot diet + MULTIPLAYER hub
+
+First two steps toward a dedicated internet server (`debris.rheinarts.de`).
+A spike on the real Linux box (`server/spike`, branch `debris-server-spike`)
+proved headless Electron under xvfb can host WebRTC at 60 Hz with the UDP
+port range pinned: 0% loss, RTT ~26 ms, **2.44 Mbps per client** for a
+mid-game-sized snapshot. This entry is the local-only groundwork; nothing
+here touches the network path itself, and LAN play is unchanged.
+
+- **Snapshot rate is per transport** (`NETWORK_SYNC` in `GameConfig.ts`):
+  LAN 60 Hz (as before), online 30 Hz. `NetworkHostSession` takes a
+  `'lan' | 'online'` transport and exposes `snapshotHz`; `GameScene` gates
+  `broadcastHostSnapshot` through the new pure `systems/SnapshotThrottle.ts`
+  (fixed schedule + half-frame tolerance so 30 Hz doesn't flip between
+  2- and 3-frame spacing; resyncs after a stall rather than bursting). It
+  is fed `performance.now()`, not game time, so a paused scene can't stall
+  it. The host's own simulation is untouched - only what clients see.
+- **Wire rounding** (`roundForWire` in `NetworkSnapshotProtocol.ts`):
+  `x`/`y` to 0.1 px, `rotation`/`heading`/`facingAngleRad` to 3 decimals,
+  via a `JSON.stringify` replacer keyed by property name. Timing fields
+  (`nowMs`, `invulnerableUntilMs`, elapsed/progress values) are
+  deliberately never rounded - the client compares them against each
+  other. Roughly 15-35% smaller per snapshot; combined with 30 Hz that
+  is ~0.5-0.8 Mbps per client.
+- **MULTIPLAYER hub** (`scenes/MultiplayerScene.ts`): the main-menu link is
+  now "MULTIPLAYER" (still desktop-only) and leads to LAN / ONLINE. LAN
+  opens the existing `LanLobbyScene` unchanged (its BACK now returns to the
+  hub). ONLINE is a placeholder showing which server the build points at
+  and that it isn't available yet - the server is phase 3+.
+- **Server address** (`ONLINE_SERVER`, `systems/OnlineServerConfig.ts`):
+  default `ws://debris.rheinarts.de:8765`, overridable at build time with
+  `VITE_DEBRIS_SERVER` or at runtime with the `debris.onlineServerUrl`
+  localStorage key. Only `ws://`/`wss://` values are accepted.
+- **Deliberately not done**: `LanLobbyScene` was not generalized into a
+  transport-agnostic lobby. There is no second transport to generalize
+  against yet, and doing it blind risks designing the wrong seam; it
+  happens with phase 5's online lobby.
+- **Not playtested**: the 30 Hz feel (smoothing factor is per rendered
+  frame, 0.35, unchanged) needs a real two-PC session before the rate is
+  treated as final.
+- Tests: `snapshotThrottle`, `onlineServerConfig`, and new rounding cases
+  in `networkSnapshotProtocol`. Full suite, `tsc`, eslint and the build pass.
+
 ## 2026-09-30 — Each hull gets its own silhouette
 
 v2.0 shipped a hull picker with three genuinely different ships -

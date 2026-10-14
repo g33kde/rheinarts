@@ -5,6 +5,7 @@ import {
   encodeInput,
   encodeSnapshot,
   isNewerTick,
+  roundForWire,
   type GameSnapshot,
   type InputMessage,
   type ShipSnapshot,
@@ -244,5 +245,45 @@ describe('isNewerTick', () => {
   it('is false for an equal or lesser tick', () => {
     expect(isNewerTick(4, 4)).toBe(false);
     expect(isNewerTick(3, 4)).toBe(false);
+  });
+});
+
+describe('snapshot rounding', () => {
+  const noisy: GameSnapshot = {
+    ...SNAPSHOT,
+    nowMs: 123456.789012345,
+    ships: [{ ...SHIP, x: 960.123456789012, y: 600.987654321098, heading: 1.5707963267948966, invulnerableUntilMs: 123457.789012345 }],
+    entities: [
+      { id: 1, type: 'asteroid', x: 100.04999, y: 200.06, rotation: 0.30000123456, data: { size: 'large', facingAngleRad: 2.0001234567, detonationProgress: 0.123456789 } },
+    ],
+  };
+
+  it('rounds positions to 0.1 and angles to 3 decimals', () => {
+    const decoded = decodeSnapshot(encodeSnapshot(noisy))!;
+    expect(decoded.ships[0]).toMatchObject({ x: 960.1, y: 601, heading: 1.571 });
+    expect(decoded.entities[0]).toMatchObject({ x: 100, y: 200.1, rotation: 0.3 });
+    expect(decoded.entities[0]!.data.facingAngleRad).toBe(2);
+  });
+
+  it('never rounds timing or progress fields', () => {
+    const decoded = decodeSnapshot(encodeSnapshot(noisy))!;
+    expect(decoded.nowMs).toBe(123456.789012345);
+    expect(decoded.ships[0]!.invulnerableUntilMs).toBe(123457.789012345);
+    expect(decoded.entities[0]!.data.detonationProgress).toBe(0.123456789);
+  });
+
+  it('leaves non-numbers and non-finite values alone', () => {
+    expect(roundForWire('x', 'text')).toBe('text');
+    expect(roundForWire('x', Infinity)).toBe(Infinity);
+    expect(roundForWire('size', 1.23456)).toBe(1.23456);
+  });
+
+  it('makes a typical snapshot materially smaller', () => {
+    const entities = Array.from({ length: 40 }, (_, i) => ({
+      id: i, type: 'asteroid', x: Math.random() * 1920, y: Math.random() * 1080,
+      rotation: Math.random() * 6.28, data: { size: 'large' },
+    }));
+    const snap: GameSnapshot = { ...SNAPSHOT, entities };
+    expect(encodeSnapshot(snap).length).toBeLessThan(JSON.stringify(snap).length * 0.85);
   });
 });

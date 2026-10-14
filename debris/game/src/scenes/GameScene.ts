@@ -94,6 +94,7 @@ import {
 import { Wreck } from '../entities/Wreck';
 import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
 import { computeBotIntent } from '../systems/DemoBot';
+import { SnapshotThrottle } from '../systems/SnapshotThrottle';
 import { computeStageRank, type StageRankResult } from '../systems/StageRank';
 import {
   BOSS_CHOICES,
@@ -480,6 +481,8 @@ export class GameScene extends Phaser.Scene {
   private remoteConnectionsBySlot: Map<number, RtcConnection> = new Map();
   /** Host only - increments once per broadcast, never reset mid-round; lets a client's own isNewerTick check discard an out-of-order snapshot. */
   private snapshotTick = 0;
+  /** Host only - decides which frames also send a snapshot, per the session's transport rate. Created lazily once `hostSession` is known. Fed `performance.now()`, not game time, so a paused scene's frozen clock can't stall it. */
+  private snapshotThrottle: SnapshotThrottle | undefined;
   /** Client only - the most recently received snapshot, applied once per frame in updateNetworkClient() rather than the instant it arrives (messages and frames aren't synchronized). */
   private latestSnapshot: GameSnapshot | undefined;
   /** Client only - this machine's own real input device, always the full P1 binding set (not split P1/P2 the way local co-op shares one keyboard) since a dedicated network client has nobody else to share it with. */
@@ -3429,7 +3432,10 @@ export class GameScene extends Phaser.Scene {
       this.enterStageClear();
     }
 
-    if (this.networkRole === 'host') this.broadcastHostSnapshot(nowMs);
+    if (this.networkRole === 'host' && this.hostSession) {
+      this.snapshotThrottle ??= new SnapshotThrottle(this.hostSession.snapshotHz);
+      if (this.snapshotThrottle.shouldSend(performance.now())) this.broadcastHostSnapshot(nowMs);
+    }
   }
 
   /**

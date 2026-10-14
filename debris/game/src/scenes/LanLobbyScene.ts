@@ -100,7 +100,7 @@ export class LanLobbyScene extends Phaser.Scene {
     this.statusText.setText('LAN Multiplayer');
     this.makeButton(ARENA_WIDTH / 2, 420, 'HOST GAME', () => this.showHostScreen());
     this.makeButton(ARENA_WIDTH / 2, 510, 'JOIN GAME', () => this.showJoinScreen());
-    this.makeButton(ARENA_WIDTH / 2, 600, 'BACK', () => this.scene.start('Menu'));
+    this.makeButton(ARENA_WIDTH / 2, 600, 'BACK', () => this.scene.start('Multiplayer'));
   }
 
   // ---------------------------------------------------------------

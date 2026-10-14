@@ -8,6 +8,7 @@ import {
   type GameSnapshot,
   type InputMessage,
 } from './NetworkSnapshotProtocol';
+import { NETWORK_SYNC } from '../config/GameConfig';
 import { decodeWelcome, type WelcomeMessage } from './NetworkHandshakeProtocol';
 
 /**
@@ -23,6 +24,13 @@ import { decodeWelcome, type WelcomeMessage } from './NetworkHandshakeProtocol';
 export class NetworkHostSession {
   private readonly host = new RtcSignalingHost();
   private readonly connections: RtcConnection[] = [];
+  /** How often `GameScene` should call `broadcastSnapshot` - a LAN keeps the full simulation rate, an online match is throttled to save upload (`NETWORK_SYNC`). */
+  readonly snapshotHz: number;
+
+  constructor(transport: 'lan' | 'online' = 'lan') {
+    this.snapshotHz =
+      transport === 'online' ? NETWORK_SYNC.onlineSnapshotHz : NETWORK_SYNC.lanSnapshotHz;
+  }
 
   /**
    * `onClientConnected` fires once per newly-connected client, before
