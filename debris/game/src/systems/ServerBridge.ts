@@ -18,13 +18,25 @@ export type ServerLogLevel = 'debug' | 'info' | 'warn' | 'error';
 /** The slice of the server's validated config file (`debris/server/src/config.js`) the game page reads. */
 export interface ServerRuntimeConfig {
   readonly name: string;
+  readonly motd: string;
+  /** Empty = no password. Compared in this page only; the main process never needs it. */
+  readonly password: string;
   readonly gameplay: {
     readonly defaultMode: 'cooperative' | 'competitive';
     readonly maxPlayers: number;
     readonly returnToLobbyDelayMs: number;
+    readonly reconnectGraceMs: number;
   };
   readonly network: { readonly stunServers: readonly string[] };
   readonly ops: { readonly snapshotHz: number };
+}
+
+/** What the main process answers a signaling-socket status query with (it adds the name, MOTD and password flag itself, from the config file). */
+export interface ServerStatus {
+  readonly protocolVersion: number;
+  readonly status: 'lobby' | 'inMatch';
+  readonly mode: 'cooperative' | 'competitive';
+  readonly players: { readonly current: number; readonly max: number };
 }
 
 declare global {
@@ -32,6 +44,7 @@ declare global {
     debrisServer?: {
       ready: () => void;
       getConfig: () => Promise<ServerRuntimeConfig>;
+      setStatus: (status: ServerStatus) => void;
       onSignal: (callback: (payload: { peerId: string; data: string }) => void) => () => void;
       sendSignal: (peerId: string, data: string) => void;
       log: (level: ServerLogLevel, message: string) => void;

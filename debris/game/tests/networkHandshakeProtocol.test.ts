@@ -65,6 +65,7 @@ const LOBBY: LobbyStateMessage = {
   maxPlayers: 4,
   leaderSlot: 1,
   slots: [1, 0],
+  heldSlots: [0],
 };
 
 describe('lobby state', () => {
@@ -73,7 +74,7 @@ describe('lobby state', () => {
   });
 
   it('accepts an empty lobby with no leader', () => {
-    const empty = { ...LOBBY, leaderSlot: -1, slots: [] };
+    const empty = { ...LOBBY, leaderSlot: -1, slots: [], heldSlots: [] };
     expect(decodeLobbyState(encodeLobbyState(empty))).toEqual(empty);
   });
 
@@ -83,6 +84,10 @@ describe('lobby state', () => {
     expect(decodeLobbyState(JSON.stringify({ ...LOBBY, status: 'paused' }))).toBeUndefined();
     expect(decodeLobbyState(JSON.stringify({ ...LOBBY, mode: 'singlePlayer' }))).toBeUndefined();
     expect(decodeLobbyState(JSON.stringify({ ...LOBBY, slots: [0, 'x'] }))).toBeUndefined();
+    expect(decodeLobbyState(JSON.stringify({ ...LOBBY, heldSlots: 'none' }))).toBeUndefined();
+    const withoutHeld: Record<string, unknown> = { ...LOBBY };
+    delete withoutHeld.heldSlots;
+    expect(decodeLobbyState(JSON.stringify(withoutHeld))).toBeUndefined();
     expect(decodeLobbyState(JSON.stringify({ ...LOBBY, leaderSlot: '1' }))).toBeUndefined();
     expect(decodeLobbyState(JSON.stringify({ ...LOBBY, type: 'debris-welcome' }))).toBeUndefined();
   });
@@ -111,8 +116,8 @@ describe('lobby commands', () => {
 });
 
 describe('reject', () => {
-  it('round-trips both reasons', () => {
-    for (const reason of ['full', 'matchInProgress'] as const) {
+  it('round-trips every reason', () => {
+    for (const reason of ['full', 'matchInProgress', 'badPassword', 'wrongVersion', 'badRequest'] as const) {
       const message = { type: 'debris-reject', reason } as const;
       expect(decodeReject(encodeReject(message))).toEqual(message);
     }

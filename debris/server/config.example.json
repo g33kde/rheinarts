@@ -13,7 +13,8 @@
   "gameplay": {
     "defaultMode": "cooperative",
     "maxPlayers": 4,
-    "returnToLobbyDelayMs": 8000
+    "returnToLobbyDelayMs": 8000,
+    "reconnectGraceMs": 30000
   },
 
   "ops": {

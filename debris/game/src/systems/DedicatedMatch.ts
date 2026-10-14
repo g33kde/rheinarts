@@ -20,8 +20,22 @@ export interface MatchResult {
   readonly participants: readonly number[];
 }
 
+/**
+ * What the server can do to a running match: freeze a dropped player's ship
+ * in place of eliminating it at once (online phase 5's reconnect window),
+ * bring it back, or give up on it.
+ */
+export interface DedicatedMatchControl {
+  /** `false`: the player's connection dropped - their ship goes inert and untouchable. `true`: they are back. */
+  setSlotConnected(slotIndex: number, connected: boolean): void;
+  /** The grace period ran out: eliminate the slot exactly as a permanent disconnect always did. */
+  eliminateSlot(slotIndex: number): void;
+}
+
 /** Passed to `GameScene` instead of a local player: it reports the result here, after showing the end screen for `returnToLobbyDelayMs`, rather than waiting for a keypress nobody is there to press. */
 export interface DedicatedMatchHooks {
   readonly returnToLobbyDelayMs: number;
   readonly onMatchEnded: (result: MatchResult) => void;
+  /** Called once the match's players exist, with the handle the server uses for the reconnect window. `GameScene` does not watch connections itself when running dedicated - the server owns that. */
+  readonly onReady: (control: DedicatedMatchControl) => void;
 }

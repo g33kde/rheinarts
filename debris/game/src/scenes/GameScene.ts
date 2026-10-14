@@ -94,7 +94,7 @@ import {
 import { Wreck } from '../entities/Wreck';
 import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
 import { computeBotIntent } from '../systems/DemoBot';
-import type { DedicatedMatchHooks, MatchResult } from '../systems/DedicatedMatch';
+import type { DedicatedMatchControl, DedicatedMatchHooks, MatchResult } from '../systems/DedicatedMatch';
 import { SnapshotThrottle } from '../systems/SnapshotThrottle';
 import { computeStageRank, type StageRankResult } from '../systems/StageRank';
 import {
@@ -486,6 +486,8 @@ export class GameScene extends Phaser.Scene {
   private snapshotThrottle: SnapshotThrottle | undefined;
   /** Dedicated server only (online phase 4) - set when no local player exists to press a key at GAME OVER; the round end reports here and the server decides what happens next. */
   private dedicatedHooks: DedicatedMatchHooks | undefined;
+  /** Dedicated server only - slots whose player dropped and may still reconnect: ship inert (their input is neutral) and kept invulnerable every frame, which also covers respawns and anything else that grants a shorter grace. */
+  private ghostSlots = new Set<number>();
   /** Client only - the most recently received snapshot, applied once per frame in updateNetworkClient() rather than the instant it arrives (messages and frames aren't synchronized). */
   private latestSnapshot: GameSnapshot | undefined;
   /** Client only - this machine's own real input device, always the full P1 binding set (not split P1/P2 the way local co-op shares one keyboard) since a dedicated network client has nobody else to share it with. */
@@ -726,6 +728,7 @@ export class GameScene extends Phaser.Scene {
     this.remoteInputsBySlot = data?.remoteInputsBySlot ?? new Map();
     this.remoteConnectionsBySlot = data?.remoteConnectionsBySlot ?? new Map();
     this.dedicatedHooks = data?.dedicated;
+    this.ghostSlots = new Set();
     this.snapshotThrottle = undefined;
     this.snapshotTick = 0;
     this.latestSnapshot = undefined;
@@ -755,7 +758,11 @@ export class GameScene extends Phaser.Scene {
     this.buildPlayers();
     if (this.networkRole === 'host') {
       this.addRemotePlayerSlots();
-      this.registerRemoteDisconnectHandlers();
+      // A dedicated server watches the connections itself (it holds a
+      // dropped player's seat for the reconnect window); a LAN host
+      // eliminates on the spot, as it always did.
+      if (this.dedicatedHooks) this.dedicatedHooks.onReady(this.createDedicatedControl());
+      else this.registerRemoteDisconnectHandlers();
     }
 
     this.asteroids = [];
@@ -1016,6 +1023,34 @@ export class GameScene extends Phaser.Scene {
   private registerRemoteDisconnectHandlers(): void {
     this.remoteConnectionsBySlot.forEach((connection, slotIndex) => {
       connection.onClosed(() => this.handleRemotePlayerDisconnected(slotIndex));
+    });
+  }
+
+  private createDedicatedControl(): DedicatedMatchControl {
+    return {
+      setSlotConnected: (slotIndex, connected) => {
+        if (!this.sys.isActive()) return;
+        if (connected) {
+          this.ghostSlots.delete(slotIndex);
+          // A short grace on the way back in, so rejoining isn't an instant death.
+          const player = this.players.find((p) => p.slotIndex === slotIndex);
+          if (player?.ship.isAlive) player.ship.grantInvulnerability(this.time.now, SHIP.respawnInvulnerabilityMs);
+        } else {
+          this.ghostSlots.add(slotIndex);
+        }
+      },
+      eliminateSlot: (slotIndex) => {
+        this.ghostSlots.delete(slotIndex);
+        this.handleRemotePlayerDisconnected(slotIndex);
+      },
+    };
+  }
+
+  /** Keeps every dropped player's ship untouchable until they return or the server gives up on them. */
+  private refreshGhostInvulnerability(nowMs: number): void {
+    if (this.ghostSlots.size === 0) return;
+    this.players.forEach((player) => {
+      if (this.ghostSlots.has(player.slotIndex) && player.ship.isAlive) player.ship.grantInvulnerability(nowMs, 1000);
     });
   }
 
@@ -3443,6 +3478,7 @@ export class GameScene extends Phaser.Scene {
       this.enterStageClear();
     }
 
+    if (this.networkRole === 'host') this.refreshGhostInvulnerability(nowMs);
     if (this.networkRole === 'host' && this.hostSession) {
       this.snapshotThrottle ??= new SnapshotThrottle(this.hostSession.snapshotHz);
       if (this.snapshotThrottle.shouldSend(performance.now())) this.broadcastHostSnapshot(nowMs);

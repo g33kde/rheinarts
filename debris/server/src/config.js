@@ -11,8 +11,7 @@
  *
  * Which keys the server already acts on (phase of the online plan):
  *   network.*, gameplay.*, ops.logLevel/logFile/snapshotHz  - in use
- *   name                  - in use (logs) / phase 5 (Online screen)
- *   motd, password        - phase 5
+ *   name, motd, password  - in use (Online screen, join check)
  *   ops.highscoreApi*     - phase 6
  */
 
@@ -26,7 +25,7 @@ const DEFAULTS = Object.freeze({
     udpPortRange: [50000, 50100],
     stunServers: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'],
   },
-  gameplay: { defaultMode: 'cooperative', maxPlayers: 4, returnToLobbyDelayMs: 8000 },
+  gameplay: { defaultMode: 'cooperative', maxPlayers: 4, returnToLobbyDelayMs: 8000, reconnectGraceMs: 30000 },
   ops: { logLevel: 'info', logFile: null, snapshotHz: 30, highscoreApiUrl: null, highscoreApiKey: null },
 });
 
@@ -77,7 +76,7 @@ function validateConfig(input = {}) {
   const gameplay = section(input, 'gameplay', problems);
   const ops = section(input, 'ops', problems);
   unknownKeys(network, ['bindAddress', 'signalingPort', 'udpPortRange', 'stunServers'], 'network.', problems);
-  unknownKeys(gameplay, ['defaultMode', 'maxPlayers', 'returnToLobbyDelayMs'], 'gameplay.', problems);
+  unknownKeys(gameplay, ['defaultMode', 'maxPlayers', 'returnToLobbyDelayMs', 'reconnectGraceMs'], 'gameplay.', problems);
   unknownKeys(ops, ['logLevel', 'logFile', 'snapshotHz', 'highscoreApiUrl', 'highscoreApiKey'], 'ops.', problems);
 
   const config = {
@@ -108,6 +107,7 @@ function validateConfig(input = {}) {
 
   if (!MODES.includes(config.gameplay.defaultMode)) problems.push(`"gameplay.defaultMode" must be one of: ${MODES.join(', ')}`);
   if (!isInt(config.gameplay.maxPlayers, 1, 4)) problems.push('"gameplay.maxPlayers" must be an integer 1-4');
+  if (!isInt(config.gameplay.reconnectGraceMs, 0, 300000)) problems.push('"gameplay.reconnectGraceMs" must be an integer 0-300000 (0 = a dropped player is eliminated at once)');
   if (!isInt(config.gameplay.returnToLobbyDelayMs, 0, 60000)) problems.push('"gameplay.returnToLobbyDelayMs" must be an integer 0-60000 (how long the end screen shows)');
 
   const o = config.ops;

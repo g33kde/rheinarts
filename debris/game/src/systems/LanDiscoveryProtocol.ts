@@ -28,8 +28,12 @@
  * Bumped to 3 for the dedicated server's lobby (online phase 4): new
  * reliable-channel messages (`debris-lobby`, `debris-lobby-command`,
  * `debris-reject`) that an older client would not understand.
+ *
+ * Bumped to 4 for online phase 5: clients now open with `debris-join`
+ * (password, local player count, reconnect token), the server answers with
+ * `debris-joined`, and the lobby state carries `heldSlots`.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export interface AnnouncePacket {
   readonly type: 'debris-announce';

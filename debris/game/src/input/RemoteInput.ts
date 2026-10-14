@@ -19,6 +19,14 @@ export class RemoteInput implements PlayerInput {
   isFiring = false;
   isHyperspacing = false;
 
+  /** Back to neutral - a dropped player's ship must not keep thrusting or firing on the last message that arrived. */
+  reset(): void {
+    this.turnDirection = 0;
+    this.isThrusting = false;
+    this.isFiring = false;
+    this.isHyperspacing = false;
+  }
+
   /** Called by `NetworkHostSession`'s own onClientInput callback whenever a fresh `InputMessage` arrives for this slot - the only thing that ever writes to this class's fields. */
   applyMessage(message: InputMessage): void {
     this.turnDirection = message.turnDirection;

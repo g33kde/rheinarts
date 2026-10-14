@@ -3,7 +3,7 @@
 // End-to-end smoke test for the dedicated server. Run it against a
 // running server:
 //
-//   electron tools/smoke-main.js [--url=ws://127.0.0.1:8765] [--scenario=play|lobby] [--players=1] [--mode=cooperative] [--seconds=6]
+//   electron tools/smoke-main.js [--url=ws://127.0.0.1:8765] [--scenario=play|lobby|session] [--players=1] [--mode=cooperative] [--seconds=6] [--password=...]
 //
 // It is a separate, plain-JS implementation of the client wire protocol
 // (signaling envelope, welcome, snapshot, input) on purpose: it checks the

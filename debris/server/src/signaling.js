@@ -7,6 +7,17 @@ const { WebSocketServer } = require('ws');
 // without letting anyone push megabytes through the signaling socket.
 const MAX_MESSAGE_BYTES = 64 * 1024;
 
+/** Cheap pre-check first, so the common case (an offer or ICE candidate) is not parsed twice. */
+function isStatusRequest(text) {
+  if (!text.includes('debris-status')) return false;
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null && parsed.type === 'debris-status';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The WebSocket signaling endpoint. It is deliberately dumb transport: it
  * hands every text message to `onMessage(peerId, data)` and sends replies
@@ -20,7 +31,7 @@ const MAX_MESSAGE_BYTES = 64 * 1024;
  * Resolves once the socket is actually listening, so callers can log the
  * bound port (useful with `port: 0` in tests) and fail fast on EADDRINUSE.
  */
-function createSignalingServer({ port, bindAddress = '0.0.0.0', onMessage, onPeerClosed = () => {}, logger }) {
+function createSignalingServer({ port, bindAddress = '0.0.0.0', onMessage, onPeerClosed = () => {}, getStatusReply = () => undefined, logger }) {
   return new Promise((resolve, reject) => {
     const sockets = new Map();
     const wss = new WebSocketServer({ port, host: bindAddress, maxPayload: MAX_MESSAGE_BYTES });
@@ -33,7 +44,16 @@ function createSignalingServer({ port, bindAddress = '0.0.0.0', onMessage, onPee
 
       socket.on('message', (data, isBinary) => {
         if (isBinary) return; // signaling is JSON text only
-        onMessage(peerId, data.toString());
+        const text = data.toString();
+        // A status query (the Online screen asking who is on) is answered
+        // right here: it needs no WebRTC and nothing from the game page
+        // beyond the status it last reported.
+        if (isStatusRequest(text)) {
+          const reply = getStatusReply();
+          if (reply !== undefined && socket.readyState === socket.OPEN) socket.send(JSON.stringify(reply));
+          return;
+        }
+        onMessage(peerId, text);
       });
       socket.on('close', () => {
         sockets.delete(peerId);
@@ -62,4 +82,4 @@ function createSignalingServer({ port, bindAddress = '0.0.0.0', onMessage, onPee
   });
 }
 
-module.exports = { createSignalingServer, MAX_MESSAGE_BYTES };
+module.exports = { createSignalingServer, isStatusRequest, MAX_MESSAGE_BYTES };

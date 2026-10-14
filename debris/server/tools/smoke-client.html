@@ -1,16 +1,22 @@
 <!doctype html><meta charset="utf-8"><body>
 <script>
 // Plain-JS client of the dedicated server's wire protocol, deliberately
-// independent of the game's own client code. Two scenarios (?scenario=):
-//   play   N players join, the leader starts, everyone's snapshots + input response are checked
-//   lobby  the lobby rules: leader-only commands, leadership handover, a joiner turned away
-//          mid-match, and the lobby reopening after the match ends
+// independent of the game's own client code. Scenarios (?scenario=):
+//   play     N players join, the leader starts, snapshots + input response are checked
+//   lobby    lobby rules: leader-only commands, leadership handover, a joiner turned away
+//            mid-match, the lobby reopening after the match
+//   session  join checks (password, version, malformed), the status query, two players on one PC,
+//            a full lobby, input bound to the connection's own slots, reconnect inside the window,
+//            takeover by a quick reconnect, and a seat released when the window closes
+//            (needs password "secret" and reconnectGraceMs 3000 in the server config)
 const q = new URLSearchParams(location.search);
 const URL_ = q.get('url') || 'ws://127.0.0.1:8765';
 const SCENARIO = q.get('scenario') || 'play';
 const SECONDS = Number(q.get('seconds') || 6);
 const PLAYERS = Number(q.get('players') || 1);
 const MODE = q.get('mode') || 'cooperative';
+const PASSWORD = q.get('password') || '';
+const PROTOCOL_VERSION = 4;
 const STUN = q.get('stun') === '1' ? [{ urls: 'stun:stun.l.google.com:19302' }] : [];
 const say = (...a) => console.log(...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -24,13 +30,24 @@ async function waitFor(fn, ms, label) {
   return null;
 }
 
+function queryStatus() {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(URL_);
+    const timer = setTimeout(() => { ws.close(); resolve(null); }, 5000);
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'debris-status' }));
+    ws.onmessage = (e) => { clearTimeout(timer); ws.close(); resolve(JSON.parse(e.data)); };
+    ws.onerror = () => { clearTimeout(timer); resolve(null); };
+  });
+}
+
 class Player {
   constructor(name) {
-    this.name = name; this.welcome = null; this.lobby = null; this.reject = null;
+    this.name = name; this.joined = null; this.lobby = null; this.reject = null; this.token = null;
     this.snaps = 0; this.lastTick = -1; this.regressions = 0; this.states = new Set(); this.types = new Set();
-    this.firstShip = null; this.lastShip = null; this.firstAt = null; this.bytes = 0; this.t0 = null; this.tLast = null;
-    this.lobbyHistory = [];
+    this.ships = new Map(); // slot -> { first, last }
+    this.firstAt = null; this.bytes = 0; this.tLast = null;
   }
+  get slots() { return this.joined ? this.joined.slotIndices : []; }
   async connect() {
     const connectionId = crypto.randomUUID();
     this.ws = new WebSocket(URL_);
@@ -47,45 +64,55 @@ class Player {
       if (m.kind === 'answer') await this.pc.setRemoteDescription(payload);
       else if (m.kind === 'ice-candidate') await this.pc.addIceCandidate(payload);
     };
-    this.ws.onerror = () => { this.signalingError = true; };
     reliable.onmessage = (e) => {
       const m = JSON.parse(e.data);
-      if (m.type === 'debris-welcome') this.welcome = m;
-      else if (m.type === 'debris-lobby') { this.lobby = m; this.lobbyHistory.push(m); }
+      if (m.type === 'debris-joined') { this.joined = m; this.token = m.token; }
+      else if (m.type === 'debris-lobby') this.lobby = m;
       else if (m.type === 'debris-reject') this.reject = m;
     };
     unreliable.onmessage = (e) => {
       const s = JSON.parse(e.data);
       if (s.type !== 'debris-snapshot') return;
       const now = performance.now();
-      if (this.firstAt === null) { this.firstAt = now; this.t0 = now; }
+      this.firstAt ??= now;
       this.tLast = now; this.snaps += 1; this.bytes += e.data.length;
       if (s.tick <= this.lastTick) this.regressions += 1;
       this.lastTick = Math.max(this.lastTick, s.tick);
       this.states.add(s.state);
       s.entities.forEach((en) => this.types.add(en.type));
-      const ship = this.welcome && s.ships.find((sh) => sh.slotIndex === this.welcome.slotIndex);
-      if (ship) { this.firstShip ??= ship; this.lastShip = ship; }
+      s.ships.forEach((sh) => {
+        const rec = this.ships.get(sh.slotIndex) || { first: sh, last: sh };
+        rec.last = sh; this.ships.set(sh.slotIndex, rec);
+      });
     };
     const open = await waitFor(() => reliable.readyState === 'open' && unreliable.readyState === 'open', 15000, `${this.name}: data channels to open`);
     return !!open;
   }
+  sendJoin(over = {}) {
+    this.reliable.send(JSON.stringify({ type: 'debris-join', protocolVersion: PROTOCOL_VERSION, password: PASSWORD, localPlayers: 1, ...over }));
+  }
+  sendRaw(text) { this.reliable.send(text); }
   command(action, extra = {}) { this.reliable.send(JSON.stringify({ type: 'debris-lobby-command', action, ...extra })); }
-  startInput(claimedSlot) {
+  startInput(slots = this.slots, claimed = null) {
+    this.stopInput();
     this.inputTimer = setInterval(() => {
-      if (!this.welcome || this.unreliable.readyState !== 'open') return;
-      const slotIndex = claimedSlot ?? this.welcome.slotIndex;
-      this.unreliable.send(JSON.stringify({ type: 'debris-input', slotIndex, turnDirection: 1, isThrusting: true, isFiring: true, isHyperspacing: false }));
+      if (this.unreliable.readyState !== 'open') return;
+      slots.forEach((slot) => this.unreliable.send(JSON.stringify({ type: 'debris-input', slotIndex: claimed ?? slot, turnDirection: 1, isThrusting: true, isFiring: true, isHyperspacing: false })));
     }, 50);
   }
-  resetSnapshots() { this.snaps = 0; this.firstShip = null; this.lastShip = null; this.firstAt = null; this.bytes = 0; }
-  close() { clearInterval(this.inputTimer); try { this.ws.close(); this.pc.close(); } catch (e) {} }
+  stopInput() { clearInterval(this.inputTimer); }
+  /** Forget where ships were, so `moved` measures from now. */
+  baseline() { this.ships.forEach((rec) => { rec.first = rec.last; }); }
+  moved(slot) { const r = this.ships.get(slot); return r ? Math.hypot(r.last.x - r.first.x, r.last.y - r.first.y) : 0; }
+  close() { this.stopInput(); try { this.ws.close(); this.pc.close(); } catch (e) {} }
 }
 
-async function join(name) {
+/** Connect and send a join; resolves once the server has answered (joined or rejected). */
+async function join(name, opts = {}) {
   const p = new Player(name);
   await p.connect();
-  await waitFor(() => p.welcome || p.reject, 5000, `${name}: welcome or reject`);
+  p.sendJoin(opts);
+  await waitFor(() => p.joined || p.reject, 5000, `${name}: joined or reject`);
   return p;
 }
 
@@ -94,8 +121,8 @@ async function scenarioPlay() {
   say(`play: ${PLAYERS} player(s) -> ${URL_}, mode ${MODE}, collecting ${SECONDS}s`);
   const players = [];
   for (let i = 0; i < PLAYERS; i += 1) players.push(await join(`p${i}`));
-  check(players.every((p) => p.welcome), 'every player got a welcome');
-  const slots = players.map((p) => p.welcome?.slotIndex);
+  check(players.every((p) => p.joined), 'every player was seated');
+  const slots = players.flatMap((p) => p.slots);
   check(new Set(slots).size === slots.length, `distinct slots ${JSON.stringify(slots)}`);
   const leader = players[0];
   await waitFor(() => leader.lobby && leader.lobby.slots.length === PLAYERS, 5000, 'lobby to list every player');
@@ -107,27 +134,23 @@ async function scenarioPlay() {
   players.forEach((p) => p.startInput());
   leader.command('start');
   await waitFor(() => players.every((p) => p.snaps > 0), 20000, 'snapshots to start for everyone');
-  players.forEach((p) => p.resetSnapshots());
+  players.forEach((p) => { p.snaps = 0; p.bytes = 0; p.firstAt = null; p.baseline(); });
   await sleep(SECONDS * 1000);
   for (const p of players) {
     const span = (p.tLast - p.firstAt) / 1000;
     say(`[${p.name}] ${p.snaps} snapshots in ${span.toFixed(1)}s = ${(p.snaps / span).toFixed(1)} Hz, ${(p.bytes / span / 1024).toFixed(0)} KB/s, tick regressions ${p.regressions}; states ${[...p.states]}; types ${[...p.types]}`);
     check(p.snaps >= SECONDS * 5, `${p.name}: enough snapshots (${p.snaps})`);
     check(p.regressions === 0, `${p.name}: ticks monotonic`);
-    if (p.firstShip && p.lastShip) {
-      const moved = Math.hypot(p.lastShip.x - p.firstShip.x, p.lastShip.y - p.firstShip.y);
-      const turned = Math.abs(p.lastShip.heading - p.firstShip.heading);
-      check(moved > 5 || turned > 0.1, `${p.name}: ship responded to input (moved ${moved.toFixed(0)}px, turned ${turned.toFixed(1)}rad)`);
-    } else check(false, `${p.name}: saw its own ship`);
+    check(p.moved(p.slots[0]) > 5, `${p.name}: ship responded to input (${p.moved(p.slots[0]).toFixed(0)}px)`);
   }
   players.forEach((p) => p.close());
 }
 
 async function scenarioLobby() {
-  say(`lobby: rules scenario -> ${URL_} (needs returnToLobbyDelayMs small, e.g. 1000, in the server config)`);
+  say(`lobby: rules scenario -> ${URL_} (needs returnToLobbyDelayMs small, e.g. 1000, no password)`);
   const a = await join('A'); const b = await join('B');
   say('1. two players join');
-  check(a.welcome?.slotIndex === 0 && b.welcome?.slotIndex === 1, `slots 0 and 1 (got ${a.welcome?.slotIndex}, ${b.welcome?.slotIndex})`);
+  check(a.slots[0] === 0 && b.slots[0] === 1, `slots 0 and 1 (got ${a.slots}, ${b.slots})`);
   await waitFor(() => b.lobby?.slots.length === 2, 5000, 'B sees both players');
   check(b.lobby?.leaderSlot === 0, 'A (first joiner) is the leader');
 
@@ -152,27 +175,25 @@ async function scenarioLobby() {
 
   say('5. a new player takes the freed slot but is not the leader');
   const c = await join('C');
-  check(c.welcome?.slotIndex === 0, `C reuses slot 0 (got ${c.welcome?.slotIndex})`);
+  check(c.slots[0] === 0, `C reuses slot 0 (got ${c.slots})`);
   await waitFor(() => b.lobby?.slots.length === 2, 5000, 'lobby to list two players');
   check(b.lobby?.leaderSlot === 1 && JSON.stringify(b.lobby?.slots) === '[1,0]', `leader stays B, join order [1,0] (got ${JSON.stringify(b.lobby?.slots)})`);
 
-  say('6. the new leader starts the match; input is bound to the sender, not to a claimed slot');
-  b.startInput(); c.startInput(1); // C claims to be slot 1 (B's slot) - must be ignored
+  say('6. the new leader starts the match; input is only honoured for the sender\'s own slot');
+  b.startInput(); c.startInput([0], 1); // C's input all claims slot 1 (B's) - must be ignored
   b.command('start');
   await waitFor(() => b.snaps > 5 && c.snaps > 5, 20000, 'snapshots for B and C');
   check(b.lobby?.status === 'inMatch', 'lobby reports inMatch');
   await sleep(2500);
-  const moved = (p) => p.firstShip && p.lastShip ? Math.hypot(p.lastShip.x - p.firstShip.x, p.lastShip.y - p.firstShip.y) : 0;
-  check(moved(b) > 5, `B's ship moved on B's input (${moved(b).toFixed(0)}px)`);
-  check(moved(c) > 5, `C's ship moved although all of C's input claimed B's slot (${moved(c).toFixed(0)}px)`);
-  // The spoof check is the check above: every one of C's messages claims B's slot (1).
-  // If the server trusted the claim, C's input would drive B's ship and C's own ship (slot 0)
-  // would never move. It moved, so input is attributed to the connection it arrived on.
-  check(c.lastShip && c.lastShip.slotIndex === 0, 'C is still slot 0 in the snapshots');
+  check(b.moved(1) > 5, `B's ship moved on B's input (${b.moved(1).toFixed(0)}px)`);
+  check(c.moved(0) < 5, `C's ship did NOT move on input that claimed B's slot (${c.moved(0).toFixed(0)}px)`);
+  c.baseline(); c.startInput(); // now honest
+  await sleep(2500);
+  check(c.moved(0) > 5, `C's ship moves once C sends input for its own slot (${c.moved(0).toFixed(0)}px)`);
 
   say('7. a joiner during a match is turned away');
   const d = await join('D');
-  check(d.reject?.reason === 'matchInProgress' && !d.welcome, `D rejected with matchInProgress (got ${JSON.stringify(d.reject)})`);
+  check(d.reject?.reason === 'matchInProgress' && !d.joined, `D rejected with matchInProgress (got ${JSON.stringify(d.reject)})`);
   d.close();
 
   say('8. everyone leaves -> match ends -> lobby reopens');
@@ -181,25 +202,113 @@ async function scenarioLobby() {
   const t0 = performance.now();
   while (performance.now() - t0 < 40000) {
     const probe = await join('E');
-    if (probe.welcome) { e = probe; break; }
+    if (probe.joined) { e = probe; break; }
     probe.close();
     await sleep(1000);
   }
   if (check(!!e, 'a new player could join again after the match ended')) {
     await waitFor(() => e.lobby, 5000, 'E to receive the lobby state');
-    check(e.welcome.slotIndex === 0, 'E gets slot 0');
+    check(e.slots[0] === 0, 'E gets slot 0');
     check(e.lobby?.status === 'lobby' && e.lobby?.leaderSlot === 0, 'E leads a fresh lobby');
-    check(e.lobby?.mode === 'cooperative' && e.welcome.mode === 'cooperative', 'mode reset to the default once the lobby emptied');
+    check(e.lobby?.mode === 'cooperative' && e.joined.mode === 'cooperative', 'mode reset to the default once the lobby emptied');
     e.close();
   }
 }
 
+async function scenarioSession() {
+  say(`session: join checks, status, two-player PC, reconnect -> ${URL_} (needs password "secret", reconnectGraceMs 3000, returnToLobbyDelayMs ~1000)`);
+
+  say('1. status query over the signaling socket alone');
+  const st = await queryStatus();
+  check(!!st && st.type === 'debris-status-reply', 'server answers a status query');
+  check(st?.passwordRequired === true && st?.status === 'lobby' && st?.players.current === 0 && st?.players.max === 4, `status: password required, lobby, 0/4 (got ${JSON.stringify(st)})`);
+  check(st?.protocolVersion === PROTOCOL_VERSION, `status carries protocol version ${PROTOCOL_VERSION}`);
+
+  say('2. bad joins are turned away without being seated');
+  const noPw = await join('noPw', { password: '' });
+  check(noPw.reject?.reason === 'badPassword', `no password -> badPassword (got ${JSON.stringify(noPw.reject)})`);
+  const badPw = await join('badPw', { password: 'nope' });
+  check(badPw.reject?.reason === 'badPassword', 'wrong password -> badPassword');
+  const oldVer = await join('oldVer', { password: 'secret', protocolVersion: 1 });
+  check(oldVer.reject?.reason === 'wrongVersion', 'old protocol version -> wrongVersion');
+  const garbage = new Player('garbage'); await garbage.connect(); garbage.sendRaw('{"type":"hello"}');
+  await waitFor(() => garbage.reject, 5000, 'garbage first message to be rejected');
+  check(garbage.reject?.reason === 'badRequest', 'a first message that is not a join -> badRequest');
+  const badLocal = await join('badLocal', { password: 'secret', localPlayers: 3 });
+  check(badLocal.reject?.reason === 'badRequest', 'localPlayers 3 -> badRequest');
+  [noPw, badPw, oldVer, garbage, badLocal].forEach((p) => p.close());
+  await sleep(500);
+  const st2 = await queryStatus();
+  check(st2?.players.current === 0, 'none of them took a seat');
+
+  say('3. a PC with two local players takes two slots');
+  const a = await join('A', { password: 'secret', localPlayers: 2 });
+  check(a.joined && JSON.stringify(a.slots) === '[0,1]', `A seated in slots [0,1] (got ${JSON.stringify(a.slots)})`);
+  check(typeof a.token === 'string' && a.token.length === 32, 'A got a 32-character token');
+  const b = await join('B', { password: 'secret' });
+  check(JSON.stringify(b.slots) === '[2]', `B seated in slot [2] (got ${JSON.stringify(b.slots)})`);
+  await waitFor(() => b.lobby?.slots.length === 3, 5000, 'lobby to list three players');
+  check(b.lobby?.leaderSlot === 0, 'A (first joiner, two players) is one leader');
+  const st3 = await queryStatus();
+  check(st3?.players.current === 3, `status shows 3/4 (got ${st3?.players.current})`);
+
+  say('4. all-or-nothing seating: two players do not fit in one free slot');
+  const big = await join('big', { password: 'secret', localPlayers: 2 });
+  check(big.reject?.reason === 'full', `two-player PC with 1 slot free -> full (got ${JSON.stringify(big.reject)})`);
+  big.close();
+
+  say('5. leader starts; input works for both of A\'s slots and only for them');
+  a.startInput(); // both of A's slots
+  a.command('start');
+  await waitFor(() => a.snaps > 5 && b.snaps > 5, 20000, 'snapshots for A and B');
+  await sleep(2500);
+  check(a.moved(0) > 5 && a.moved(1) > 5, `both of A's ships responded (${a.moved(0).toFixed(0)}px, ${a.moved(1).toFixed(0)}px)`);
+  // A also claims B's slot; B sends nothing, so B's ship must stay put.
+  a.startInput([0, 1, 2]);
+  b.baseline();
+  await sleep(2000);
+  check(b.moved(2) < 5, `A cannot drive B's ship by claiming its slot (${b.moved(2).toFixed(0)}px)`);
+  a.startInput();
+
+  say('6. B drops mid-match, then comes back inside the window with its token');
+  const bToken = b.token;
+  b.close();
+  await waitFor(() => a.lobby?.heldSlots.includes(2), 5000, 'lobby to show slot 2 as held');
+  check(JSON.stringify(a.lobby?.heldSlots) === '[2]' && a.lobby.slots.includes(2), 'slot 2 is held, not released');
+  const b2 = await join('B2', { password: 'secret', token: bToken });
+  check(b2.joined?.resumed === true && b2.joined?.inMatch === true && JSON.stringify(b2.slots) === '[2]', `B2 resumed slot 2 inside a match (got ${JSON.stringify(b2.joined && { r: b2.joined.resumed, m: b2.joined.inMatch, s: b2.slots })})`);
+  check(b2.token === bToken, 'the token stays the same');
+  await waitFor(() => b2.snaps > 3, 10000, 'B2 to receive snapshots');
+  await waitFor(() => (a.lobby?.heldSlots.length ?? 1) === 0, 5000, 'held slots to clear');
+  check(a.lobby?.heldSlots.length === 0, 'slot 2 is no longer held');
+
+  say('7. a quick reconnect takes the seat over from a still-open connection');
+  const a2 = await join('A2', { password: 'secret', localPlayers: 2, token: a.token });
+  check(a2.joined?.resumed === true && JSON.stringify(a2.slots) === '[0,1]', `A2 took over slots [0,1] (got ${JSON.stringify(a2.slots)})`);
+  await waitFor(() => a2.snaps > 3, 10000, 'A2 to receive snapshots');
+  a.close(); // the superseded connection closing must not release or hold anything
+  await sleep(1500);
+  check(a2.lobby?.slots.length === 3 && (a2.lobby?.heldSlots.length ?? 1) === 0, `all three seats intact (slots ${JSON.stringify(a2.lobby?.slots)}, held ${JSON.stringify(a2.lobby?.heldSlots)})`);
+
+  say('8. a seat is released when the window closes without a return');
+  const b2Token = b2.token;
+  b2.close();
+  await waitFor(() => a2.lobby?.heldSlots.includes(2), 5000, 'slot 2 held again');
+  await waitFor(() => !a2.lobby?.slots.includes(2), 10000, 'slot 2 to be released after the grace period');
+  check(JSON.stringify(a2.lobby?.slots) === '[0,1]', `slot 2 released, A's two slots remain (slots ${JSON.stringify(a2.lobby?.slots)})`);
+  const late = await join('late', { password: 'secret', token: b2Token });
+  check(late.reject?.reason === 'matchInProgress' && !late.joined, `a late token no longer works: turned away mid-match (got ${JSON.stringify(late.reject)})`);
+  late.close(); a2.close();
+}
+
 (async () => {
   try {
-    if (SCENARIO === 'lobby') await scenarioLobby(); else await scenarioPlay();
+    if (SCENARIO === 'lobby') await scenarioLobby();
+    else if (SCENARIO === 'session') await scenarioSession();
+    else await scenarioPlay();
   } catch (err) { check(false, `unexpected error: ${err && err.stack || err}`); }
   say(failures.length === 0 ? 'PASS' : `FAIL (${failures.length})`);
   console.log(`__EXIT__ ${failures.length === 0 ? 0 : 1}`);
 })();
-setTimeout(() => { say('FAIL: scenario exceeded 120s'); console.log('__EXIT__ 1'); }, 120000);
+setTimeout(() => { say('FAIL: scenario exceeded 150s'); console.log('__EXIT__ 1'); }, 150000);
 </script>

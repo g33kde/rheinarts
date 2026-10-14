@@ -90,6 +90,8 @@ export interface LobbyStateMessage {
   readonly leaderSlot: number;
   /** Occupied slots in join order (the first is the leader, unless nobody is). */
   readonly slots: readonly number[];
+  /** Slots whose player dropped mid-match and may still reconnect (online phase 5) - drawn as "reconnecting" rather than gone. Always empty outside a match. */
+  readonly heldSlots: readonly number[];
 }
 
 /** Client -> server. Honoured only from the leader, and only while the lobby is gathering. */
@@ -98,9 +100,13 @@ export type LobbyCommandMessage =
   | { readonly type: 'debris-lobby-command'; readonly action: 'setMode'; readonly mode: LobbyMode };
 
 /** Server -> a connection it will not seat, sent right before it closes it. */
+export type RejectReason = 'full' | 'matchInProgress' | 'badPassword' | 'wrongVersion' | 'badRequest';
+
+const REJECT_REASONS: readonly RejectReason[] = ['full', 'matchInProgress', 'badPassword', 'wrongVersion', 'badRequest'];
+
 export interface RejectMessage {
   readonly type: 'debris-reject';
-  readonly reason: 'full' | 'matchInProgress';
+  readonly reason: RejectReason;
 }
 
 function parseObject(raw: string): Record<string, unknown> | undefined {
@@ -127,14 +133,16 @@ export function decodeLobbyState(raw: string): LobbyStateMessage | undefined {
   if (c.status !== 'lobby' && c.status !== 'inMatch') return undefined;
   if (!isMode(c.mode)) return undefined;
   if (typeof c.maxPlayers !== 'number' || typeof c.leaderSlot !== 'number') return undefined;
-  if (!Array.isArray(c.slots) || !c.slots.every((s) => Number.isInteger(s))) return undefined;
+  const isSlotList = (v: unknown): v is number[] => Array.isArray(v) && v.every((s) => Number.isInteger(s));
+  if (!isSlotList(c.slots) || !isSlotList(c.heldSlots)) return undefined;
   return {
     type: 'debris-lobby',
     status: c.status,
     mode: c.mode,
     maxPlayers: c.maxPlayers,
     leaderSlot: c.leaderSlot,
-    slots: c.slots as number[],
+    slots: c.slots,
+    heldSlots: c.heldSlots,
   };
 }
 
@@ -159,6 +167,6 @@ export function encodeReject(message: RejectMessage): string {
 export function decodeReject(raw: string): RejectMessage | undefined {
   const c = parseObject(raw);
   if (!c || c.type !== 'debris-reject') return undefined;
-  if (c.reason !== 'full' && c.reason !== 'matchInProgress') return undefined;
-  return { type: 'debris-reject', reason: c.reason };
+  if (!REJECT_REASONS.includes(c.reason as RejectReason)) return undefined;
+  return { type: 'debris-reject', reason: c.reason as RejectReason };
 }

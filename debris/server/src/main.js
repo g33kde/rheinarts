@@ -96,12 +96,29 @@ app.whenReady().then(async () => {
   let pageReady = false;
   const held = [];
 
+  // The lobby facts the game page last reported; the config supplies the rest.
+  let lastStatus;
+  const statusReply = () => {
+    if (!lastStatus) return undefined; // the page is still booting - the client just retries
+    return {
+      type: 'debris-status-reply',
+      protocolVersion: lastStatus.protocolVersion,
+      name: config.name,
+      motd: config.motd,
+      passwordRequired: config.password !== '',
+      status: lastStatus.status,
+      mode: lastStatus.mode,
+      players: lastStatus.players,
+    };
+  };
+
   let signaling;
   try {
     signaling = await createSignalingServer({
       port: config.network.signalingPort,
       bindAddress: config.network.bindAddress,
       logger,
+      getStatusReply: statusReply,
       onMessage: (peerId, data) => {
         if (!pageReady) held.push({ peerId, data });
         else if (!wc.isDestroyed()) wc.send('server:signal-in', { peerId, data });
@@ -114,6 +131,17 @@ app.whenReady().then(async () => {
   logger.info(`signaling listening on ws://${config.network.bindAddress}:${signaling.port}`);
 
   ipcMain.handle('server:config', () => config);
+  ipcMain.on('server:status', (_event, status) => {
+    const valid =
+      status &&
+      Number.isInteger(status.protocolVersion) &&
+      (status.status === 'lobby' || status.status === 'inMatch') &&
+      (status.mode === 'cooperative' || status.mode === 'competitive') &&
+      status.players &&
+      Number.isInteger(status.players.current) &&
+      Number.isInteger(status.players.max);
+    if (valid) lastStatus = status;
+  });
   ipcMain.on('server:ready', () => {
     pageReady = true;
     held.splice(0).forEach((payload) => wc.send('server:signal-in', payload));

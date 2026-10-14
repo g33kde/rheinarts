@@ -6,6 +6,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('debrisServer', {
   // Tells the main process this page's signaling listener is registered, so held messages can be delivered.
   ready: () => ipcRenderer.send('server:ready'),
+  // What the game page last knew about the lobby (who is on, in a match or not) - the main process answers signaling-socket status queries from it.
+  setStatus: (status) => ipcRenderer.send('server:status', status),
   getConfig: () => ipcRenderer.invoke('server:config'),
   onSignal: (callback) => {
     const listener = (_event, payload) => callback(payload);

@@ -78,6 +78,10 @@ test('mode, players, log level and hz validation', () => {
   assert.ok(problemsOf({ gameplay: { returnToLobbyDelayMs: -1 } }).length > 0);
   assert.ok(problemsOf({ gameplay: { returnToLobbyDelayMs: 60001 } }).length > 0);
   assert.deepEqual(problemsOf({ gameplay: { returnToLobbyDelayMs: 0 } }), []);
+  assert.equal(validateConfig({}).gameplay.reconnectGraceMs, 30000);
+  assert.deepEqual(problemsOf({ gameplay: { reconnectGraceMs: 0 } }), []);
+  assert.ok(problemsOf({ gameplay: { reconnectGraceMs: -1 } }).length > 0);
+  assert.ok(problemsOf({ gameplay: { reconnectGraceMs: 300001 } }).length > 0);
   assert.ok(problemsOf({ ops: { logLevel: 'verbose' } }).length > 0);
   assert.ok(problemsOf({ ops: { snapshotHz: 61 } }).length > 0);
 });
