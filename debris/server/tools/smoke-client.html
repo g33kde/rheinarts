@@ -11,6 +11,8 @@
 //            (needs a password set on the server - pass it with --password - and reconnectGraceMs 3000)
 //   scoring  one player spins and fires until it scores, then leaves; the match ends, the server posts the
 //            score, and smoke-main.js (given --api) checks the real API's online board for it
+//   leave    a player chooses to LEAVE mid-match: the seat and ship go at once - unlike a dropped connection,
+//            which holds the seat for the reconnect window
 //   bot      joins as one more player and leaves ?leaveAfter= ms after the match starts (used by
 //            client-e2e-main.js as the opponent that disappears)
 const q = new URLSearchParams(location.search);
@@ -52,7 +54,7 @@ class Player {
     this.ships = new Map(); // slot -> { first, last }
     this.firstAt = null; this.bytes = 0; this.tLast = null;
     // one-shot effects (sounds, bursts, shake, popups) seen in snapshots
-    this.eventSeen = new Map(); this.eventKinds = new Set(); this.sfxSeen = new Set(); this.musicSeen = new Set(); this.idsAscending = true; this.maxEventId = 0;
+    this.wrecksMax = 0; this.wreckSample = null; this.eventSeen = new Map(); this.eventKinds = new Set(); this.sfxSeen = new Set(); this.musicSeen = new Set(); this.idsAscending = true; this.maxEventId = 0;
   }
   get slots() { return this.joined ? this.joined.slotIndices : []; }
   async connect() {
@@ -87,6 +89,7 @@ class Player {
       this.lastTick = Math.max(this.lastTick, s.tick);
       this.states.add(s.state);
       this.musicSeen.add(s.music);
+      if ((s.wrecks || []).length > this.wrecksMax) { this.wrecksMax = s.wrecks.length; this.wreckSample = s.wrecks; }
       (s.events || []).forEach((ev) => {
         const seenBefore = this.eventSeen.get(ev.id) || 0;
         this.eventSeen.set(ev.id, seenBefore + 1);
@@ -161,6 +164,7 @@ async function scenarioPlay() {
     check(p.moved(p.slots[0]) > 5, `${p.name}: ship responded to input (${p.moved(p.slots[0]).toFixed(0)}px)`);
     // The one-shot effects: these ships fire constantly, so real shot sounds must show up.
     const repeats = [...p.eventSeen.values()];
+    say(`[${p.name}] terrain: ${p.wrecksMax} wreck(s)${p.wreckSample ? ' ' + JSON.stringify(p.wreckSample) : ''}`);
     say(`[${p.name}] effects: ${p.eventSeen.size} distinct events, kinds ${[...p.eventKinds]}, sounds ${[...p.sfxSeen]}, music ${[...p.musicSeen]}`);
     check(p.sfxSeen.has('shot'), `${p.name}: the firing was announced as a 'shot' sound effect`);
     check(repeats.length > 0 && Math.max(...repeats) <= 3, `${p.name}: no effect repeats more than 3 times (max ${Math.max(0, ...repeats)})`);
@@ -360,6 +364,38 @@ async function scenarioScoring() {
   await sleep(12000);
 }
 
+async function scenarioLeave() {
+  say(`leave: a deliberate leave frees the seat at once; a drop holds it -> ${URL_} (needs reconnectGraceMs >= 3000)`);
+  const a = await join('A', { password: PASSWORD });
+  const b = await join('B', { password: PASSWORD });
+  const c = await join('C', { password: PASSWORD });
+  if (!check(!!(a.joined && b.joined && c.joined), 'three players seated')) return;
+  await waitFor(() => a.lobby?.slots.length === 3, 5000, 'lobby to list three');
+  [a, b, c].forEach((p) => p.startInput());
+  a.command('start');
+  await waitFor(() => a.snaps > 5 && b.snaps > 5 && c.snaps > 5, 20000, 'snapshots for all three');
+
+  say('1. B chooses to leave');
+  const t0 = performance.now();
+  b.reliable.send(JSON.stringify({ type: 'debris-leave' }));
+  await waitFor(() => !a.lobby?.slots.includes(b.slots[0]), 3000, 'B\'s slot to leave the lobby');
+  const took = performance.now() - t0;
+  check(!a.lobby?.slots.includes(b.slots[0]), `B's seat is gone from the lobby (${took.toFixed(0)}ms after the message)`);
+  check((a.lobby?.heldSlots.length ?? 1) === 0, 'it is released, not held for the reconnect window');
+  check(took < 2000, `and promptly - far faster than the 3s a dropped player is held (${took.toFixed(0)}ms)`);
+  b.close();
+
+  say('2. C just drops: that one IS held');
+  c.close();
+  await waitFor(() => a.lobby?.heldSlots.includes(c.slots[0]), 5000, 'C\'s slot to be held');
+  check(a.lobby?.heldSlots.includes(c.slots[0]) && a.lobby.slots.includes(c.slots[0]), 'a dropped connection keeps its seat, shown as held');
+
+  say('3. the leaver cannot come back with its token');
+  const back = await join('B2', { password: PASSWORD, token: b.token });
+  check(!back.joined?.resumed, 'a token from a seat that was given up does not resume it');
+  back.close(); a.close();
+}
+
 async function scenarioBot() {
   const leaveAfter = Number(q.get('leaveAfter') || 3000);
   const bot = await join('bot', { password: PASSWORD });
@@ -376,6 +412,7 @@ async function scenarioBot() {
   try {
     if (SCENARIO === 'bot') await scenarioBot();
     else if (SCENARIO === 'scoring') await scenarioScoring();
+    else if (SCENARIO === 'leave') await scenarioLeave();
     else if (SCENARIO === 'lobby') await scenarioLobby();
     else if (SCENARIO === 'session') await scenarioSession();
     else await scenarioPlay();

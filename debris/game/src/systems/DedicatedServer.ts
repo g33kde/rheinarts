@@ -6,6 +6,7 @@ import { LEADERBOARD_VERSION } from './HighScoreApi';
 import { PROTOCOL_VERSION } from './LanDiscoveryProtocol';
 import {
   decodeLobbyCommand,
+  isLeave,
   encodeLobbyState,
   encodeReject,
   type LobbyCommandMessage,
@@ -188,6 +189,10 @@ export class DedicatedServer {
         else this.handleJoin(session, join);
         return;
       }
+      if (isLeave(raw)) {
+        this.leaveNow(session);
+        return;
+      }
       const command = decodeLobbyCommand(raw);
       if (command) this.onCommand(session.owner, command);
     });
@@ -326,6 +331,18 @@ export class DedicatedServer {
       return;
     }
     this.releaseOwner(owner, true);
+  }
+
+  /** The player chose to leave: free the seat now (eliminating their ships mid-match) instead of holding it as if the link had dropped. */
+  private leaveNow(session: Session): void {
+    const owner = session.owner;
+    if (owner === undefined || session.superseded) return;
+    session.superseded = true; // the close that follows must not hold the seat we are releasing
+    this.sessionByConnection.delete(session.connection);
+    if (this.sessionByOwner.get(owner) === session) this.sessionByOwner.delete(owner);
+    this.env.log('info', `Player in slot${session.slots.length > 1 ? 's' : ''} ${session.slots.join('+')} chose to leave`);
+    this.releaseOwner(owner, true);
+    setTimeout(() => session.connection.close(), 200);
   }
 
   private releaseExpiredSeats(): void {

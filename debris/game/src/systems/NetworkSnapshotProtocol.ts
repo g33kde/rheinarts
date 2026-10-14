@@ -91,6 +91,33 @@ export interface ShopSnapshot {
   readonly panels: readonly ShopPanelSnapshot[];
 }
 
+/**
+ * One piece of static arena wreckage (the stage's terrain): solid, blocks
+ * ships and shots, never moves. Sent as a compact record rather than a
+ * generic entity - there are few, they never change, and `seed` (an
+ * integer, not the placement's float) lets the client draw the *exact*
+ * silhouette the host built (`entities/Wreck.ts`'s `drawWreck`).
+ */
+export interface WreckSnapshot {
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+  readonly seed: number;
+}
+
+/** Strict check of one wreck, bounded like everything that arrives off the network. */
+export function isWreckSnapshot(value: unknown): value is WreckSnapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const w = value as Record<string, unknown>;
+  const finite = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+  return finite(w.x, -10000, 10000) && finite(w.y, -10000, 10000) && finite(w.radius, 1, 2000) && Number.isInteger(w.seed) && finite(w.seed, 0, 4294967296);
+}
+
+/** Terrain is decorative to the client (the host does all the colliding), so a bad piece is dropped on its own, never the whole snapshot. */
+export function sanitizeWrecks(raw: unknown): WreckSnapshot[] {
+  return Array.isArray(raw) ? raw.filter(isWreckSnapshot).slice(0, 32) : [];
+}
+
 export interface GameSnapshot {
   readonly type: 'debris-snapshot';
   readonly tick: number;
@@ -105,6 +132,10 @@ export interface GameSnapshot {
   readonly shop: ShopSnapshot | undefined;
   /** One-shot effects fired recently (sounds, bursts, shake, popups) - each repeats in a few consecutive snapshots and the client plays it once (`systems/GameEvents.ts`). */
   readonly events: readonly GameEvent[];
+  /** The stage's static terrain. Absent from older hosts (read as none). */
+  readonly wrecks: readonly WreckSnapshot[];
+  /** Seconds left on the Fracture's "COLLECT SCRAP" countdown, or null when there is none. */
+  readonly scrapSeconds: number | null;
   /** Which stage music the host is playing. State rather than an event: a client that joins late, or misses a packet, still lands on the right track. */
   readonly music: MusicId;
 }
@@ -118,7 +149,7 @@ export interface InputMessage {
   readonly isHyperspacing: boolean;
 }
 
-const POSITION_KEYS: ReadonlySet<string> = new Set(['x', 'y']);
+const POSITION_KEYS: ReadonlySet<string> = new Set(['x', 'y', 'radius']); // `radius`: a wreck's drawn size - a tenth of a pixel is invisible
 const ANGLE_KEYS: ReadonlySet<string> = new Set(['rotation', 'heading', 'facingAngleRad']);
 
 function roundTo(value: number, decimals: number): number {
@@ -280,6 +311,11 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
     state: candidate.state,
     overlayLines: candidate.overlayLines as string[],
     events: sanitizeEvents(candidate.events),
+    wrecks: sanitizeWrecks(candidate.wrecks),
+    scrapSeconds:
+      typeof candidate.scrapSeconds === 'number' && Number.isFinite(candidate.scrapSeconds) && candidate.scrapSeconds >= 0 && candidate.scrapSeconds <= 600
+        ? Math.ceil(candidate.scrapSeconds)
+        : null,
     music,
     shop: candidate.shop as ShopSnapshot | undefined,
   };

@@ -120,3 +120,13 @@ export function isClearOfEdges(
     position.y + radius <= arenaHeight - edgeMarginPx
   );
 }
+
+/**
+ * The integer a wreck's silhouette generator starts from, derived from the
+ * placement's `shapeSeed` (a float in [0,1)). Sent over the network as this
+ * integer: re-deriving it from a float on the other side could round
+ * differently and draw a different rock.
+ */
+export function wreckSeedFrom(shapeSeed: number): number {
+  return Math.floor(shapeSeed * 100000) + 1;
+}

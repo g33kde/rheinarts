@@ -46,6 +46,8 @@ const SNAPSHOT: GameSnapshot = {
   overlayLines: [],
   shop: undefined,
   events: [],
+  wrecks: [],
+  scrapSeconds: null,
   music: 'gameplay',
 };
 
@@ -365,5 +367,56 @@ describe('effects in a snapshot', () => {
     expect(decodeSnapshot(JSON.stringify(raw))!.music).toBe('gameplay');
     raw.music = 'polka';
     expect(decodeSnapshot(JSON.stringify(raw))!.music).toBe('gameplay');
+  });
+});
+
+describe('terrain and the scrap countdown in a snapshot', () => {
+  const wreck = { x: 640.5, y: 400.25, radius: 90, seed: 54321 };
+
+  it('round-trips wrecks, with positions rounded like every other position and the seed exact', () => {
+    const decoded = decodeSnapshot(encodeSnapshot({ ...SNAPSHOT, wrecks: [{ x: 640.04999, y: 400.26, radius: 90, seed: 4294967295 }] }))!;
+    expect(decoded.wrecks).toEqual([{ x: 640, y: 400.3, radius: 90, seed: 4294967295 }]);
+  });
+
+  it('rounds a wreck radius like a position, so it is not sent as an 18-digit float', () => {
+    const decoded = decodeSnapshot(encodeSnapshot({ ...SNAPSHOT, wrecks: [{ x: 1, y: 2, radius: 43.055852126191425, seed: 24274 }] }))!;
+    expect(decoded.wrecks[0]!.radius).toBe(43.1);
+    expect(encodeSnapshot({ ...SNAPSHOT, wrecks: [{ x: 1, y: 2, radius: 43.055852126191425, seed: 24274 }] })).not.toContain('43.0558');
+  });
+
+  it('keeps several wrecks in order', () => {
+    const decoded = decodeSnapshot(encodeSnapshot({ ...SNAPSHOT, wrecks: [wreck, { ...wreck, x: 100, seed: 7 }] }))!;
+    expect(decoded.wrecks.map((w) => w.seed)).toEqual([54321, 7]);
+  });
+
+  it('drops a malformed wreck on its own and keeps the snapshot', () => {
+    const raw = JSON.parse(encodeSnapshot({ ...SNAPSHOT, wrecks: [wreck] })) as Record<string, unknown>;
+    raw.wrecks = [wreck, { x: 1e300, y: 0, radius: 50, seed: 1 }, { x: 0, y: 0, radius: -5, seed: 1 }, { x: 0, y: 0, radius: 50, seed: 1.5 }, { x: 0, y: 0, radius: 50 }, null, 'x', { ...wreck, seed: 2 }];
+    const decoded = decodeSnapshot(JSON.stringify(raw))!;
+    expect(decoded.wrecks.map((w) => w.seed)).toEqual([54321, 2]);
+    expect(decoded.ships).toHaveLength(1);
+  });
+
+  it('treats a missing or non-array wrecks field (an older host) as no terrain, and caps the count', () => {
+    const raw = JSON.parse(encodeSnapshot(SNAPSHOT)) as Record<string, unknown>;
+    delete raw.wrecks;
+    expect(decodeSnapshot(JSON.stringify(raw))!.wrecks).toEqual([]);
+    raw.wrecks = 'boom';
+    expect(decodeSnapshot(JSON.stringify(raw))!.wrecks).toEqual([]);
+    raw.wrecks = Array.from({ length: 100 }, (_, i) => ({ ...wreck, seed: i }));
+    expect(decodeSnapshot(JSON.stringify(raw))!.wrecks).toHaveLength(32);
+  });
+
+  it('carries the scrap countdown as whole seconds, or null', () => {
+    expect(decodeSnapshot(encodeSnapshot({ ...SNAPSHOT, scrapSeconds: 7 }))!.scrapSeconds).toBe(7);
+    expect(decodeSnapshot(encodeSnapshot({ ...SNAPSHOT, scrapSeconds: 0 }))!.scrapSeconds).toBe(0);
+    expect(decodeSnapshot(encodeSnapshot({ ...SNAPSHOT, scrapSeconds: null }))!.scrapSeconds).toBeNull();
+    const raw = JSON.parse(encodeSnapshot(SNAPSHOT)) as Record<string, unknown>;
+    delete raw.scrapSeconds;
+    expect(decodeSnapshot(JSON.stringify(raw))!.scrapSeconds).toBeNull();
+    for (const bad of ['7', -3, 99999, NaN, {}]) {
+      raw.scrapSeconds = bad as unknown;
+      expect(decodeSnapshot(JSON.stringify(raw))!.scrapSeconds).toBeNull();
+    }
   });
 });

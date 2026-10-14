@@ -3,8 +3,7 @@ import {
   generateTerrain,
   isClearOfEdges,
   type KeepOut,
-  type TerrainConfig,
-} from '../src/systems/ArenaTerrain';
+  type TerrainConfig, wreckSeedFrom } from '../src/systems/ArenaTerrain';
 
 const W = 1920;
 const H = 1200;
@@ -103,5 +102,27 @@ describe('isClearOfEdges', () => {
   it('accepts one comfortably inside', () => {
     const inside = { position: { x: W / 2, y: H / 2 }, radius: 50, shapeSeed: 0 };
     expect(isClearOfEdges(inside, W, H, 140)).toBe(true);
+  });
+});
+
+describe('wreckSeedFrom', () => {
+  it('is the same integer for the same placement, always', () => {
+    expect(wreckSeedFrom(0.123456)).toBe(wreckSeedFrom(0.123456));
+    expect(wreckSeedFrom(0.5)).toBe(50001);
+    expect(wreckSeedFrom(0)).toBe(1);
+  });
+
+  it('stays a whole number inside the range the generator expects', () => {
+    for (const seed of [0, 0.00001, 0.999999, 0.31415926535, 0.7]) {
+      const value = wreckSeedFrom(seed);
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(1);
+      expect(value).toBeLessThanOrEqual(100000);
+    }
+  });
+
+  it('survives the trip through JSON unchanged (the reason it is sent as an integer)', () => {
+    const seed = wreckSeedFrom(0.13579);
+    expect(JSON.parse(JSON.stringify(seed))).toBe(seed);
   });
 });

@@ -63,6 +63,7 @@ npm run smoke -- --players=4               # in another: join 4, leader starts, 
 npm run smoke -- --scenario=lobby          # the lobby rules end to end (~30 s)
 npm run smoke -- --scenario=session --password=secret   # join checks, reconnect, two-player PC (needs the config below)
 npm run smoke -- --scenario=scoring [--api=http://host:8081/highscores]   # earns a score; with --api, checks the board
+npm run smoke -- --scenario=leave --password=<it>     # a deliberate leave frees the seat at once; a drop holds it
 npm run e2e                                # the REAL game client, clicking through the Online screens
 npm run smoke -- --url=ws://host:8765 --stun=1   # against a remote server
 ```

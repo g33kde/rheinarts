@@ -4,7 +4,9 @@ import {
   decodeLobbyState,
   decodeReject,
   decodeWelcome,
+  encodeLeave,
   encodeLobbyCommand,
+  isLeave,
   encodeLobbyState,
   encodeReject,
   encodeWelcome,
@@ -126,5 +128,18 @@ describe('reject', () => {
   it('rejects unknown reasons and garbage', () => {
     expect(decodeReject(JSON.stringify({ type: 'debris-reject', reason: 'banned' }))).toBeUndefined();
     expect(decodeReject('x')).toBeUndefined();
+  });
+});
+
+describe('leave', () => {
+  it('is recognised when encoded', () => {
+    expect(isLeave(encodeLeave())).toBe(true);
+    expect(encodeLeave()).toBe('{"type":"debris-leave"}');
+  });
+
+  it('is not mistaken for anything else, and junk is not a leave', () => {
+    expect(isLeave(JSON.stringify({ type: 'debris-lobby-command', action: 'start' }))).toBe(false);
+    expect(isLeave(JSON.stringify({ type: 'debris-reject', reason: 'full' }))).toBe(false);
+    for (const junk of ['', 'leave', '[]', 'null', '{"type":', '{"type":"debris-leaves"}', '"debris-leave"']) expect(isLeave(junk)).toBe(false);
   });
 });

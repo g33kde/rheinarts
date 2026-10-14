@@ -2,6 +2,7 @@ import { PROTOCOL_VERSION } from './LanDiscoveryProtocol';
 import {
   decodeLobbyState,
   decodeReject,
+  encodeLeave,
   encodeLobbyCommand,
   type LobbyCommandMessage,
   type LobbyStateMessage,
@@ -177,6 +178,17 @@ export class OnlineClientSession implements ClientSessionLike {
 
   sendCommand(command: LobbyCommandMessage): void {
     this.connection?.sendReliable(encodeLobbyCommand(command));
+  }
+
+  /**
+   * Leave on purpose: tell the server first, so it frees the seat at once
+   * rather than holding it for the reconnect window as if the link had died,
+   * give that message a moment to leave the machine, then close.
+   */
+  async leave(): Promise<void> {
+    this.connection?.sendReliable(encodeLeave());
+    await new Promise<void>((done) => setTimeout(done, 150));
+    this.stop();
   }
 
   stop(): void {

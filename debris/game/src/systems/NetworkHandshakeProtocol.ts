@@ -170,3 +170,22 @@ export function decodeReject(raw: string): RejectMessage | undefined {
   if (!REJECT_REASONS.includes(c.reason as RejectReason)) return undefined;
   return { type: 'debris-reject', reason: c.reason as RejectReason };
 }
+
+/**
+ * Client -> server: "I am leaving on purpose" (the player chose LEAVE).
+ * Without it a server can only see a connection close, which it must treat
+ * as a *drop* and hold the seat for the reconnect window - right for a lost
+ * link, wrong for someone who walked away, whose ship would hang around as
+ * an untouchable ghost for 30 seconds. With it the seat is released at once.
+ */
+export interface LeaveMessage {
+  readonly type: 'debris-leave';
+}
+
+export function encodeLeave(): string {
+  return JSON.stringify({ type: 'debris-leave' } satisfies LeaveMessage);
+}
+
+export function isLeave(raw: string): boolean {
+  return parseObject(raw)?.type === 'debris-leave';
+}

@@ -51,9 +51,14 @@ app.whenReady().then(async () => {
       texts: (k) => window.__debrisGame.scene.getScene(k).children.list.filter((o) => o.type === 'Text' && o.visible).map((o) => o.text),
       click: (k, label) => {
         const sc = window.__debrisGame.scene.getScene(k);
-        const t = sc.children.list.find((o) => o.type === 'Text' && o.text.startsWith(label));
+        // An exact label wins over a prefix: a menu title can start with the same word as its button.
+        const texts = sc.children.list.filter((o) => o.type === 'Text');
+        const t = texts.find((o) => o.text === label) || texts.find((o) => o.text.startsWith(label));
         if (!t) return false;
-        const r = sc.children.list.find((o) => o.type === 'Rectangle' && o.input && o.x === t.x && o.y === t.y);
+        // Several objects can sit at one point (a full-screen backdrop under a button): a real click lands on the
+        // topmost, which is the last in the display list.
+        const hits = sc.children.list.filter((o) => o.type === 'Rectangle' && o.input && o.x === t.x && o.y === t.y);
+        const r = hits[hits.length - 1];
         if (!r) return false;
         r.emit('pointerdown');
         return true;
@@ -172,6 +177,31 @@ app.whenReady().then(async () => {
   const eng = JSON.parse(await run(`(() => { const g = window.__e2e.scene('Game'); const was = g.wasAnyThrusting; g.applyClientEngineSound({ ships: [{ alive: true, thrusting: true }] }); const on = g.wasAnyThrusting; g.applyClientEngineSound({ ships: [{ alive: true, thrusting: false }] }); const off = g.wasAnyThrusting; g.applyClientEngineSound({ ships: [{ alive: false, thrusting: true }] }); return JSON.stringify({ was, on, off, deadShip: g.wasAnyThrusting }); })()`));
   check(eng.on === true && eng.off === false && eng.deadShip === false, `the engine hum follows the ships' thrusting flags and ignores a dead ship (${JSON.stringify(eng)})`);
 
+  log('4c. the real client shows the terrain and the scrap countdown');
+  const terrain = JSON.parse(await run(`(() => {
+    const g = window.__e2e.scene('Game');
+    const two = [{ x: 400, y: 300, radius: 80, seed: 4242 }, { x: 1300, y: 800, radius: 120, seed: 777 }];
+    g.applyClientWrecks(two);
+    const first = g.clientWreckGraphics.map((w) => ({ x: Math.round(w.x), y: Math.round(w.y) }));
+    const ids = g.clientWreckGraphics.map((w) => w);
+    g.applyClientWrecks(two); // the next snapshot repeats the same list: nothing may be rebuilt
+    const sameObjects = g.clientWreckGraphics.every((w, i) => w === ids[i]);
+    g.applyClientWrecks([two[0]]); // a new stage
+    const after = g.clientWreckGraphics.length;
+    const destroyed = ids[0].scene === undefined || ids[1].scene === undefined;
+    g.applyClientWrecks([]);
+    g.applyClientScrapCountdown(8);
+    const scrap = g.clientScrapText && g.clientScrapText.text;
+    g.applyClientScrapCountdown(7);
+    const scrap2 = g.clientScrapText && g.clientScrapText.text;
+    g.applyClientScrapCountdown(null);
+    return JSON.stringify({ first, sameObjects, after, destroyed, empty: g.clientWreckGraphics.length, scrap, scrap2, scrapGone: g.clientScrapText === undefined });
+  })()`));
+  check(terrain.first.length === 2 && terrain.first[0].x === 400 && terrain.first[1].y === 800, `a wreck is drawn at each position the host listed (${JSON.stringify(terrain.first)})`);
+  check(terrain.sameObjects, 'an unchanged list is not rebuilt every snapshot');
+  check(terrain.after === 1 && terrain.empty === 0, 'a changed list replaces the drawn wrecks, and an empty one clears them');
+  check(terrain.scrap === 'COLLECT SCRAP: 8s' && terrain.scrap2 === 'COLLECT SCRAP: 7s' && terrain.scrapGone, `the scrap countdown shows, ticks and goes away (${terrain.scrap} -> ${terrain.scrap2})`);
+
   log('5. a dropped connection is won back inside the window');
   await run(`window.__e2e.scene('Game').clientSession.connection.close(); true`);
   const sawBanner = await (async () => {
@@ -190,8 +220,19 @@ app.whenReady().then(async () => {
   check(bannerGone, 'the banner goes away');
   check(await run(`window.__e2e.active('Game')`), 'still in the match, not bounced to a menu');
 
-  log('6. leaving mid-match: the match ends with nobody left');
-  await run(`window.__e2e.scene('Game').clientSession.stop(); true`);
+  log('6. Escape asks whether to leave; STAY keeps playing; LEAVE goes back to the Online screen');
+  await run(`window.__e2e.scene('Game').input.keyboard.emit('keydown-ESC'); true`);
+  await sleep(300);
+  check((await run(`window.__e2e.texts('Game')`)).some((t) => t.includes('LEAVE THE MATCH?')), 'Escape opens the leave menu');
+  await click('Game', 'STAY');
+  await sleep(200);
+  check(!(await run(`window.__e2e.texts('Game')`)).some((t) => t.includes('LEAVE THE MATCH?')), 'STAY closes it and the match goes on');
+  check(await run(`window.__e2e.active('Game')`), 'still in the match');
+  await run(`window.__e2e.scene('Game').input.keyboard.emit('keydown-ESC'); true`);
+  await sleep(200);
+  await click('Game', 'LEAVE');
+  await waitText('Online', 'Players:', 15000, 'the Online status screen after leaving');
+  check(await run(`window.__e2e.active('Online') && !window.__e2e.active('Game')`), 'LEAVE returned to the Online screen');
   await sleep(500);
 
   log('7. competitive vs a bot that leaves: the survivor wins and returns to the lobby');

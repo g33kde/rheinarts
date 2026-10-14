@@ -92,7 +92,7 @@ import {
   registerKill,
   type ComboState,
 } from '../systems/ComboMultiplier';
-import { Wreck } from '../entities/Wreck';
+import { Wreck, drawWreck } from '../entities/Wreck';
 import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
 import { computeBotIntent } from '../systems/DemoBot';
 import type { DedicatedMatchControl, DedicatedMatchHooks, MatchResult } from '../systems/DedicatedMatch';
@@ -129,6 +129,7 @@ import {
   isNewerTick,
   type EntitySnapshot,
   type GameSnapshot,
+  type WreckSnapshot,
   type PlayerHudSnapshot,
   type ShipSnapshot,
   type ShopPanelSnapshot,
@@ -500,6 +501,11 @@ export class GameScene extends Phaser.Scene {
   private readonly eventRecorder = new EventRecorder(NETWORK_SYNC.eventRedundancy);
   /** Client only - lets each received effect through once, however many snapshots repeat it. */
   private readonly clientEvents = new EventDeduper();
+  /** Client only - the terrain pieces drawn from the last snapshot that listed any, and the signature they were built from (rebuilt only when it changes, which is once per stage). */
+  private clientWreckGraphics: Phaser.GameObjects.Graphics[] = [];
+  private clientWreckSignature = '';
+  /** Client only - the Fracture's "COLLECT SCRAP" countdown, mirrored from the host's own text. */
+  private clientScrapText: Phaser.GameObjects.Text | undefined;
   /** Client only - effects received but not yet played; drained every frame. */
   private pendingClientEvents: GameEvent[] = [];
   /** Dedicated server only (online phase 4) - set when no local player exists to press a key at GAME OVER; the round end reports here and the server decides what happens next. */
@@ -512,6 +518,8 @@ export class GameScene extends Phaser.Scene {
   private localInput: KeyboardInput | undefined;
   /** Client only - one entry per player on this PC: its slot and the keyboard set that drives it (P1 keys for the first, P2 keys for a second). */
   private localInputs: { slot: number; input: KeyboardInput }[] = [];
+  /** Client only - the "LEAVE THE MATCH?" menu while it is up. */
+  private clientLeaveMenuObjects: Phaser.GameObjects.GameObject[] = [];
   /** Client only - the "RECONNECTING" notice while a dropped online connection is being won back. */
   private reconnectText: Phaser.GameObjects.Text | undefined;
   /**
@@ -755,6 +763,10 @@ export class GameScene extends Phaser.Scene {
     this.dedicatedHooks = data?.dedicated;
     this.ghostSlots = new Set();
     this.snapshotThrottle = undefined;
+    this.clientLeaveMenuObjects = [];
+    this.clientWreckGraphics = [];
+    this.clientWreckSignature = '';
+    this.clientScrapText = undefined;
     this.eventRecorder.reset();
     this.clientEvents.reset();
     this.wasAnyThrusting = false;
@@ -1401,6 +1413,8 @@ export class GameScene extends Phaser.Scene {
       overlayLines: this.overlayTexts.map((text) => text.text),
       shop: this.buildShopSnapshot(),
       events: this.eventRecorder.collect(),
+      wrecks: this.wrecks.filter((wreck) => wreck.isAlive).map((wreck) => ({ x: wreck.position.x, y: wreck.position.y, radius: wreck.radius, seed: wreck.seed })),
+      scrapSeconds: this.scrapCountdownEndsAtMs === undefined ? null : Math.max(0, Math.ceil((this.scrapCountdownEndsAtMs - nowMs) / 1000)),
       music: this.currentMusicId(),
     });
   }
@@ -1536,7 +1550,13 @@ export class GameScene extends Phaser.Scene {
     const keep = (off: void | (() => void)): void => {
       if (typeof off === 'function') unsubscribers.push(off);
     };
-    this.events.once('shutdown', () => unsubscribers.forEach((off) => off()));
+    this.events.once('shutdown', () => {
+      unsubscribers.forEach((off) => off());
+      this.hideClientLeaveMenu();
+    });
+    // Escape asks whether to leave - a client has no pause (the match carries on for everyone else),
+    // but without this the only way out of a match was closing the window.
+    this.input.keyboard?.on('keydown-ESC', () => this.toggleClientLeaveMenu());
     keep(
       this.clientSession?.onSnapshot((snapshot) => {
         // Effects are taken from *every* snapshot that arrives, even one too old to display:
@@ -2897,6 +2917,8 @@ export class GameScene extends Phaser.Scene {
     if (snapshot) {
       this.applyClientMusic(snapshot.music);
       this.applyClientEngineSound(snapshot);
+      this.applyClientWrecks(snapshot.wrecks);
+      this.applyClientScrapCountdown(snapshot.scrapSeconds);
       snapshot.ships.forEach((shipSnapshot) => {
         const player = this.players.find((p) => p.slotIndex === shipSnapshot.slotIndex);
         player?.ship.applyNetworkSnapshot(shipSnapshot, snapshot.nowMs);
@@ -2911,6 +2933,45 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.background.update(deltaSeconds);
+  }
+
+  /** Client only - Escape: ask whether to leave the match. */
+  private toggleClientLeaveMenu(): void {
+    if (this.clientLeaveMenuObjects.length > 0) {
+      this.hideClientLeaveMenu();
+      return;
+    }
+    const centerX = ARENA_WIDTH / 2;
+    const centerY = ARENA_HEIGHT / 2;
+    const backdrop = this.add.rectangle(centerX, centerY, ARENA_WIDTH, ARENA_HEIGHT, 0x05050a, 0.75).setInteractive().setDepth(900);
+    const title = this.add
+      .text(centerX, centerY - 120, 'LEAVE THE MATCH?', { fontFamily: 'monospace', fontSize: '52px', fontStyle: 'bold', color: '#ffffff' })
+      .setOrigin(0.5)
+      .setDepth(901);
+    const yes = this.makeMenuButton(centerX, centerY, 'LEAVE', () => this.leaveClientMatchByChoice());
+    const no = this.makeMenuButton(centerX, centerY + 90, 'STAY', () => this.hideClientLeaveMenu());
+    [yes.bg, yes.text, no.bg, no.text].forEach((o) => o.setDepth(901));
+    this.clientLeaveMenuObjects = [backdrop, title, yes.bg, yes.text, no.bg, no.text];
+  }
+
+  private hideClientLeaveMenu(): void {
+    this.clientLeaveMenuObjects.forEach((object) => object.destroy());
+    this.clientLeaveMenuObjects = [];
+  }
+
+  /**
+   * Client only - the player chose LEAVE. Online, the server is told so the
+   * seat is freed at once (and, mid-match, the ship removed) instead of being
+   * held as a dropped connection; a LAN client just disconnects, which a LAN
+   * host already treats as a leave.
+   */
+  private leaveClientMatchByChoice(): void {
+    const session = this.clientSession;
+    this.hideClientLeaveMenu();
+    if (session instanceof OnlineClientSession) void session.leave();
+    else session?.stop();
+    this.leaveClientMatch();
+    this.scene.start(session instanceof OnlineClientSession ? 'Online' : 'Menu');
   }
 
   /** Client only - effects from a received snapshot, de-duplicated and queued for the next frame. Bounded: a stalled tab must not pile up minutes of explosions. */
@@ -2944,6 +3005,33 @@ export class GameScene extends Phaser.Scene {
         this.scorePopups.push(new ScorePopup(this, { x: event.x, y: event.y }, event.color, event.amount, this.time.now));
         break;
     }
+  }
+
+  /** Client only - draws the stage's terrain from the snapshot. Graphics only: the host does all the colliding, the client just has to *show* what is solid. Rebuilt only when the list changes (a new stage), not every frame. */
+  private applyClientWrecks(wrecks: readonly WreckSnapshot[]): void {
+    const signature = JSON.stringify(wrecks);
+    if (signature === this.clientWreckSignature) return;
+    this.clientWreckSignature = signature;
+    this.clientWreckGraphics.forEach((g) => g.destroy());
+    this.clientWreckGraphics = wrecks.map((wreck) => {
+      const g = this.add.graphics();
+      g.setPosition(wreck.x, wreck.y);
+      drawWreck(g, wreck.radius, wreck.seed);
+      return g;
+    });
+  }
+
+  /** Client only - the "COLLECT SCRAP: Ns" line, shown while the host's countdown runs. */
+  private applyClientScrapCountdown(seconds: number | null): void {
+    if (seconds === null) {
+      this.clientScrapText?.destroy();
+      this.clientScrapText = undefined;
+      return;
+    }
+    this.clientScrapText ??= this.add
+      .text(ARENA_WIDTH / 2, 40, '', { fontFamily: 'monospace', fontSize: '20px', color: toCssHex(COLORS.fracture) })
+      .setOrigin(0.5, 0);
+    this.clientScrapText.setText(`COLLECT SCRAP: ${seconds}s`);
   }
 
   /** Client only - follows whichever stage track the host is on (a boss swaps it). State, not an event, so a missed packet cannot leave the wrong song playing. */
@@ -3217,6 +3305,11 @@ export class GameScene extends Phaser.Scene {
   private leaveClientMatch(): void {
     this.reconnectText?.destroy();
     this.reconnectText = undefined;
+    this.clientWreckGraphics.forEach((g) => g.destroy());
+    this.clientWreckGraphics = [];
+    this.clientWreckSignature = '';
+    this.clientScrapText?.destroy();
+    this.clientScrapText = undefined;
     this.entityMirrors.clear();
     this.teardownClientOverlay();
     this.teardownClientShop();

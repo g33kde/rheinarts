@@ -23,6 +23,51 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-14 — Online clients now see the terrain and the scrap countdown, and can leave
+
+The second "show everything the host shows" batch, after the event channel.
+Verified with unit tests, a protocol-level run against real host matches, and
+the real built client driven through the Escape menu and fed terrain.
+**Not yet seen by a human.**
+
+- **Terrain was invisible to online players but solid.** The host's wrecks
+  (`generateStageTerrain`, 60% of stages, 2-4 pieces) block ships, rocks, UFOs
+  and shots; a client never saw them, so players flew into obstacles they
+  could not see. The snapshot now carries them (`wrecks`: position, radius and
+  an integer seed - an integer, not the placement's float, so the other side
+  cannot round to a different rock) and the client draws the exact silhouette
+  with the *same* function the host uses (`drawWreck`, split out of the `Wreck`
+  constructor; `wreckSeedFrom` moved to the pure `ArenaTerrain` module). Graphics
+  only - the host does the colliding - and rebuilt only when the list changes
+  (a new stage), not every frame. Real wrecks were seen arriving in 3 of 5
+  protocol runs, as the spawn chance predicts. Radii are rounded like positions
+  (they went out as 18-digit floats); terrain costs ~6 KB/s per client.
+- **The Fracture's "COLLECT SCRAP: Ns" countdown** was host-only text. Now
+  `scrapSeconds` in the snapshot and a mirrored line on the client.
+- **Leaving a match.** A client had no pause or quit - the only way out was
+  closing the window. **Escape** now opens "LEAVE THE MATCH?" (STAY / LEAVE) on
+  every network client. Online, LEAVE sends `debris-leave` first so the server
+  **releases the seat at once** (and removes the ship mid-match); closing the
+  connection alone is, correctly, treated as a *drop* and holds the seat for the
+  30 s reconnect window, which would have left a deliberate leaver as an
+  untouchable ghost. Measured: the seat is gone 52 ms after the message, while
+  a plain drop is held; and a token from a given-up seat cannot resume it.
+  LAN: LEAVE just disconnects, which a LAN host already treated as leaving.
+- **Corrections to my own gap list** (found by reading the code properly this
+  time, after a search that was too narrow said otherwise): the Cardinal's
+  **health bar was already mirrored** on the client (inside its entity mirror);
+  the host has **no weapon-heat display** at all (heat only gates firing), so
+  there was nothing to mirror; and "terrain" and "wrecks" are one thing.
+- Lenient decoding as before: a malformed wreck is dropped on its own (bounds
+  checked, capped at 32), a missing `wrecks`/`scrapSeconds` from an older host
+  reads as none - never a reason to lose the snapshot.
+- Tests: game 488 (was 477); smoke `leave` scenario (deliberate leave vs drop,
+  token not resumable); the real-client e2e adds terrain/scrap checks and now
+  exercises the real Escape menu (open, STAY, LEAVE). The e2e's click helper now
+  prefers an exact label and the topmost object, as a real click would.
+- **Still not mirrored**: nothing I know of that the host *draws*. Not done:
+  gamepads, hull choice online, a pause (deliberately - the match carries on).
+
 ## 2026-10-14 — The event channel: online clients now hear and see what happens
 
 An online (and LAN) client used to see a rock vanish but never hear it or see

@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { COLORS } from '../config/GameConfig';
 import { generateAsteroidPoints } from '../systems/AsteroidShape';
+import { wreckSeedFrom } from '../systems/ArenaTerrain';
 import { CATEGORY } from '../systems/CollisionCategories';
 import type { Vector2 } from '../utilities/Vector2';
 import type { MatterGameObject } from './MatterGameObject';
@@ -27,21 +28,12 @@ import type { MatterGameObject } from './MatterGameObject';
 export class Wreck {
   readonly visual: MatterGameObject<Phaser.GameObjects.Graphics>;
   readonly radius: number;
+  /** The integer the silhouette's generator starts from - what a client needs to draw this exact wreck (`drawWreck`). */
+  readonly seed: number;
   private alive = true;
 
   constructor(scene: Phaser.Scene, position: Vector2, radius: number, shapeSeed: number) {
     this.radius = radius;
-
-    // A seeded rng so a placement's silhouette is reproducible from its
-    // own seed rather than re-rolled on every construction.
-    let seed = Math.floor(shapeSeed * 100000) + 1;
-    const rng = (): number => {
-      seed = (seed * 1664525 + 1013904223) % 4294967296;
-      return seed / 4294967296;
-    };
-    // Unit-scale points - scaled by radius when drawn, same as Asteroid does.
-    const points = generateAsteroidPoints(11, 0.35, rng);
-
     const visual = scene.add.graphics();
     scene.matter.add.gameObject(visual, {
       shape: { type: 'circle', radius },
@@ -59,30 +51,10 @@ export class Wreck {
     this.visual.setPosition(position.x, position.y);
     this.visual.setData('entity', this);
 
+    this.seed = wreckSeedFrom(shapeSeed);
     // Drawn once - a static body's look never changes, so unlike every
     // other entity here this doesn't redraw per frame.
-    const g = visual;
-    g.fillStyle(COLORS.asteroidFill, 1);
-    g.lineStyle(2, COLORS.asteroid, 0.55);
-    g.beginPath();
-    points.forEach((point, i) => {
-      if (i === 0) g.moveTo(point.x * radius, point.y * radius);
-      else g.lineTo(point.x * radius, point.y * radius);
-    });
-    g.closePath();
-    g.fillPath();
-    g.strokePath();
-
-    // A few interior scars so a big piece doesn't read as a flat blob.
-    g.lineStyle(1, COLORS.asteroid, 0.28);
-    for (let i = 0; i < 3; i += 1) {
-      const a = rng() * Math.PI * 2;
-      const len = radius * (0.3 + rng() * 0.4);
-      g.beginPath();
-      g.moveTo(Math.cos(a) * radius * 0.15, Math.sin(a) * radius * 0.15);
-      g.lineTo(Math.cos(a) * len, Math.sin(a) * len);
-      g.strokePath();
-    }
+    drawWreck(visual, radius, this.seed);
   }
 
   get position(): Vector2 {
@@ -97,5 +69,45 @@ export class Wreck {
     if (!this.alive) return;
     this.alive = false;
     this.visual.destroy();
+  }
+}
+
+/**
+ * Draws one wreck's silhouette onto `g`, centred on the graphics object's
+ * own origin, from nothing but `radius` and the integer `seed`. Shared by
+ * the host's real `Wreck` and the picture a network client rebuilds from a
+ * snapshot, so both draw *exactly* the same rock.
+ */
+export function drawWreck(g: Phaser.GameObjects.Graphics, radius: number, seedStart: number): void {
+  // A seeded rng so a placement's silhouette is reproducible from its
+  // own seed rather than re-rolled on every construction.
+  let seed = seedStart;
+  const rng = (): number => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+  // Unit-scale points - scaled by radius when drawn, same as Asteroid does.
+  const points = generateAsteroidPoints(11, 0.35, rng);
+
+  g.fillStyle(COLORS.asteroidFill, 1);
+  g.lineStyle(2, COLORS.asteroid, 0.55);
+  g.beginPath();
+  points.forEach((point, i) => {
+    if (i === 0) g.moveTo(point.x * radius, point.y * radius);
+    else g.lineTo(point.x * radius, point.y * radius);
+  });
+  g.closePath();
+  g.fillPath();
+  g.strokePath();
+
+  // A few interior scars so a big piece doesn't read as a flat blob.
+  g.lineStyle(1, COLORS.asteroid, 0.28);
+  for (let i = 0; i < 3; i += 1) {
+    const a = rng() * Math.PI * 2;
+    const len = radius * (0.3 + rng() * 0.4);
+    g.beginPath();
+    g.moveTo(Math.cos(a) * radius * 0.15, Math.sin(a) * radius * 0.15);
+    g.lineTo(Math.cos(a) * len, Math.sin(a) * len);
+    g.strokePath();
   }
 }
