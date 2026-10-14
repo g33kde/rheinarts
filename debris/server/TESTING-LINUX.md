@@ -162,8 +162,7 @@ npm run smoke -- --url=$URL --stun=1 --scenario=scoring --password=choose-one   
   ```
   and `grep score` in the server's output: `score onlineCooperative SMK 20: posted`.
 
-Do it twice: once from a **different network** (phone hotspot), once from
-your home LAN if that is where the server is not.
+Run them from a network that is *not* the server's. (A phone hotspot would be a harder NAT case; we chose not to test it - see "Known limits" in `README.md`.)
 
 ## 7. Play it for real
 

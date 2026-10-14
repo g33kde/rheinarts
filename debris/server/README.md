@@ -231,6 +231,12 @@ leader's commands.
   `RtcConnection` in `RtcSignalingHost.pending` (phase 8 cleanup).
 - Online play is desktop-only for now (the MULTIPLAYER menu entry is hidden
   in a plain browser tab), although nothing in the Online flow needs Node.
+- **Not tested from behind carrier-grade or symmetric NAT** (a phone hotspot,
+  some corporate networks) - that test was deliberately skipped. Clients find
+  their public address through STUN, which works for ordinary home routers
+  (tested from one), but there is **no TURN relay**, so a player whose NAT
+  blocks direct UDP will fail to connect with "the game connection could not be
+  established". Adding one (coturn) is the fix if it turns up.
 - Verified on macOS against `127.0.0.1` only - not yet on the Linux server
   or across the internet (`TESTING-LINUX.md` is how to do that).
 
