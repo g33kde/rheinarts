@@ -84,12 +84,12 @@ cp config.example.json config.json
 nano config.json
 ```
 
-For this test set (the smoke scenarios depend on these three exact values):
+For this test set (the smoke scenarios depend on the two timings; use any password and pass it as `--password=<it>`):
 
 ```json
 {
   "name": "Debris Test",
-  "password": "secret",
+  "password": "choose-one",
   "gameplay": { "returnToLobbyDelayMs": 1000, "reconnectGraceMs": 3000 },
   "ops": {
     "logLevel": "debug",
@@ -144,10 +144,10 @@ Then, one after another (each prints `PASS` or a `FAIL:` line saying what broke)
 ```bash
 URL=ws://debris.rheinarts.de:8765
 
-npm run smoke -- --url=$URL --stun=1 --scenario=play --players=4 --password=secret --seconds=10
-npm run smoke -- --url=$URL --stun=1 --scenario=lobby --password=secret
-npm run smoke -- --url=$URL --stun=1 --scenario=session --password=secret
-npm run smoke -- --url=$URL --stun=1 --scenario=scoring --password=secret    # can take a minute or two
+npm run smoke -- --url=$URL --stun=1 --scenario=play --players=4 --password=choose-one --seconds=10
+npm run smoke -- --url=$URL --stun=1 --scenario=lobby --password=choose-one
+npm run smoke -- --url=$URL --stun=1 --scenario=session --password=choose-one
+npm run smoke -- --url=$URL --stun=1 --scenario=scoring --password=choose-one    # can take a minute or two
 ```
 
 - `play` is the real-network measurement: it prints, per player, the snapshot
@@ -176,7 +176,7 @@ cd ../desktop && npm install && npm run preview
 ```
 In the window: **MULTIPLAYER -> ONLINE**. It should show "Debris Test", players
 0/4, "Password required". Type your initials (three letters), Tab, type
-`secret`, **JOIN**, then **START**. Fly around. Then:
+your password, **JOIN**, then **START**. Fly around. Then:
 
 - Join from a **second machine** (or a second window) and check the leader
   gets START/MODE and the other waits.
@@ -203,7 +203,7 @@ In the window: **MULTIPLAYER -> ONLINE**. It should show "Debris Test", players
 | `no data channel after 30s` / `the game connection could not be established (is the UDP port range open?)` | UDP 50000-50100 blocked (firewall, provider panel, or router not forwarding it) |
 | Connects, then drops after ~5-10 s | UDP is open one way only - check the provider's firewall rules, not just `ufw` |
 | `FAIL ... slot 2 to be released after the grace period` | `reconnectGraceMs` is not 3000 in `config.json` |
-| `FAIL ... joined or reject` after a password | `password` is not exactly `secret` |
+| `FAIL ... joined or reject` after a password | `password` is not exactly your password |
 | `score ... the API rejected the key` in the server output | `highscoreApiKey` does not match the API's `DEBRIS_SERVER_KEY` |
 | `score ... the online boards are not enabled` | the API was started without `DEBRIS_SERVER_KEY` |
 | Server exits at once: "invalid config" | the message lists each problem; unknown keys are errors |

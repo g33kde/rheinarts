@@ -8,7 +8,7 @@
 //   session  join checks (password, version, malformed), the status query, two players on one PC,
 //            a full lobby, input bound to the connection's own slots, reconnect inside the window,
 //            takeover by a quick reconnect, and a seat released when the window closes
-//            (needs password "secret" and reconnectGraceMs 3000 in the server config)
+//            (needs a password set on the server - pass it with --password - and reconnectGraceMs 3000)
 //   scoring  one player spins and fires until it scores, then leaves; the match ends, the server posts the
 //            score, and smoke-main.js (given --api) checks the real API's online board for it
 //   bot      joins as one more player and leaves ?leaveAfter= ms after the match starts (used by
@@ -223,7 +223,8 @@ async function scenarioLobby() {
 }
 
 async function scenarioSession() {
-  say(`session: join checks, status, two-player PC, reconnect -> ${URL_} (needs password "secret", reconnectGraceMs 3000, returnToLobbyDelayMs ~1000)`);
+  if (PASSWORD === '') { check(false, 'this scenario needs the server\'s password: pass --password=<it> (the server must have one set)'); return; }
+  say(`session: join checks, status, two-player PC, reconnect -> ${URL_} (needs the server's password passed as --password, reconnectGraceMs 3000, returnToLobbyDelayMs ~1000)`);
 
   say('1. status query over the signaling socket alone');
   const st = await queryStatus();
@@ -236,20 +237,20 @@ async function scenarioSession() {
   check(noPw.reject?.reason === 'badPassword', `no password -> badPassword (got ${JSON.stringify(noPw.reject)})`);
   const badPw = await join('badPw', { password: 'nope' });
   check(badPw.reject?.reason === 'badPassword', 'wrong password -> badPassword');
-  const oldVer = await join('oldVer', { password: 'secret', protocolVersion: 1 });
+  const oldVer = await join('oldVer', { password: PASSWORD, protocolVersion: 1 });
   check(oldVer.reject?.reason === 'wrongVersion', 'old protocol version -> wrongVersion');
   const garbage = new Player('garbage'); await garbage.connect(); garbage.sendRaw('{"type":"hello"}');
   await waitFor(() => garbage.reject, 5000, 'garbage first message to be rejected');
   check(garbage.reject?.reason === 'badRequest', 'a first message that is not a join -> badRequest');
-  const badLocal = await join('badLocal', { password: 'secret', localPlayers: 3 });
+  const badLocal = await join('badLocal', { password: PASSWORD, localPlayers: 3 });
   check(badLocal.reject?.reason === 'badRequest', 'localPlayers 3 -> badRequest');
   const noInitials = new Player('noInitials'); await noInitials.connect();
-  noInitials.reliable.send(JSON.stringify({ type: 'debris-join', protocolVersion: PROTOCOL_VERSION, password: 'secret', localPlayers: 1 }));
+  noInitials.reliable.send(JSON.stringify({ type: 'debris-join', protocolVersion: PROTOCOL_VERSION, password: PASSWORD, localPlayers: 1 }));
   await waitFor(() => noInitials.reject, 5000, 'a join without initials to be rejected');
   check(noInitials.reject?.reason === 'badRequest', 'a join without initials -> badRequest');
-  const badInitials = await join('badInitials', { password: 'secret', initials: ['a1'] });
+  const badInitials = await join('badInitials', { password: PASSWORD, initials: ['a1'] });
   check(badInitials.reject?.reason === 'badRequest', 'initials that are not three capital letters -> badRequest');
-  const wrongCount = await join('wrongCount', { password: 'secret', localPlayers: 2, initials: ['ABC'] });
+  const wrongCount = await join('wrongCount', { password: PASSWORD, localPlayers: 2, initials: ['ABC'] });
   check(wrongCount.reject?.reason === 'badRequest', 'one set of initials for two players -> badRequest');
   [noPw, badPw, oldVer, garbage, badLocal, noInitials, badInitials, wrongCount].forEach((p) => p.close());
   await sleep(500);
@@ -257,10 +258,10 @@ async function scenarioSession() {
   check(st2?.players.current === 0, 'none of them took a seat');
 
   say('3. a PC with two local players takes two slots');
-  const a = await join('A', { password: 'secret', localPlayers: 2 });
+  const a = await join('A', { password: PASSWORD, localPlayers: 2 });
   check(a.joined && JSON.stringify(a.slots) === '[0,1]', `A seated in slots [0,1] (got ${JSON.stringify(a.slots)})`);
   check(typeof a.token === 'string' && a.token.length === 32, 'A got a 32-character token');
-  const b = await join('B', { password: 'secret' });
+  const b = await join('B', { password: PASSWORD });
   check(JSON.stringify(b.slots) === '[2]', `B seated in slot [2] (got ${JSON.stringify(b.slots)})`);
   await waitFor(() => b.lobby?.slots.length === 3, 5000, 'lobby to list three players');
   check(b.lobby?.leaderSlot === 0, 'A (first joiner, two players) is one leader');
@@ -268,7 +269,7 @@ async function scenarioSession() {
   check(st3?.players.current === 3, `status shows 3/4 (got ${st3?.players.current})`);
 
   say('4. all-or-nothing seating: two players do not fit in one free slot');
-  const big = await join('big', { password: 'secret', localPlayers: 2 });
+  const big = await join('big', { password: PASSWORD, localPlayers: 2 });
   check(big.reject?.reason === 'full', `two-player PC with 1 slot free -> full (got ${JSON.stringify(big.reject)})`);
   big.close();
 
@@ -290,7 +291,7 @@ async function scenarioSession() {
   b.close();
   await waitFor(() => a.lobby?.heldSlots.includes(2), 5000, 'lobby to show slot 2 as held');
   check(JSON.stringify(a.lobby?.heldSlots) === '[2]' && a.lobby.slots.includes(2), 'slot 2 is held, not released');
-  const b2 = await join('B2', { password: 'secret', token: bToken });
+  const b2 = await join('B2', { password: PASSWORD, token: bToken });
   check(b2.joined?.resumed === true && b2.joined?.inMatch === true && JSON.stringify(b2.slots) === '[2]', `B2 resumed slot 2 inside a match (got ${JSON.stringify(b2.joined && { r: b2.joined.resumed, m: b2.joined.inMatch, s: b2.slots })})`);
   check(b2.token === bToken, 'the token stays the same');
   await waitFor(() => b2.snaps > 3, 10000, 'B2 to receive snapshots');
@@ -298,7 +299,7 @@ async function scenarioSession() {
   check(a.lobby?.heldSlots.length === 0, 'slot 2 is no longer held');
 
   say('7. a quick reconnect takes the seat over from a still-open connection');
-  const a2 = await join('A2', { password: 'secret', localPlayers: 2, token: a.token });
+  const a2 = await join('A2', { password: PASSWORD, localPlayers: 2, token: a.token });
   check(a2.joined?.resumed === true && JSON.stringify(a2.slots) === '[0,1]', `A2 took over slots [0,1] (got ${JSON.stringify(a2.slots)})`);
   await waitFor(() => a2.snaps > 3, 10000, 'A2 to receive snapshots');
   a.close(); // the superseded connection closing must not release or hold anything
@@ -311,7 +312,7 @@ async function scenarioSession() {
   await waitFor(() => a2.lobby?.heldSlots.includes(2), 5000, 'slot 2 held again');
   await waitFor(() => !a2.lobby?.slots.includes(2), 10000, 'slot 2 to be released after the grace period');
   check(JSON.stringify(a2.lobby?.slots) === '[0,1]', `slot 2 released, A's two slots remain (slots ${JSON.stringify(a2.lobby?.slots)})`);
-  const late = await join('late', { password: 'secret', token: b2Token });
+  const late = await join('late', { password: PASSWORD, token: b2Token });
   check(late.reject?.reason === 'matchInProgress' && !late.joined, `a late token no longer works: turned away mid-match (got ${JSON.stringify(late.reject)})`);
   late.close(); a2.close();
 }
