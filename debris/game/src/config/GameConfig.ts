@@ -1051,6 +1051,8 @@ export const LAN_DISCOVERY = {
 export const NETWORK_SYNC = {
   lanSnapshotHz: 60,
   onlineSnapshotHz: 30,
+  /** How many consecutive snapshots each one-shot effect (`systems/GameEvents.ts`) rides in - so a lost packet or two on the unreliable channel does not lose a sound or an explosion. */
+  eventRedundancy: 3,
   positionDecimals: 1,
   angleDecimals: 3,
 } as const;

@@ -45,6 +45,8 @@ const SNAPSHOT: GameSnapshot = {
   state: 'playing',
   overlayLines: [],
   shop: undefined,
+  events: [],
+  music: 'gameplay',
 };
 
 const SHOP_PANEL: ShopPanelSnapshot = {
@@ -313,5 +315,55 @@ describe('ships that are not invulnerable', () => {
   it('still rejects a ship whose invulnerableUntilMs is some other non-number', () => {
     const raw = JSON.stringify({ ...SNAPSHOT, ships: [{ ...SHIP, invulnerableUntilMs: 'soon' }] });
     expect(decodeSnapshot(raw)).toBeUndefined();
+  });
+});
+
+describe('effects in a snapshot', () => {
+  const withEvents: GameSnapshot = {
+    ...SNAPSHOT,
+    music: 'cardinal',
+    events: [
+      { id: 7, kind: 'sfx', sfx: 'shot' },
+      { id: 8, kind: 'burst', x: 100.5, y: 200, color: 0xff8800, style: 'asteroid' },
+      { id: 9, kind: 'shake', durationMs: 250, intensity: 0.01 },
+      { id: 10, kind: 'popup', x: 5, y: 6, color: 0x00ffff, amount: 40 },
+    ],
+  };
+
+  it('round-trips events and the music track', () => {
+    const decoded = decodeSnapshot(encodeSnapshot(withEvents))!;
+    expect(decoded.events).toEqual(withEvents.events);
+    expect(decoded.music).toBe('cardinal');
+  });
+
+  it('rounds a burst position like every other position, and leaves the colour exact', () => {
+    const noisy: GameSnapshot = { ...SNAPSHOT, events: [{ id: 1, kind: 'burst', x: 100.04999, y: 200.06, color: 0xff8800, style: 'ship' }] };
+    const burst = decodeSnapshot(encodeSnapshot(noisy))!.events[0]!;
+    expect(burst).toMatchObject({ x: 100, y: 200.1, color: 0xff8800 });
+  });
+
+  it('drops a malformed event on its own and keeps the snapshot and its other events', () => {
+    const raw = JSON.parse(encodeSnapshot(withEvents)) as Record<string, unknown>;
+    raw.events = [{ id: 1, kind: 'sfx', sfx: 'shot' }, { id: 2, kind: 'nuke' }, { id: 3, kind: 'shake', durationMs: 9e9, intensity: 1 }, null, { id: 4, kind: 'sfx', sfx: 'ufoShot' }];
+    const decoded = decodeSnapshot(JSON.stringify(raw));
+    expect(decoded).toBeDefined();
+    expect(decoded!.events.map((e) => e.id)).toEqual([1, 4]);
+    expect(decoded!.ships).toHaveLength(1);
+  });
+
+  it('treats a missing or non-array events field (an older host) as no effects', () => {
+    const raw = JSON.parse(encodeSnapshot(SNAPSHOT)) as Record<string, unknown>;
+    delete raw.events;
+    expect(decodeSnapshot(JSON.stringify(raw))!.events).toEqual([]);
+    raw.events = 'boom';
+    expect(decodeSnapshot(JSON.stringify(raw))!.events).toEqual([]);
+  });
+
+  it('falls back to the normal track for a missing or unknown music name', () => {
+    const raw = JSON.parse(encodeSnapshot(SNAPSHOT)) as Record<string, unknown>;
+    delete raw.music;
+    expect(decodeSnapshot(JSON.stringify(raw))!.music).toBe('gameplay');
+    raw.music = 'polka';
+    expect(decodeSnapshot(JSON.stringify(raw))!.music).toBe('gameplay');
   });
 });

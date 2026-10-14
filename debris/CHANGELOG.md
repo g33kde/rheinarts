@@ -23,6 +23,59 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-14 — The event channel: online clients now hear and see what happens
+
+An online (and LAN) client used to see a rock vanish but never hear it or see
+it burst: it only received *state*, and a sound, an explosion, a shake or a
+score popup is something that *happens*, not something that *is*. Now the host
+announces them and the client replays them. Verified: unit tests, a protocol-
+level run (real events from a real match), and the real built client fed events
+and checked for exactly-once playback. **Not yet heard by a human** - the
+automated checks cannot tell whether a sound is audible or an explosion looks
+right.
+
+- **`systems/GameEvents.ts`** (pure, 21 tests): one-shot effects as data -
+  `sfx` (shot, asteroid hit, ship destroyed, shield pickup, black hole
+  approaching, UFO spawn / shot / destroyed), `burst` (ship / asteroid / UFO /
+  mine, at a position and colour), `shake`, and score `popup`. `EventRecorder`
+  (host) and `EventDeduper` (client).
+- **Delivery is loss-tolerant by design.** Snapshots travel an unreliable
+  channel, so each event rides in the next **3** snapshots
+  (`NETWORK_SYNC.eventRedundancy`), counted in snapshots rather than
+  milliseconds so it holds at any snapshot rate, and the client plays each id
+  once. Tested against a lossy stream: events from lost snapshots are recovered,
+  and nothing plays twice, even when snapshots arrive out of order. Effects are
+  taken from *every* received snapshot, including ones too old to display.
+- **One place per effect on the host.** All 13 direct `sound.play` calls and the
+  3 procedural UFO sounds now go through `playSfx` (plays here, announces to
+  clients); `spawnBurst`, `shakeCamera` and `awardScore` announce themselves.
+  The client replays with the same code (`playSfxLocal`, `spawnBurst`,
+  `shakeCamera`, `ScorePopup`), using the *player's own* volume and
+  reduced-motion setting. A local game records nothing (no one is listening).
+- **State, not events**: the stage **music** is a snapshot field (`music`), so a
+  boss fight switches the client's track and a missed packet cannot leave the
+  wrong song playing; the **engine hum** is derived from each ship's `thrusting`
+  flag (any live ship thrusting = on), exactly as the host decides it.
+- **Lenient decoding, on purpose.** An event or music name the client does not
+  understand is dropped or defaulted - it never costs the whole snapshot (a
+  `null` in an unrelated field did exactly that in phase 5). Events are also
+  bounds-checked (a shake of a million milliseconds, a position of 1e300, an
+  unknown sound: ignored), capped at 64 per snapshot, and a client queue is
+  capped at 200. Additive and backwards compatible, so `PROTOCOL_VERSION` is
+  unchanged: an older client ignores the new fields, an older host sends none.
+- The client loop now also advances bursts and popups (it never did - they did
+  not exist there).
+- **Cost**: 115 KB/s per player in a 4-player match with effects, against 116
+  before - events are small next to the entity list.
+- Tests: game 477 (was 451); the protocol smoke run asserts real events arrive
+  (all four kinds, ids in order, none repeated more than 3 times, music named);
+  the real-client e2e feeds synthetic events and checks exactly-once playback,
+  the burst settings, the shake, the popup, the music switch and the engine
+  hum, and passes. LAN: the same host code path, so LAN clients get effects
+  too, **but that was not run**.
+- **Still missing online** (see the gap list): boss health bars, wrecks, terrain,
+  the weapon-heat HUD, leaving or pausing a match, gamepads.
+
 ## 2026-10-14 — Online play, phase 6: the server posts the scores
 
 A finished online match now puts its score on the leaderboard - posted by the

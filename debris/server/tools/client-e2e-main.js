@@ -137,6 +137,41 @@ app.whenReady().then(async () => {
   const later = await gameState();
   check(later && first && later.tick > first.tick + 10, `snapshots keep coming (tick ${first && first.tick} -> ${later && later.tick})`);
 
+  log('4b. the real client replays what the host announces (sounds, explosions, shake, popups, music, engine)');
+  await run(`(() => {
+    const g = window.__e2e.scene('Game');
+    window.__fx = { sfx: [], bursts: [], shakes: [], music: [] };
+    const sfx = g.playSfxLocal.bind(g); g.playSfxLocal = (id) => { window.__fx.sfx.push(id); return sfx(id); };
+    const burst = g.spawnBurst.bind(g); g.spawnBurst = (o, c, cfg) => { window.__fx.bursts.push({ x: o.x, y: o.y, count: cfg.count }); return burst(o, c, cfg); };
+    const shake = g.shakeCamera.bind(g); g.shakeCamera = (cfg) => { window.__fx.shakes.push(cfg.durationMs); return shake(cfg); };
+    const base = 1000000;
+    const events = [
+      { id: base + 1, kind: 'sfx', sfx: 'shot' },
+      { id: base + 2, kind: 'sfx', sfx: 'asteroidHit' },
+      { id: base + 3, kind: 'burst', x: 900, y: 600, color: 0xff8800, style: 'asteroid' },
+      { id: base + 4, kind: 'popup', x: 900, y: 600, color: 0x00ffff, amount: 40 },
+      { id: base + 5, kind: 'shake', durationMs: 200, intensity: 0.01 },
+    ];
+    window.__events = events;
+    g.queueClientEvents(events);
+    return true;
+  })()`);
+  await sleep(250);
+  const fx = JSON.parse(await run('JSON.stringify({ fx: window.__fx, popups: window.__e2e.scene("Game").scorePopups.length })'));
+  check(JSON.stringify(fx.fx.sfx) === JSON.stringify(['shot', 'asteroidHit']), `each announced sound played once, in order (${JSON.stringify(fx.fx.sfx)})`);
+  check(fx.fx.bursts.length === 1 && fx.fx.bursts[0].count === 10, `the asteroid explosion was spawned with the asteroid burst settings (${JSON.stringify(fx.fx.bursts)})`);
+  check(fx.fx.shakes.length === 1, 'the camera shook once');
+  check(fx.popups >= 1, `a score popup was created (${fx.popups})`);
+  // The same events again, as the next snapshots would repeat them: nothing may play twice.
+  await run('(() => { window.__e2e.scene("Game").queueClientEvents(window.__events); return true; })()');
+  await sleep(250);
+  const again = JSON.parse(await run('JSON.stringify(window.__fx)'));
+  check(again.sfx.length === 2 && again.bursts.length === 1 && again.shakes.length === 1, 'repeated events are played only once');
+  const mus = JSON.parse(await run(`(() => { const g = window.__e2e.scene('Game'); const before = g.currentStageMusicKey; g.applyClientMusic('fracture'); const boss = g.currentStageMusicKey; g.applyClientMusic('gameplay'); return JSON.stringify({ before, boss, after: g.currentStageMusicKey }); })()`));
+  check(mus.boss !== mus.before && mus.after === mus.before, `the stage music follows the snapshot and returns (${mus.before} -> ${mus.boss} -> ${mus.after})`);
+  const eng = JSON.parse(await run(`(() => { const g = window.__e2e.scene('Game'); const was = g.wasAnyThrusting; g.applyClientEngineSound({ ships: [{ alive: true, thrusting: true }] }); const on = g.wasAnyThrusting; g.applyClientEngineSound({ ships: [{ alive: true, thrusting: false }] }); const off = g.wasAnyThrusting; g.applyClientEngineSound({ ships: [{ alive: false, thrusting: true }] }); return JSON.stringify({ was, on, off, deadShip: g.wasAnyThrusting }); })()`));
+  check(eng.on === true && eng.off === false && eng.deadShip === false, `the engine hum follows the ships' thrusting flags and ignores a dead ship (${JSON.stringify(eng)})`);
+
   log('5. a dropped connection is won back inside the window');
   await run(`window.__e2e.scene('Game').clientSession.connection.close(); true`);
   const sawBanner = await (async () => {

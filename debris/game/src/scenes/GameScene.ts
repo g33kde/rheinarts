@@ -12,6 +12,7 @@ import {
   ATTRACT_MODE,
   COMBO,
   EFFECTS,
+  NETWORK_SYNC,
   FRACTURE,
   HYPERSPACE,
   LIVES_PER_PLAYER,
@@ -95,6 +96,15 @@ import { Wreck } from '../entities/Wreck';
 import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
 import { computeBotIntent } from '../systems/DemoBot';
 import type { DedicatedMatchControl, DedicatedMatchHooks, MatchResult } from '../systems/DedicatedMatch';
+import {
+  EventDeduper,
+  EventRecorder,
+  type BurstStyle,
+  type GameEvent,
+  type GameEventBody,
+  type MusicId,
+  type SfxId,
+} from '../systems/GameEvents';
 import { SnapshotThrottle } from '../systems/SnapshotThrottle';
 import { computeStageRank, type StageRankResult } from '../systems/StageRank';
 import {
@@ -486,6 +496,12 @@ export class GameScene extends Phaser.Scene {
   private snapshotTick = 0;
   /** Host only - decides which frames also send a snapshot, per the session's transport rate. Created lazily once `hostSession` is known. Fed `performance.now()`, not game time, so a paused scene's frozen clock can't stall it. */
   private snapshotThrottle: SnapshotThrottle | undefined;
+  /** Host only - the one-shot effects (sounds, bursts, shake, popups) fired since the last snapshot, repeated for a few snapshots so a lost packet does not lose them (`systems/GameEvents.ts`). Records nothing unless a client is actually listening. */
+  private readonly eventRecorder = new EventRecorder(NETWORK_SYNC.eventRedundancy);
+  /** Client only - lets each received effect through once, however many snapshots repeat it. */
+  private readonly clientEvents = new EventDeduper();
+  /** Client only - effects received but not yet played; drained every frame. */
+  private pendingClientEvents: GameEvent[] = [];
   /** Dedicated server only (online phase 4) - set when no local player exists to press a key at GAME OVER; the round end reports here and the server decides what happens next. */
   private dedicatedHooks: DedicatedMatchHooks | undefined;
   /** Dedicated server only - slots whose player dropped and may still reconnect: ship inert (their input is neutral) and kept invulnerable every frame, which also covers respawns and anything else that grants a shorter grace. */
@@ -739,6 +755,12 @@ export class GameScene extends Phaser.Scene {
     this.dedicatedHooks = data?.dedicated;
     this.ghostSlots = new Set();
     this.snapshotThrottle = undefined;
+    this.eventRecorder.reset();
+    this.clientEvents.reset();
+    this.wasAnyThrusting = false;
+    this.pendingClientEvents = [];
+    this.bursts = [];
+    this.scorePopups = [];
     this.snapshotTick = 0;
     this.latestSnapshot = undefined;
     this.entityNetworkIds = new WeakMap();
@@ -1336,6 +1358,13 @@ export class GameScene extends Phaser.Scene {
     return entities;
   }
 
+  /** The stage music playing right now, as the snapshot names it. */
+  private currentMusicId(): MusicId {
+    if (this.currentStageMusicKey === FRACTURE_MUSIC_KEY) return 'fracture';
+    if (this.currentStageMusicKey === CARDINAL_MUSIC_KEY) return 'cardinal';
+    return 'gameplay';
+  }
+
   private broadcastHostSnapshot(nowMs: number): void {
     if (!this.hostSession) return;
 
@@ -1371,6 +1400,8 @@ export class GameScene extends Phaser.Scene {
       state: this.state,
       overlayLines: this.overlayTexts.map((text) => text.text),
       shop: this.buildShopSnapshot(),
+      events: this.eventRecorder.collect(),
+      music: this.currentMusicId(),
     });
   }
 
@@ -1508,6 +1539,9 @@ export class GameScene extends Phaser.Scene {
     this.events.once('shutdown', () => unsubscribers.forEach((off) => off()));
     keep(
       this.clientSession?.onSnapshot((snapshot) => {
+        // Effects are taken from *every* snapshot that arrives, even one too old to display:
+        // each carries the last few effects, and the de-duplication keeps them to one play each.
+        this.queueClientEvents(snapshot.events);
         // Unreliable + unordered means a snapshot can arrive out of
         // sequence - only ever move forward, never back to a stale tick.
         if (!this.latestSnapshot || isNewerTick(snapshot.tick, this.latestSnapshot.tick)) {
@@ -2852,8 +2886,17 @@ export class GameScene extends Phaser.Scene {
       });
     });
 
+    this.playPendingClientEvents();
+    const clientNowMs = this.time.now;
+    this.bursts.forEach((burst) => burst.update(clientNowMs, deltaSeconds));
+    this.bursts = this.bursts.filter((burst) => burst.isAlive);
+    this.scorePopups.forEach((popup) => popup.update(clientNowMs));
+    this.scorePopups = this.scorePopups.filter((popup) => popup.isAlive);
+
     const snapshot = this.latestSnapshot;
     if (snapshot) {
+      this.applyClientMusic(snapshot.music);
+      this.applyClientEngineSound(snapshot);
       snapshot.ships.forEach((shipSnapshot) => {
         const player = this.players.find((p) => p.slotIndex === shipSnapshot.slotIndex);
         player?.ship.applyNetworkSnapshot(shipSnapshot, snapshot.nowMs);
@@ -2868,6 +2911,57 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.background.update(deltaSeconds);
+  }
+
+  /** Client only - effects from a received snapshot, de-duplicated and queued for the next frame. Bounded: a stalled tab must not pile up minutes of explosions. */
+  private queueClientEvents(events: readonly GameEvent[]): void {
+    const fresh = this.clientEvents.accept(events);
+    if (fresh.length === 0) return;
+    this.pendingClientEvents.push(...fresh);
+    if (this.pendingClientEvents.length > 200) this.pendingClientEvents.splice(0, this.pendingClientEvents.length - 200);
+  }
+
+  private playPendingClientEvents(): void {
+    const events = this.pendingClientEvents;
+    if (events.length === 0) return;
+    this.pendingClientEvents = [];
+    events.forEach((event) => this.applyClientEvent(event));
+  }
+
+  /** Client only - replays one effect the host fired, with the same code the host itself uses, so it looks and sounds the same. */
+  private applyClientEvent(event: GameEvent): void {
+    switch (event.kind) {
+      case 'sfx':
+        this.playSfxLocal(event.sfx);
+        break;
+      case 'burst':
+        this.spawnBurst({ x: event.x, y: event.y }, event.color, GameScene.BURST_CONFIGS[event.style]);
+        break;
+      case 'shake':
+        this.shakeCamera({ durationMs: event.durationMs, intensity: event.intensity });
+        break;
+      case 'popup':
+        this.scorePopups.push(new ScorePopup(this, { x: event.x, y: event.y }, event.color, event.amount, this.time.now));
+        break;
+    }
+  }
+
+  /** Client only - follows whichever stage track the host is on (a boss swaps it). State, not an event, so a missed packet cannot leave the wrong song playing. */
+  private applyClientMusic(id: MusicId): void {
+    const key = id === 'fracture' ? FRACTURE_MUSIC_KEY : id === 'cardinal' ? CARDINAL_MUSIC_KEY : GAMEPLAY_MUSIC_KEY;
+    this.playStageMusic(key);
+  }
+
+  /** Client only - the one shared engine hum, the way the host decides it: on while any live ship is thrusting. Derived from the snapshot, no event needed. */
+  private applyClientEngineSound(snapshot: GameSnapshot): void {
+    const isAnyThrusting = snapshot.ships.some((ship) => ship.alive && ship.thrusting);
+    if (isAnyThrusting && !this.wasAnyThrusting) {
+      stopSound(this, THRUST_SFX_KEY);
+      playLoopingSound(this, THRUST_SFX_KEY, getSfxVolume());
+    } else if (!isAnyThrusting && this.wasAnyThrusting) {
+      stopSound(this, THRUST_SFX_KEY);
+    }
+    this.wasAnyThrusting = isAnyThrusting;
   }
 
   /**
@@ -3126,7 +3220,9 @@ export class GameScene extends Phaser.Scene {
     this.entityMirrors.clear();
     this.teardownClientOverlay();
     this.teardownClientShop();
-    stopSound(this, GAMEPLAY_MUSIC_KEY);
+    stopSound(this, THRUST_SFX_KEY);
+    this.wasAnyThrusting = false;
+    stopSound(this, this.currentStageMusicKey ?? GAMEPLAY_MUSIC_KEY);
   }
 
   /**
@@ -3539,7 +3635,7 @@ export class GameScene extends Phaser.Scene {
       if (remainingMs <= 0) {
         this.spawnBlackHole(nowMs);
       } else if (remainingMs <= BLACK_HOLE.approachWarningMs && !this.blackHoleWarningPlayed) {
-        this.sound.play(BLACK_HOLE_APPROACHING_SFX_KEY, { volume: getSfxVolume() });
+        this.playSfx('blackHoleApproaching');
         this.blackHoleWarningPlayed = true;
       }
     } else if (this.blackHole && nowMs - this.blackHoleSpawnedAtMs >= BLACK_HOLE.activeDurationMs) {
@@ -3638,7 +3734,7 @@ export class GameScene extends Phaser.Scene {
       );
       const heading = applyAimSpread(lead, UFO.aimSpreadRad);
       this.ufoShots.push(new UfoShot(this, ufo.position, heading, nowMs));
-      playUfoShotSfx(this, getSfxVolume());
+      this.playSfx('ufoShot');
       ufo.recordFired(nowMs);
     }
   }
@@ -3661,7 +3757,7 @@ export class GameScene extends Phaser.Scene {
 
   /** One weapon discharge - one shot for the base weapon, up to 3 for Splitshot (see WeaponUpgrades.computeShotSpecs), all spawned from the same ship position/frame. One SHOT_SFX_KEY play per discharge, not per pellet - a Splitshot volley is one weapon firing, not three. */
   private fireProjectile(player: PlayerSlot, nowMs: number, shots: ShotSpec[]): void {
-    this.sound.play(SHOT_SFX_KEY, { volume: getSfxVolume() });
+    this.playSfx('shot');
     this.stageShotsFired += shots.length; // per projectile, not per trigger-pull - fair accuracy for Splitshot
     for (const shot of shots) {
       this.projectiles.push(
@@ -3773,7 +3869,7 @@ export class GameScene extends Phaser.Scene {
     this.ufos.push(new Ufo(this, x, y, heading));
     // A UFO used to arrive in complete silence - the one hazard in the
     // game that announces itself now does.
-    playUfoSpawnSfx(this, getSfxVolume());
+    this.playSfx('ufoSpawn');
   }
 
   /** Same edge-spawn shape as spawnUfo() above, its own radius/speed. */
@@ -4895,7 +4991,7 @@ export class GameScene extends Phaser.Scene {
     this.pendingShieldPickups = [];
     for (const { ship, shield } of pickups) {
       if (!shield.isAlive) continue;
-      this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume: getSfxVolume() });
+      this.playSfx('shieldPickup');
       shield.destroy();
       if (ship.isAlive) ship.grantShield();
     }
@@ -4950,7 +5046,7 @@ export class GameScene extends Phaser.Scene {
 
       const position = ship.position;
       const color = ship.color;
-      this.sound.play(SHIP_DESTROYED_SFX_KEY, { volume: getSfxVolume() });
+      this.playSfx('shipDestroyed');
       ship.destroy();
       this.spawnBurst(position, color, EFFECTS.shipBurst);
       this.shakeCamera(EFFECTS.majorShake);
@@ -5354,7 +5450,7 @@ export class GameScene extends Phaser.Scene {
       // No dedicated "docked" SFX yet - reusing the Shield pickup sound,
       // same "reuse over silence" precedent as the UFO's own destruction
       // SFX gap.
-      this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume: getSfxVolume() });
+      this.playSfx('shieldPickup');
       this.refreshAllPlayerHud();
     }
   }
@@ -5418,7 +5514,7 @@ export class GameScene extends Phaser.Scene {
       commander.pickUp(ship);
       rescuer.towedCommander = commander;
       // No dedicated rescue SFX yet - reusing the Shield pickup sound.
-      this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume: getSfxVolume() });
+      this.playSfx('shieldPickup');
       this.refreshAllPlayerHud();
     }
   }
@@ -5472,7 +5568,7 @@ export class GameScene extends Phaser.Scene {
       // Its own synthesized death, no longer the ship's explosion on
       // loan - see systems/ProceduralSfx.ts for why these three are
       // generated rather than bundled as assets.
-      playUfoDestroyedSfx(this, getSfxVolume());
+      this.playSfx('ufoDestroyed');
       this.spawnBurst(position, COLORS.ufo, EFFECTS.ufoBurst);
       this.shakeCamera(EFFECTS.majorShake);
       if (awardScore && projectile) {
@@ -5554,7 +5650,7 @@ export class GameScene extends Phaser.Scene {
       fracture.destroy();
       this.fracture = undefined;
       this.spawnBurst(position, COLORS.fracture, EFFECTS.ufoBurst);
-      this.sound.play(SHIP_DESTROYED_SFX_KEY, { volume: getSfxVolume() });
+      this.playSfx('shipDestroyed');
       this.shakeCamera(EFFECTS.majorShake);
       this.awardScore(projectile.ownerIndex, FRACTURE.score, position);
       this.spawnFractureFragments(position, nowMs);
@@ -5652,7 +5748,7 @@ export class GameScene extends Phaser.Scene {
       swarmBit.destroy();
       player.scrap += 1;
       this.refreshAllPlayerHud();
-      this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume: getSfxVolume() }); // no dedicated scrap pickup SFX yet - reusing the closest existing "pickup" sound
+      this.playSfx('shieldPickup'); // no dedicated scrap pickup SFX yet - reusing the closest existing "pickup" sound
       this.spawnBurst(position, COLORS.fracture, EFFECTS.asteroidBurst);
     }
   }
@@ -5827,7 +5923,7 @@ export class GameScene extends Phaser.Scene {
     this.hideCardinalHealthBar();
 
     this.spawnBurst(position, COLORS.ufo, EFFECTS.ufoBurst);
-    this.sound.play(SHIP_DESTROYED_SFX_KEY, { volume: getSfxVolume() });
+    this.playSfx('shipDestroyed');
     this.shakeCamera(EFFECTS.majorShake);
   }
 
@@ -5888,7 +5984,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private destroyAsteroid(asteroid: Asteroid, projectile: Projectile): void {
-    this.sound.play(ASTEROID_HIT_SFX_KEY, { volume: getSfxVolume() });
+    this.playSfx('asteroidHit');
     projectile.destroy();
 
     const position = asteroid.position;
@@ -5959,6 +6055,55 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Records a one-shot effect for the clients, if there are any (a local game has no one to tell, and must not accumulate them). */
+  private emitEvent(body: GameEventBody): void {
+    if (this.networkRole === 'host' && this.hostSession) this.eventRecorder.emit(body);
+  }
+
+  /** Plays a one-shot sound here, and tells the clients to play it too. Every one-shot sound in the game goes through this. */
+  private playSfx(id: SfxId): void {
+    this.playSfxLocal(id);
+    this.emitEvent({ kind: 'sfx', sfx: id });
+  }
+
+  /** The actual playing, shared by the host (`playSfx`) and a client replaying a received event. Volume is always the *local* player's setting. */
+  private playSfxLocal(id: SfxId): void {
+    const volume = getSfxVolume();
+    switch (id) {
+      case 'shot':
+        this.sound.play(SHOT_SFX_KEY, { volume });
+        break;
+      case 'asteroidHit':
+        this.sound.play(ASTEROID_HIT_SFX_KEY, { volume });
+        break;
+      case 'shipDestroyed':
+        this.sound.play(SHIP_DESTROYED_SFX_KEY, { volume });
+        break;
+      case 'shieldPickup':
+        this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume });
+        break;
+      case 'blackHoleApproaching':
+        this.sound.play(BLACK_HOLE_APPROACHING_SFX_KEY, { volume });
+        break;
+      case 'ufoSpawn':
+        playUfoSpawnSfx(this, volume);
+        break;
+      case 'ufoShot':
+        playUfoShotSfx(this, volume);
+        break;
+      case 'ufoDestroyed':
+        playUfoDestroyedSfx(this, volume);
+        break;
+    }
+  }
+
+  private static readonly BURST_CONFIGS: Record<BurstStyle, { count: number; speedRange: readonly [number, number]; lifespanMs: number; sizePx: number }> = {
+    ship: EFFECTS.shipBurst,
+    asteroid: EFFECTS.asteroidBurst,
+    ufo: EFFECTS.ufoBurst,
+    mine: EFFECTS.mineBurst,
+  };
+
   private spawnBurst(
     origin: Vector2,
     color: number,
@@ -5969,6 +6114,8 @@ export class GameScene extends Phaser.Scene {
       sizePx: number;
     },
   ): void {
+    const style = (Object.keys(GameScene.BURST_CONFIGS) as BurstStyle[]).find((key) => GameScene.BURST_CONFIGS[key] === config);
+    if (style) this.emitEvent({ kind: 'burst', x: origin.x, y: origin.y, color, style });
     this.bursts.push(
       new DestructionBurst(
         this,
@@ -6083,7 +6230,7 @@ export class GameScene extends Phaser.Scene {
     ship.visual.setPosition(destination.x, destination.y);
     ship.visual.setVelocity(0, 0);
     this.spawnBurst(destination, ship.color, EFFECTS.asteroidBurst);
-    this.sound.play(SHIELD_PICKUP_SFX_KEY, { volume: getSfxVolume() }); // no dedicated jump SFX yet - closest existing "something teleported/appeared" cue
+    this.playSfx('shieldPickup'); // no dedicated jump SFX yet - closest existing "something teleported/appeared" cue
 
     if (Math.random() < HYPERSPACE.deathChance && !this.pendingShipHits.includes(ship)) {
       this.pendingShipHits.push(ship);
@@ -6112,6 +6259,9 @@ export class GameScene extends Phaser.Scene {
 
   /** Honors the OS "reduce motion" setting, same courtesy HyperOut's own screen shake already extends - decorative particle bursts aren't gated, only camera motion is. */
   private shakeCamera(config: { durationMs: number; intensity: number }): void {
+    // Told to the clients before this player's own reduced-motion setting is consulted:
+    // each client applies its own.
+    this.emitEvent({ kind: 'shake', durationMs: config.durationMs, intensity: config.intensity });
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     this.cameras.main.shake(config.durationMs, config.intensity);
   }
@@ -6153,6 +6303,7 @@ export class GameScene extends Phaser.Scene {
     this.refreshAllPlayerHud();
     const color = COLORS.players[ownerIndex] ?? COLORS.players[0];
     this.scorePopups.push(new ScorePopup(this, position, color, awarded, nowMs));
+    this.emitEvent({ kind: 'popup', x: position.x, y: position.y, color, amount: awarded });
   }
 
   /**

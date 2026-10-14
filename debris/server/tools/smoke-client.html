@@ -51,6 +51,8 @@ class Player {
     this.snaps = 0; this.lastTick = -1; this.regressions = 0; this.states = new Set(); this.types = new Set();
     this.ships = new Map(); // slot -> { first, last }
     this.firstAt = null; this.bytes = 0; this.tLast = null;
+    // one-shot effects (sounds, bursts, shake, popups) seen in snapshots
+    this.eventSeen = new Map(); this.eventKinds = new Set(); this.sfxSeen = new Set(); this.musicSeen = new Set(); this.idsAscending = true; this.maxEventId = 0;
   }
   get slots() { return this.joined ? this.joined.slotIndices : []; }
   async connect() {
@@ -84,6 +86,14 @@ class Player {
       if (s.tick <= this.lastTick) this.regressions += 1;
       this.lastTick = Math.max(this.lastTick, s.tick);
       this.states.add(s.state);
+      this.musicSeen.add(s.music);
+      (s.events || []).forEach((ev) => {
+        const seenBefore = this.eventSeen.get(ev.id) || 0;
+        this.eventSeen.set(ev.id, seenBefore + 1);
+        this.eventKinds.add(ev.kind);
+        if (ev.kind === 'sfx') this.sfxSeen.add(ev.sfx);
+        if (seenBefore === 0) { if (ev.id <= this.maxEventId - 5) this.idsAscending = false; this.maxEventId = Math.max(this.maxEventId, ev.id); }
+      });
       s.entities.forEach((en) => this.types.add(en.type));
       s.ships.forEach((sh) => {
         const rec = this.ships.get(sh.slotIndex) || { first: sh, last: sh };
@@ -149,6 +159,14 @@ async function scenarioPlay() {
     check(p.snaps >= SECONDS * 5, `${p.name}: enough snapshots (${p.snaps})`);
     check(p.regressions === 0, `${p.name}: ticks monotonic`);
     check(p.moved(p.slots[0]) > 5, `${p.name}: ship responded to input (${p.moved(p.slots[0]).toFixed(0)}px)`);
+    // The one-shot effects: these ships fire constantly, so real shot sounds must show up.
+    const repeats = [...p.eventSeen.values()];
+    say(`[${p.name}] effects: ${p.eventSeen.size} distinct events, kinds ${[...p.eventKinds]}, sounds ${[...p.sfxSeen]}, music ${[...p.musicSeen]}`);
+    check(p.sfxSeen.has('shot'), `${p.name}: the firing was announced as a 'shot' sound effect`);
+    check(repeats.length > 0 && Math.max(...repeats) <= 3, `${p.name}: no effect repeats more than 3 times (max ${Math.max(0, ...repeats)})`);
+    check(repeats.length > 0 && Math.min(...repeats) >= 1 && repeats.filter((n) => n >= 2).length > 0, `${p.name}: effects are repeated for loss tolerance`);
+    check(p.idsAscending, `${p.name}: event ids arrive in order`);
+    check(p.musicSeen.size === 1 && p.musicSeen.has('gameplay'), `${p.name}: the snapshot names the stage music (${[...p.musicSeen]})`);
   }
   players.forEach((p) => p.close());
 }

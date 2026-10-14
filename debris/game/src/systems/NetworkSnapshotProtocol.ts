@@ -23,6 +23,7 @@
  */
 
 import { NETWORK_SYNC } from '../config/GameConfig';
+import { MUSIC_IDS, sanitizeEvents, type GameEvent, type MusicId } from './GameEvents';
 
 export type EntityDataValue = number | string | boolean;
 
@@ -102,6 +103,10 @@ export interface GameSnapshot {
   /** Whatever `this.overlayTexts` currently shows host-side (boss announcement, game over, paused, ...) - empty when no overlay is up. */
   readonly overlayLines: readonly string[];
   readonly shop: ShopSnapshot | undefined;
+  /** One-shot effects fired recently (sounds, bursts, shake, popups) - each repeats in a few consecutive snapshots and the client plays it once (`systems/GameEvents.ts`). */
+  readonly events: readonly GameEvent[];
+  /** Which stage music the host is playing. State rather than an event: a client that joins late, or misses a packet, still lands on the right track. */
+  readonly music: MusicId;
 }
 
 export interface InputMessage {
@@ -261,6 +266,9 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
     return undefined;
   }
   if (candidate.shop !== undefined && !isShopSnapshot(candidate.shop)) return undefined;
+  // Effects are decorative: an event or a track name we do not understand is dropped or defaulted,
+  // never a reason to throw the whole snapshot (and the positions in it) away.
+  const music: MusicId = (MUSIC_IDS as readonly unknown[]).includes(candidate.music) ? (candidate.music as MusicId) : 'gameplay';
 
   return {
     type: 'debris-snapshot',
@@ -271,6 +279,8 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
     players: candidate.players as PlayerHudSnapshot[],
     state: candidate.state,
     overlayLines: candidate.overlayLines as string[],
+    events: sanitizeEvents(candidate.events),
+    music,
     shop: candidate.shop as ShopSnapshot | undefined,
   };
 }
