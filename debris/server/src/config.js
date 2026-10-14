@@ -10,10 +10,8 @@
  * port is exactly the kind of mistake a server config must not allow.
  *
  * Which keys the server already acts on (phase of the online plan):
- *   network.*, gameplay.*, ops.logLevel/logFile/snapshotHz  - phase 3
- *   dev.autoStartDelayMs  - phase 3 only; removed when the lobby leader
- *                           (phase 4) starts matches instead
- *   name                  - phase 3 (logs) / phase 5 (Online screen)
+ *   network.*, gameplay.*, ops.logLevel/logFile/snapshotHz  - in use
+ *   name                  - in use (logs) / phase 5 (Online screen)
  *   motd, password        - phase 5
  *   ops.highscoreApi*     - phase 6
  */
@@ -28,9 +26,8 @@ const DEFAULTS = Object.freeze({
     udpPortRange: [50000, 50100],
     stunServers: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'],
   },
-  gameplay: { defaultMode: 'cooperative', maxPlayers: 4 },
+  gameplay: { defaultMode: 'cooperative', maxPlayers: 4, returnToLobbyDelayMs: 8000 },
   ops: { logLevel: 'info', logFile: null, snapshotHz: 30, highscoreApiUrl: null, highscoreApiKey: null },
-  dev: { autoStartDelayMs: 3000 },
 });
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
@@ -75,15 +72,13 @@ function validateConfig(input = {}) {
   const problems = [];
   if (!isPlainObject(input)) throw new ConfigError(['the config file must contain a JSON object']);
 
-  unknownKeys(input, ['name', 'motd', 'password', 'network', 'gameplay', 'ops', 'dev'], '', problems);
+  unknownKeys(input, ['name', 'motd', 'password', 'network', 'gameplay', 'ops'], '', problems);
   const network = section(input, 'network', problems);
   const gameplay = section(input, 'gameplay', problems);
   const ops = section(input, 'ops', problems);
-  const dev = section(input, 'dev', problems);
   unknownKeys(network, ['bindAddress', 'signalingPort', 'udpPortRange', 'stunServers'], 'network.', problems);
-  unknownKeys(gameplay, ['defaultMode', 'maxPlayers'], 'gameplay.', problems);
+  unknownKeys(gameplay, ['defaultMode', 'maxPlayers', 'returnToLobbyDelayMs'], 'gameplay.', problems);
   unknownKeys(ops, ['logLevel', 'logFile', 'snapshotHz', 'highscoreApiUrl', 'highscoreApiKey'], 'ops.', problems);
-  unknownKeys(dev, ['autoStartDelayMs'], 'dev.', problems);
 
   const config = {
     name: input.name ?? DEFAULTS.name,
@@ -92,7 +87,6 @@ function validateConfig(input = {}) {
     network: { ...DEFAULTS.network, ...network },
     gameplay: { ...DEFAULTS.gameplay, ...gameplay },
     ops: { ...DEFAULTS.ops, ...ops },
-    dev: { ...DEFAULTS.dev, ...dev },
   };
 
   if (!isNonEmptyString(config.name, 40)) problems.push('"name" must be a string of 1-40 characters');
@@ -114,6 +108,7 @@ function validateConfig(input = {}) {
 
   if (!MODES.includes(config.gameplay.defaultMode)) problems.push(`"gameplay.defaultMode" must be one of: ${MODES.join(', ')}`);
   if (!isInt(config.gameplay.maxPlayers, 1, 4)) problems.push('"gameplay.maxPlayers" must be an integer 1-4');
+  if (!isInt(config.gameplay.returnToLobbyDelayMs, 0, 60000)) problems.push('"gameplay.returnToLobbyDelayMs" must be an integer 0-60000 (how long the end screen shows)');
 
   const o = config.ops;
   if (!LOG_LEVELS.includes(o.logLevel)) problems.push(`"ops.logLevel" must be one of: ${LOG_LEVELS.join(', ')}`);
@@ -127,14 +122,13 @@ function validateConfig(input = {}) {
     problems.push('"ops.highscoreApiUrl" and "ops.highscoreApiKey" must be set together (or both null)');
   }
 
-  if (!isInt(config.dev.autoStartDelayMs, 0, 60000)) problems.push('"dev.autoStartDelayMs" must be an integer 0-60000');
 
   if (problems.length > 0) throw new ConfigError(problems);
 
   // Freeze the nested objects too - nothing should mutate config at runtime.
   config.network.udpPortRange = Object.freeze([...config.network.udpPortRange]);
   config.network.stunServers = Object.freeze([...config.network.stunServers]);
-  for (const key of ['network', 'gameplay', 'ops', 'dev']) Object.freeze(config[key]);
+  for (const key of ['network', 'gameplay', 'ops']) Object.freeze(config[key]);
   return Object.freeze(config);
 }
 

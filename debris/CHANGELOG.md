@@ -23,6 +23,57 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-14 — Online play, phase 4: the lobby, leader and match loop
+
+The dedicated server now runs the real lobby -> match -> lobby loop in
+place of phase 3's auto-start. Verified locally with the smoke client
+(`--scenario=play` with 4 players in Competitive, and `--scenario=lobby`,
+both PASS); still not run on the Linux server or over the internet.
+
+- **Rules as a pure state machine** (`systems/DedicatedLobby.ts`, 21 unit
+  tests): first joiner leads, leadership passes to the *earliest remaining
+  joiner* (not the lowest slot), only the leader may start or change the
+  mode and only while gathering, joiners during a match get
+  `matchInProgress`, a full lobby gets `full`, an emptied lobby resets to the
+  default mode. **Competitive will not start with one player**: it was found
+  by reading `RoundOutcome.ts`, where a lone survivor is an instant winner.
+- **Wire messages** (`NetworkHandshakeProtocol.ts`, reliable channel):
+  `debris-lobby` (state, broadcast on every change), `debris-lobby-command`
+  (`start` / `setMode`, extra fields dropped on decode) and `debris-reject`.
+  `PROTOCOL_VERSION` is now 3 - an older client refuses a v3 server.
+- **Identity comes from the connection, never the message**
+  (`systems/DedicatedServer.ts`): a connection's slot is fixed when it is
+  seated and all its commands and input are attributed to it. A `slotIndex`
+  inside an input message is ignored (`NetworkHostSession` now passes the
+  sending connection to `onClientInput`). LAN still trusts the claim; that is
+  fine on a LAN and is now a deliberate difference. The smoke test proves it:
+  one client sends all its input claiming another player's slot and still
+  moves only its own ship.
+- **End of match** (`GameScene` `dedicated` hooks, `systems/DedicatedMatch.ts`):
+  on a dedicated host the round end skips initials entry and the
+  press-any-key wait, shows the result for `gameplay.returnToLobbyDelayMs`
+  (clients see it through the normal overlay snapshot), then reports a
+  `MatchResult` (outcome, winner, per-slot scores, pooled score, participants)
+  to the server. Phase 6 will submit that to the leaderboard. Local and LAN
+  play are unchanged.
+- **Connections outlive scenes**: `DedicatedServer` lives in the game
+  registry while `DedicatedServerScene` and `GameScene` swap around it.
+  `GameScene`'s remote-disconnect handler now ignores drops while the scene
+  is not running (`onClosed` cannot be unregistered, and a lobby drop must
+  not reach a torn-down scene's players).
+- **Faster leave detection** (`RtcConnection`): the data channels' `close`
+  now also fires the closed listeners. A deliberate leave was previously seen
+  only after ICE's keep-alive timeout (measured 5.4 s); it is now ~56 ms. A
+  *cut* connection still takes the timeout. This also applies to LAN play.
+- **Config**: `dev.autoStartDelayMs` is gone (using it is now an
+  "unknown key" error); `gameplay.returnToLobbyDelayMs` (default 8000) is new.
+- **Not done, on purpose**: no client lobby UI (phase 5, so the existing game
+  client cannot join this server yet), no reconnect window (phase 5), no
+  score submission (phase 6), no idle-leader timeout (a leader who goes AFK
+  blocks everyone - phase 8).
+- Tests: game 385 (was 356), server 19 `node --test`, plus both smoke
+  scenarios; `tsc`, eslint and builds pass.
+
 ## 2026-10-14 — Online play, phase 3: the dedicated server shell
 
 `debris/server`: the unchanged game running headless in Electron, behind a

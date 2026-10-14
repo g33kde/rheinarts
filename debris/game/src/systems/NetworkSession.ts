@@ -54,18 +54,20 @@ export class NetworkHostSession {
    * a lobby concern, not this class's. `onClientInput` fires once per
    * decoded `InputMessage` afterward, from whichever client sent it -
    * `GameScene` is the one that knows which `RemoteInput` (one per
-   * connected slot) to update.
+   * connected slot) to update. `from` is the connection it arrived on: a
+   * message's own `slotIndex` is only a claim, so the dedicated server
+   * (open to the internet) uses `from` to decide whose input it really is.
    */
   start(
     onClientConnected: (connection: RtcConnection) => void,
-    onClientInput: (message: InputMessage) => void,
+    onClientInput: (message: InputMessage, from: RtcConnection) => void,
   ): void {
     this.host.listen((connection) => {
       this.connections.push(connection);
       onClientConnected(connection);
       connection.onUnreliableMessage((data) => {
         const message = decodeInput(data);
-        if (message) onClientInput(message);
+        if (message) onClientInput(message, connection);
       });
     });
   }

@@ -94,6 +94,7 @@ import {
 import { Wreck } from '../entities/Wreck';
 import { generateTerrain, type KeepOut } from '../systems/ArenaTerrain';
 import { computeBotIntent } from '../systems/DemoBot';
+import type { DedicatedMatchHooks, MatchResult } from '../systems/DedicatedMatch';
 import { SnapshotThrottle } from '../systems/SnapshotThrottle';
 import { computeStageRank, type StageRankResult } from '../systems/StageRank';
 import {
@@ -483,6 +484,8 @@ export class GameScene extends Phaser.Scene {
   private snapshotTick = 0;
   /** Host only - decides which frames also send a snapshot, per the session's transport rate. Created lazily once `hostSession` is known. Fed `performance.now()`, not game time, so a paused scene's frozen clock can't stall it. */
   private snapshotThrottle: SnapshotThrottle | undefined;
+  /** Dedicated server only (online phase 4) - set when no local player exists to press a key at GAME OVER; the round end reports here and the server decides what happens next. */
+  private dedicatedHooks: DedicatedMatchHooks | undefined;
   /** Client only - the most recently received snapshot, applied once per frame in updateNetworkClient() rather than the instant it arrives (messages and frames aren't synchronized). */
   private latestSnapshot: GameSnapshot | undefined;
   /** Client only - this machine's own real input device, always the full P1 binding set (not split P1/P2 the way local co-op shares one keyboard) since a dedicated network client has nobody else to share it with. */
@@ -710,6 +713,7 @@ export class GameScene extends Phaser.Scene {
     clientSession?: NetworkClientSession;
     remoteInputsBySlot?: Map<number, RemoteInput>;
     remoteConnectionsBySlot?: Map<number, RtcConnection>;
+    dedicated?: DedicatedMatchHooks;
   }): void {
     this.mode = data?.mode ?? 'cooperative';
     this.sources = data?.sources ?? ['keyboard', 'keyboard', 'gamepad', 'gamepad'];
@@ -721,6 +725,8 @@ export class GameScene extends Phaser.Scene {
     this.clientSession = data?.clientSession;
     this.remoteInputsBySlot = data?.remoteInputsBySlot ?? new Map();
     this.remoteConnectionsBySlot = data?.remoteConnectionsBySlot ?? new Map();
+    this.dedicatedHooks = data?.dedicated;
+    this.snapshotThrottle = undefined;
     this.snapshotTick = 0;
     this.latestSnapshot = undefined;
     this.entityNetworkIds = new WeakMap();
@@ -1015,6 +1021,11 @@ export class GameScene extends Phaser.Scene {
 
   /** "That player's ship is removed; everyone else keeps playing" - the decided rule for a non-host disconnect. Reuses the exact same eliminated/checkRoundOutcome path a Competitive loss-of-lives already takes, rather than a parallel mechanism just for this. */
   private handleRemotePlayerDisconnected(slotIndex: number): void {
+    // On a dedicated server the same connections outlive a match (they sit
+    // in the lobby between matches), and `onClosed` cannot be unregistered.
+    // A drop in the lobby must not reach into this scene's torn-down
+    // players - the lobby owns that case.
+    if (!this.sys.isActive()) return;
     const player = this.players.find((p) => p.slotIndex === slotIndex);
     if (!player || player.eliminated) return;
 
@@ -4911,6 +4922,11 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (this.dedicatedHooks) {
+      this.resolveDedicatedRound(outcome, this.dedicatedHooks);
+      return;
+    }
+
     // The round is over - drop any respawns still in flight so a
     // just-eliminated player's earlier death doesn't pop a ghost ship
     // back in after the GAME OVER overlay is already up.
@@ -6717,6 +6733,44 @@ export class GameScene extends Phaser.Scene {
     if (this.currentStageMusicKey) stopSound(this, this.currentStageMusicKey);
     this.currentStageMusicKey = key;
     playLoopingSound(this, key, getMusicVolume());
+  }
+
+  /**
+   * The round-end path for a dedicated server (online phase 4): no local
+   * player to type initials or press a key, so skip the leaderboard
+   * prompts, show the result for `returnToLobbyDelayMs` (clients see the
+   * same overlay through the snapshot), then hand the result to the
+   * server. Leaderboard submission itself belongs to the server (phase 6),
+   * which is why the full result - not just a message - goes back.
+   */
+  private resolveDedicatedRound(outcome: ResolvedRoundOutcome, hooks: DedicatedMatchHooks): void {
+    this.pendingRespawns = [];
+    stopSound(this, THRUST_SFX_KEY);
+    this.wasAnyThrusting = false;
+    this.matter.world.pause();
+
+    const pooledScore = this.scores.reduce((sum, score) => sum + score, 0);
+    const mode: 'cooperative' | 'competitive' = this.mode === 'competitive' ? 'competitive' : 'cooperative';
+    const winnerSlot = outcome.status === 'win' ? outcome.winnerIndex : null;
+    const result: MatchResult = {
+      mode,
+      outcome: outcome.status,
+      winnerSlot,
+      scores: [...this.scores],
+      pooledScore,
+      participants: this.players.map((player) => player.slotIndex),
+    };
+
+    const headline =
+      outcome.status === 'win'
+        ? `PLAYER ${outcome.winnerIndex + 1} WINS`
+        : outcome.status === 'draw'
+          ? 'DRAW'
+          : 'GAME OVER';
+    const scoreLine = `SCORE ${winnerSlot !== null ? (this.scores[winnerSlot] ?? 0) : pooledScore}`;
+    this.state = 'gameOver';
+    this.showOverlay([headline, scoreLine, 'RETURNING TO LOBBY...']);
+    this.time.delayedCall(hooks.returnToLobbyDelayMs, () => hooks.onMatchEnded(result));
   }
 
   private enterGameOver(lines: string[]): void {

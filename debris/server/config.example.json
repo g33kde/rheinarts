@@ -12,7 +12,8 @@
 
   "gameplay": {
     "defaultMode": "cooperative",
-    "maxPlayers": 4
+    "maxPlayers": 4,
+    "returnToLobbyDelayMs": 8000
   },
 
   "ops": {
@@ -21,9 +22,5 @@
     "snapshotHz": 30,
     "highscoreApiUrl": null,
     "highscoreApiKey": null
-  },
-
-  "dev": {
-    "autoStartDelayMs": 3000
   }
 }

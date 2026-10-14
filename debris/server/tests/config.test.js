@@ -19,6 +19,7 @@ test('empty config yields the defaults', () => {
   assert.equal(config.network.signalingPort, DEFAULTS.network.signalingPort);
   assert.deepEqual(config.network.udpPortRange, [50000, 50100]);
   assert.equal(config.gameplay.defaultMode, 'cooperative');
+  assert.equal(config.gameplay.returnToLobbyDelayMs, 8000);
   assert.equal(config.ops.snapshotHz, 30);
 });
 
@@ -43,6 +44,10 @@ test('returned config is frozen', () => {
 test('unknown keys are rejected at every level', () => {
   const problems = problemsOf({ extra: 1, network: { signalingPrt: 1 }, ops: { nope: true } });
   assert.deepEqual(problems.sort(), ['unknown key "extra"', 'unknown key "network.signalingPrt"', 'unknown key "ops.nope"']);
+});
+
+test('the retired dev section is now an unknown key', () => {
+  assert.deepEqual(problemsOf({ dev: { autoStartDelayMs: 1000 } }), ['unknown key "dev"']);
 });
 
 test('all problems are reported together', () => {
@@ -70,6 +75,9 @@ test('mode, players, log level and hz validation', () => {
   assert.deepEqual(problemsOf({ gameplay: { defaultMode: 'competitive', maxPlayers: 1 } }), []);
   assert.ok(problemsOf({ gameplay: { defaultMode: 'singlePlayer' } }).length > 0);
   assert.ok(problemsOf({ gameplay: { maxPlayers: 0 } }).length > 0);
+  assert.ok(problemsOf({ gameplay: { returnToLobbyDelayMs: -1 } }).length > 0);
+  assert.ok(problemsOf({ gameplay: { returnToLobbyDelayMs: 60001 } }).length > 0);
+  assert.deepEqual(problemsOf({ gameplay: { returnToLobbyDelayMs: 0 } }), []);
   assert.ok(problemsOf({ ops: { logLevel: 'verbose' } }).length > 0);
   assert.ok(problemsOf({ ops: { snapshotHz: 61 } }).length > 0);
 });

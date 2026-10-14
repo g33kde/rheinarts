@@ -63,3 +63,102 @@ export function decodeWelcome(raw: string): WelcomeMessage | undefined {
     protocolVersion: candidate.protocolVersion,
   };
 }
+
+/**
+ * Dedicated-server lobby messages (docs/roadmap.md's "Windows + LAN
+ * multiplayer" - online phase 4). All three travel the *reliable*
+ * channel: a lost "you're the leader now" or a swallowed START would be a
+ * stuck lobby, not a stale frame.
+ *
+ * A dedicated server has no host player, so the lobby has a **leader**:
+ * the earliest joiner still connected, passed on when they leave. Only the
+ * leader's commands are honoured, and the server decides who sent a
+ * command from the *connection* it arrived on - never from anything the
+ * message itself claims.
+ */
+
+export type LobbyMode = 'cooperative' | 'competitive';
+
+/** Server -> every client, whenever anything about the lobby changes (a join, a leave, a new leader, a mode change, a match starting or ending). Clients render the lobby from the latest one. */
+export interface LobbyStateMessage {
+  readonly type: 'debris-lobby';
+  /** `inMatch` = a match is running and joiners are turned away; `lobby` = players are gathering. */
+  readonly status: 'lobby' | 'inMatch';
+  readonly mode: LobbyMode;
+  readonly maxPlayers: number;
+  /** Slot of the current leader, or -1 when nobody is connected. */
+  readonly leaderSlot: number;
+  /** Occupied slots in join order (the first is the leader, unless nobody is). */
+  readonly slots: readonly number[];
+}
+
+/** Client -> server. Honoured only from the leader, and only while the lobby is gathering. */
+export type LobbyCommandMessage =
+  | { readonly type: 'debris-lobby-command'; readonly action: 'start' }
+  | { readonly type: 'debris-lobby-command'; readonly action: 'setMode'; readonly mode: LobbyMode };
+
+/** Server -> a connection it will not seat, sent right before it closes it. */
+export interface RejectMessage {
+  readonly type: 'debris-reject';
+  readonly reason: 'full' | 'matchInProgress';
+}
+
+function parseObject(raw: string): Record<string, unknown> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : undefined;
+}
+
+const isMode = (value: unknown): value is LobbyMode => value === 'cooperative' || value === 'competitive';
+
+export function encodeLobbyState(message: LobbyStateMessage): string {
+  return JSON.stringify(message);
+}
+
+export function decodeLobbyState(raw: string): LobbyStateMessage | undefined {
+  const c = parseObject(raw);
+  if (!c || c.type !== 'debris-lobby') return undefined;
+  if (c.status !== 'lobby' && c.status !== 'inMatch') return undefined;
+  if (!isMode(c.mode)) return undefined;
+  if (typeof c.maxPlayers !== 'number' || typeof c.leaderSlot !== 'number') return undefined;
+  if (!Array.isArray(c.slots) || !c.slots.every((s) => Number.isInteger(s))) return undefined;
+  return {
+    type: 'debris-lobby',
+    status: c.status,
+    mode: c.mode,
+    maxPlayers: c.maxPlayers,
+    leaderSlot: c.leaderSlot,
+    slots: c.slots as number[],
+  };
+}
+
+export function encodeLobbyCommand(message: LobbyCommandMessage): string {
+  return JSON.stringify(message);
+}
+
+export function decodeLobbyCommand(raw: string): LobbyCommandMessage | undefined {
+  const c = parseObject(raw);
+  if (!c || c.type !== 'debris-lobby-command') return undefined;
+  if (c.action === 'start') return { type: 'debris-lobby-command', action: 'start' };
+  if (c.action === 'setMode' && isMode(c.mode)) {
+    return { type: 'debris-lobby-command', action: 'setMode', mode: c.mode };
+  }
+  return undefined;
+}
+
+export function encodeReject(message: RejectMessage): string {
+  return JSON.stringify(message);
+}
+
+export function decodeReject(raw: string): RejectMessage | undefined {
+  const c = parseObject(raw);
+  if (!c || c.type !== 'debris-reject') return undefined;
+  if (c.reason !== 'full' && c.reason !== 'matchInProgress') return undefined;
+  return { type: 'debris-reject', reason: c.reason };
+}

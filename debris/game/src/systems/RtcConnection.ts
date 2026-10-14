@@ -78,13 +78,7 @@ export class RtcConnection {
     // listener firing as a surprise.
     this.peer.onconnectionstatechange = () => {
       const state = this.peer.connectionState;
-      if (
-        (state === 'disconnected' || state === 'failed' || state === 'closed') &&
-        !this.hasFiredClosed
-      ) {
-        this.hasFiredClosed = true;
-        this.closedListeners.forEach((listener) => listener());
-      }
+      if (state === 'disconnected' || state === 'failed' || state === 'closed') this.fireClosed();
     };
 
     if (isInitiator) {
@@ -98,6 +92,12 @@ export class RtcConnection {
     }
   }
 
+  private fireClosed(): void {
+    if (this.hasFiredClosed) return;
+    this.hasFiredClosed = true;
+    this.closedListeners.forEach((listener) => listener());
+  }
+
   private wireChannel(channel: RTCDataChannel): void {
     const isReliable = channel.label === RELIABLE_CHANNEL_LABEL;
     if (isReliable) this.reliableChannel = channel;
@@ -107,6 +107,14 @@ export class RtcConnection {
       const listeners = isReliable ? this.reliableListeners : this.unreliableListeners;
       listeners.forEach((listener) => listener(event.data));
     };
+
+    // A peer that closes cleanly tears its data channels down at once, but
+    // the connection-level state can take several seconds to report
+    // 'disconnected' (it waits out ICE's keep-alive timeout). Listening to
+    // the channels too makes a deliberate leave visible immediately - on a
+    // dedicated server that is the difference between a dead player's ship
+    // vanishing now or five seconds from now.
+    channel.onclose = () => this.fireClosed();
 
     channel.onopen = () => {
       // "Connected" once both channels are open, not just one - a

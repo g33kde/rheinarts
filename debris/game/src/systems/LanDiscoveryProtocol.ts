@@ -24,8 +24,12 @@
  * join list; `NetworkHandshakeProtocol.ts`'s own `WelcomeMessage` carries
  * this same number as a second check for the rarer case a connection
  * happens anyway (Sprint 15's version-gating).
+ *
+ * Bumped to 3 for the dedicated server's lobby (online phase 4): new
+ * reliable-channel messages (`debris-lobby`, `debris-lobby-command`,
+ * `debris-reject`) that an older client would not understand.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export interface AnnouncePacket {
   readonly type: 'debris-announce';

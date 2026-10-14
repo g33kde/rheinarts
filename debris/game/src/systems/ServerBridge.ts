@@ -18,10 +18,13 @@ export type ServerLogLevel = 'debug' | 'info' | 'warn' | 'error';
 /** The slice of the server's validated config file (`debris/server/src/config.js`) the game page reads. */
 export interface ServerRuntimeConfig {
   readonly name: string;
-  readonly gameplay: { readonly defaultMode: 'cooperative' | 'competitive'; readonly maxPlayers: number };
+  readonly gameplay: {
+    readonly defaultMode: 'cooperative' | 'competitive';
+    readonly maxPlayers: number;
+    readonly returnToLobbyDelayMs: number;
+  };
   readonly network: { readonly stunServers: readonly string[] };
   readonly ops: { readonly snapshotHz: number };
-  readonly dev: { readonly autoStartDelayMs: number };
 }
 
 declare global {
