@@ -1,6 +1,6 @@
 import type { RtcConnection } from './RtcConnection';
 import { RtcSignalingClient, RtcSignalingHost } from './RtcSignaling';
-import type { HostSignalingChannel } from './SignalingChannel';
+import { LanClientSignalingChannel, type HostSignalingChannel } from './SignalingChannel';
 import {
   decodeInput,
   decodeSnapshot,
@@ -103,7 +103,7 @@ export class NetworkClientSession {
   private pendingUnreliableListeners: ((data: string) => void)[] = [];
 
   async connect(hostAddress: string, hostSignalPort: number): Promise<void> {
-    const connection = await this.client.connect(hostAddress, hostSignalPort);
+    const connection = await this.client.connect(new LanClientSignalingChannel(hostAddress, hostSignalPort));
     this.connection = connection;
     this.pendingReliableListeners.forEach((listener) => connection.onReliableMessage(listener));
     this.pendingUnreliableListeners.forEach((listener) => connection.onUnreliableMessage(listener));

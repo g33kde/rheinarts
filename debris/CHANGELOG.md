@@ -23,6 +23,93 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-14 — Online play, phase 5: the client, joining, reconnect
+
+The real game client can now join the dedicated server: **MULTIPLAYER ->
+ONLINE** shows the server's status, takes a password, seats one or two
+players from this PC, runs the lobby, plays the match, and comes back to the
+lobby after it. Verified by driving the *built* client through all of that
+against a running server (`npm run e2e`, 3/3 passes) plus three smoke
+scenarios against plain protocol clients. All on macOS against `127.0.0.1` -
+**not yet run on the Linux server or across the internet.**
+
+- **Joining** (`systems/OnlineProtocol.ts`, `PROTOCOL_VERSION` 4): nobody is
+  seated until a `debris-join` (version, password, 1-2 local players,
+  optional token) arrives on the reliable channel. Answered with
+  `debris-joined` or `debris-reject` (`full`, `matchInProgress`,
+  `badPassword`, `wrongVersion`, `badRequest`). Password compared in constant
+  time (`SafeEqual.ts`). A connection that never joins is dropped after 10 s.
+- **Two players on one PC**: the lobby now seats *owners* (a PC) with one or
+  two slots, all-or-nothing (`DedicatedLobby.ts`, reworked, 27 tests); a PC
+  with two players is one leader. **Correction to an earlier assumption**: the
+  LAN client did *not* actually support two local players (it sends input for
+  one slot, keyboard P1 keys only, no gamepad, despite what the roadmap says).
+  The online client now does it - the first player on the P1 keys, the second
+  on P2's, as local split-screen play does. LAN is unchanged. Gamepads are
+  still not supported by any network client.
+- **Reconnect** (`ReconnectLedger.ts`, `OnlineClientSession.ts`): a mid-match
+  drop keeps the seat for `gameplay.reconnectGraceMs` (default 30 s). The ship
+  becomes a "ghost" (inert, kept invulnerable every frame so it also covers
+  respawns and other short graces), the lobby shows RECONNECTING, and a join
+  with the token takes everything back - including from a connection the
+  server has not noticed is dead yet. The client retries on its own for the
+  window the server announced and shows a banner. Expiry or match end releases
+  the seat. Not done: a ghost that was in the shop holds up the stage vote
+  until the seat is released.
+- **Input is bound to the connection's own slots**: a message naming a slot the
+  sending connection does not own is dropped (it used to be re-attributed).
+- **Status query** (`debris-status`): answered by the server's main process on
+  the signaling WebSocket, no WebRTC, from the last status the game page
+  pushed plus name/MOTD/password-required. The Online screen polls it every 3 s.
+- **Client screens** (`OnlineScene.ts`, replacing the ONLINE placeholder in
+  `MultiplayerScene`): status panel, password entry (`applyTextKey`), players-
+  on-this-PC toggle, connecting, lobby (leader gets MODE and START), and
+  messages for rejects/failures in words (`OnlineClientLogic.ts`, 17 tests).
+  `RtcSignalingClient` now takes a `ClientSignalingChannel` (LAN UDP or
+  `WebSocketClientSignalingChannel`) and times out instead of waiting forever;
+  it needs no Node, so a browser build could join later. STUN list is several
+  servers (a public one was seen failing a lookup).
+- **Four older bugs found on the way, all fixed** (none were caught earlier
+  because the unit tests never passed real encoded snapshots through the
+  client decoder, and the plain-JS smoke client does not validate):
+  1. **A live, vulnerable ship broke the whole snapshot for the client.** The
+     host sends `invulnerableUntilMs: -Infinity`; JSON writes `null`; the
+     client's validator demanded a number and discarded the *entire snapshot*.
+     A client saw updates only while every ship was dead or invulnerable. This
+     affected **LAN clients too**. The decoder now reads `null` back as
+     `-Infinity` (3 tests).
+  2. **A host stopped broadcasting whenever the round was not being played.**
+     The one broadcast sat at the end of the `playing` path and `update()`
+     returns early for game over, shop, pause and boss announcements - so the
+     overlay and shop state the snapshot carries could never reach a client.
+     `update()` now broadcasts after every kind of frame. **Also LAN.**
+  3. **The server leaked a WebRTC connection per departed player.** Its end of
+     a closed connection was never closed, so it held a UDP port from the
+     pinned range and kept probing a dead address (visible as endless "bad
+     local username" STUN errors). Now closed on leave.
+  4. **Phaser pauses its loop when the page is hidden or loses focus** - fatal
+     for a headless server window. `disableVisibilityChange` (and timer-driven
+     frames) are now on in server mode and e2e mode.
+  Also: a listener that unsubscribes itself during dispatch no longer makes the
+  next one skip (`OnlineClientSession` dispatches over a copy), and a sessions'
+  listeners are released when a scene shuts down.
+- **A test-harness finding, not a game bug**: Electron processes sharing the
+  default profile directory interfere with each other's networking. It showed
+  as a client's connection dropping the instant a second process (the test
+  bot) was active, and cost a long hunt because it looked exactly like a game
+  bug. Every tool process now gets its own `userData`; documented in
+  `server/README.md`. Related and unresolved: a script injected into the
+  client page in the instant of the lobby -> match scene switch coincided with
+  that drop, so the e2e driver installs its recorder before START and then
+  stays quiet. The mechanism was not found.
+- Config: `gameplay.reconnectGraceMs`; `motd` and `password` are now live.
+  `ServerRuntimeConfig` carries them to the game page.
+- Tests: game 432 (was 385), server 22 `node --test`, plus smoke scenarios
+  `play`, `lobby`, `session` and the real-client `e2e`. `tsc`, eslint, both
+  builds pass. **Not covered**: the Online screens' visuals (checked by text,
+  not by eye), anything over a real network, gamepads, the shop-while-ghost
+  case, and a browser build joining.
+
 ## 2026-10-14 — Online play, phase 4: the lobby, leader and match loop
 
 The dedicated server now runs the real lobby -> match -> lobby loop in

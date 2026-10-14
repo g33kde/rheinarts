@@ -41,10 +41,11 @@ default. All problems are reported at once. Not every key is acted on yet:
 | Key | Status |
 | --- | --- |
 | `network.*`, `gameplay.*`, `ops.logLevel/logFile/snapshotHz` | in use |
-| `name` | logged; shown on the Online screen from phase 5 |
-| `motd`, `password` | phase 5 |
-| `ops.highscoreApi*` | phase 6 |
+| `name`, `motd` | in use - shown on the client's Online screen and lobby |
+| `password` | in use - empty = none; checked at join (constant-time compare). Sent over the plain `ws://` signaling channel, so it is only as private as that path |
 | `gameplay.returnToLobbyDelayMs` | in use - how long the end screen shows before the lobby reopens |
+| `gameplay.reconnectGraceMs` | in use - how long a mid-match drop keeps its seat (default 30000; 0 = eliminated at once) |
+| `ops.highscoreApi*` | phase 6 |
 
 ### Firewall
 
@@ -52,6 +53,96 @@ Open **TCP** `network.signalingPort` (default 8765) and **UDP**
 `network.udpPortRange` (default 50000-50100). If `debris.rheinarts.de`
 fronts this server it must be a plain DNS record - Cloudflare's proxy and
 Tunnel carry HTTP only, not WebRTC's UDP.
+
+## Test it
+
+```bash
+npm test                                   # config + signaling unit tests (node --test)
+npm start                                  # in one terminal
+npm run smoke -- --players=4               # in another: join 4, leader starts, snapshots + input checked
+npm run smoke -- --scenario=lobby          # the lobby rules end to end (~30 s)
+npm run smoke -- --scenario=session --password=secret   # join checks, reconnect, two-player PC (needs the config below)
+npm run e2e                                # the REAL game client, clicking through the Online screens
+npm run smoke -- --url=ws://host:8765 --stun=1   # against a remote server
+```
+
+The smoke client (`tools/`) is a plain-JS implementation of the client wire
+protocol, deliberately independent of the game's own client code. Exit code
+0 = PASS. `--scenario=play` (default) joins N players, has the leader
+(optionally `--mode=competitive`) start, then checks welcome, distinct
+slots, snapshot rate, monotonic ticks and that ships respond to input.
+`--scenario=lobby` walks the rules: a non-leader's commands are ignored,
+leadership passes when the leader leaves, Competitive refuses to start
+alone, input claiming someone else's slot is not honoured, a mid-match
+joiner is rejected, and the lobby reopens (and resets) after the match.
+It needs `gameplay.returnToLobbyDelayMs` small (e.g. 1000) to be quick.
+`--scenario=session` needs `"password": "secret"`, `reconnectGraceMs` 3000
+and `returnToLobbyDelayMs` ~1000: it covers the status query, bad joins (no
+password, wrong password, old version, malformed, three local players), a
+two-player PC, a full lobby, input bound to the sender's own slots,
+reconnect inside the window, a takeover by a quick reconnect, and a seat
+released when the window closes.
+
+`npm run e2e` (`tools/client-e2e-main.js`) loads the **built game client**
+(`game/dist-desktop`, with `?e2e` so it exposes its Phaser instance) in a
+hidden window and drives the real Online screens against a running server
+that has the same password/grace/delay config: status panel, a refused join,
+two local players, the lobby, START, a forced connection drop and the
+reconnect banner, and a Competitive match against a bot that leaves, ending
+with the survivor back in the same lobby. Run `npm run build-game` first.
+
+## The lobby
+
+One match at a time. The **first PC to join is the leader**; if it leaves,
+leadership passes to the earliest remaining joiner. Only the leader can
+start the match or switch Cooperative/Competitive, and only while the lobby
+is gathering. Competitive needs at least two *players* (a lone survivor
+"wins" instantly; two players on one PC count as two). When a match ends the
+end screen shows for `returnToLobbyDelayMs`, everyone still connected stays
+seated, and the lobby reopens. An emptied lobby resets to
+`gameplay.defaultMode`.
+
+**Joining.** Nobody is seated until they send a `debris-join` on the
+reliable channel: protocol version, password, how many players are on this
+PC (1 or 2) and optionally a reconnect token. The server answers
+`debris-joined` (slots, token, mode, server name, MOTD) or
+`debris-reject` with a reason: `full`, `matchInProgress`, `badPassword`,
+`wrongVersion` or `badRequest`. A PC with two players takes two slots,
+all-or-nothing. A connection that has not joined within 10 s is dropped.
+
+**Reconnect window.** A player who drops *mid-match* keeps their seat for
+`gameplay.reconnectGraceMs`: their ship goes inert and untouchable (a
+"ghost", shown as RECONNECTING in the lobby), and a join carrying their
+token within the window takes it all back - even from a connection the
+server has not yet noticed is dead. When the window closes, or the match
+ends, the seat is released. Outside a match a drop simply leaves. The
+client (`OnlineClientSession`) retries on its own for as long as the server
+promised to hold the seat.
+
+**Status.** The Online screen asks the server who is on over the signaling
+WebSocket alone - no WebRTC - and the *main process* answers from the last
+status the game page reported, plus name, MOTD and whether a password is
+needed.
+
+Who is allowed to do what is decided by `game/src/systems/DedicatedLobby.ts`
+(pure, unit-tested); `DedicatedServer.ts` feeds it real connections. Every
+message a client sends is attributed to the seat its *connection* was given:
+lobby commands to its owner, and an input message is applied only if the
+slot it names is one of that connection's own. A client cannot drive another
+player's ship or issue the leader's commands.
+
+Every connection the server accepts is closed when its player leaves. (It
+used to be left open, which kept a UDP port from the pinned range and kept
+probing a dead address for every player who ever left.)
+
+## Running more than one Electron process on a machine
+
+Electron processes that share the default profile directory interfere with
+each other's networking. We saw it as a client's WebRTC connection dropping
+the instant a second process (a test bot) was active, which looked exactly
+like a game bug. Give each process its own: `--user-data-dir=<dir>`. The
+smoke and e2e tools do this themselves; if you run two servers on one
+machine, do it for the second.
 
 ## Test it
 
@@ -95,16 +186,21 @@ leader's commands.
 
 ## Known limits
 
-- No password check, no client lobby UI, no reconnect window, no score
-  submission (phases 5 and 6). The existing game client cannot join yet.
-- A leader who joins and goes idle blocks everyone from starting. There is
-  no idle-leader timeout yet (phase 8).
+- Nothing submits scores yet (phase 6). The roadmap's ops work - systemd
+  unit, install script, firewall guide - is phase 7; rate limiting and an
+  idle-leader timeout are phase 8.
+- A leader who joins and goes idle blocks everyone from starting.
 - A player whose connection is *cut* (not closed) is only noticed after
-  ICE's keep-alive timeout, several seconds. A deliberate leave is seen
-  immediately.
+  ICE's keep-alive timeout, several seconds. A deliberate leave is seen at
+  once. (A dropped mid-match player keeps a ghost ship for the grace period
+  either way; a ghost that was in the shop holds up the stage vote until the
+  seat is released.)
 - A signaling socket that closes mid-handshake leaves its half-open
   `RtcConnection` in `RtcSignalingHost.pending` (phase 8 cleanup).
-- No rate limiting or password check yet (phases 5 and 8).
+- Online play is desktop-only for now (the MULTIPLAYER menu entry is hidden
+  in a plain browser tab), although nothing in the Online flow needs Node.
+- Verified on macOS against `127.0.0.1` only - not yet on the Linux server
+  or across the internet.
 
 ## Node version
 

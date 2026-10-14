@@ -112,7 +112,8 @@ import { playUfoDestroyedSfx, playUfoShotSfx, playUfoSpawnSfx } from '../systems
 import { computeAsteroidSpawnCount, computeUfoSpawnIntervalMs } from '../systems/StageScaling';
 import { pickDropTarget } from '../systems/SaboteurAI';
 import { isWithinBlast } from '../systems/DriftMineBlast';
-import { NetworkClientSession, NetworkHostSession } from '../systems/NetworkSession';
+import { NetworkHostSession } from '../systems/NetworkSession';
+import { OnlineClientSession, type ClientSessionLike } from '../systems/OnlineClientSession';
 import type { RtcConnection } from '../systems/RtcConnection';
 import {
   isNewerTick,
@@ -474,8 +475,9 @@ export class GameScene extends Phaser.Scene {
   private networkRole: 'host' | 'client' | undefined;
   /** Which slotIndex is this machine's own local player - 0 for the host always, whatever the host assigned for a client. */
   private localSlotIndex = 0;
+  private localSlotIndices: number[] | undefined;
   private hostSession: NetworkHostSession | undefined;
-  private clientSession: NetworkClientSession | undefined;
+  private clientSession: ClientSessionLike | undefined;
   /** Host only - slotIndex -> the RemoteInput a connected client's own InputMessages get written into. Populated as clients connect, in LanLobbyScene, before this scene ever starts. */
   private remoteInputsBySlot: Map<number, RemoteInput> = new Map();
   /** Host only - slotIndex -> that client's own RtcConnection, purely so this scene (not the now-stopped LanLobbyScene) can register its own onClosed handler once it's actually running - see registerRemoteDisconnectHandlers(). */
@@ -492,6 +494,10 @@ export class GameScene extends Phaser.Scene {
   private latestSnapshot: GameSnapshot | undefined;
   /** Client only - this machine's own real input device, always the full P1 binding set (not split P1/P2 the way local co-op shares one keyboard) since a dedicated network client has nobody else to share it with. */
   private localInput: KeyboardInput | undefined;
+  /** Client only - one entry per player on this PC: its slot and the keyboard set that drives it (P1 keys for the first, P2 keys for a second). */
+  private localInputs: { slot: number; input: KeyboardInput }[] = [];
+  /** Client only - the "RECONNECTING" notice while a dropped online connection is being won back. */
+  private reconnectText: Phaser.GameObjects.Text | undefined;
   /**
    * Host only - every synced non-ship entity (asteroid, projectile, and
    * every type after it, Sprint 8 onward) gets a stable network id the
@@ -712,7 +718,9 @@ export class GameScene extends Phaser.Scene {
     networkRole?: 'host' | 'client';
     localSlotIndex?: number;
     hostSession?: NetworkHostSession;
-    clientSession?: NetworkClientSession;
+    clientSession?: ClientSessionLike;
+    /** Online only - every slot this PC controls (one or two). A LAN client passes just `localSlotIndex`. */
+    localSlotIndices?: number[];
     remoteInputsBySlot?: Map<number, RemoteInput>;
     remoteConnectionsBySlot?: Map<number, RtcConnection>;
     dedicated?: DedicatedMatchHooks;
@@ -725,6 +733,7 @@ export class GameScene extends Phaser.Scene {
     this.localSlotIndex = data?.localSlotIndex ?? 0;
     this.hostSession = data?.hostSession;
     this.clientSession = data?.clientSession;
+    this.localSlotIndices = data?.localSlotIndices;
     this.remoteInputsBySlot = data?.remoteInputsBySlot ?? new Map();
     this.remoteConnectionsBySlot = data?.remoteConnectionsBySlot ?? new Map();
     this.dedicatedHooks = data?.dedicated;
@@ -1484,14 +1493,32 @@ export class GameScene extends Phaser.Scene {
     playLoopingSound(this, GAMEPLAY_MUSIC_KEY, getMusicVolume());
     this.currentStageMusicKey = GAMEPLAY_MUSIC_KEY;
     this.localInput = new KeyboardInput(P1_BINDINGS);
-    this.clientSession?.onSnapshot((snapshot) => {
-      // Unreliable + unordered means a snapshot can arrive out of
-      // sequence - only ever move forward, never back to a stale tick.
-      if (!this.latestSnapshot || isNewerTick(snapshot.tick, this.latestSnapshot.tick)) {
-        this.latestSnapshot = snapshot;
-      }
-    });
-    this.clientSession?.onDisconnected(() => this.handleHostDisconnected());
+    // Two players on one PC (online only) share the keyboard exactly as local
+    // split-screen play does: the first on the P1 keys, the second on P2's.
+    this.localInputs = (this.localSlotIndices ?? [this.localSlotIndex]).map((slot, index) => ({
+      slot,
+      input: index === 0 ? this.localInput! : new KeyboardInput(P2_BINDINGS),
+    }));
+    // An online session outlives this scene (it is reused for the next
+    // match), so whatever we subscribe on it we unsubscribe on shutdown.
+    const unsubscribers: (() => void)[] = [];
+    const keep = (off: void | (() => void)): void => {
+      if (typeof off === 'function') unsubscribers.push(off);
+    };
+    this.events.once('shutdown', () => unsubscribers.forEach((off) => off()));
+    keep(
+      this.clientSession?.onSnapshot((snapshot) => {
+        // Unreliable + unordered means a snapshot can arrive out of
+        // sequence - only ever move forward, never back to a stale tick.
+        if (!this.latestSnapshot || isNewerTick(snapshot.tick, this.latestSnapshot.tick)) {
+          this.latestSnapshot = snapshot;
+        }
+      }),
+    );
+    keep(this.clientSession?.onDisconnected(() => this.handleHostDisconnected()));
+    if (this.clientSession instanceof OnlineClientSession) {
+      this.wireOnlineClient(this.clientSession).forEach((off) => keep(off));
+    }
     this.registerEntityMirrorFactories();
 
     this.players = this.hulls.map((hullId, slotIndex) => {
@@ -2813,17 +2840,17 @@ export class GameScene extends Phaser.Scene {
    * arrived - no local physics for any ship runs here at all.
    */
   private updateNetworkClient(deltaSeconds: number): void {
-    const localPlayer = this.players.find((player) => player.slotIndex === this.localSlotIndex);
-    if (localPlayer && this.localInput) {
+    this.localInputs.forEach(({ slot, input }) => {
+      if (!this.players.some((player) => player.slotIndex === slot)) return;
       this.clientSession?.sendInput({
         type: 'debris-input',
-        slotIndex: this.localSlotIndex,
-        turnDirection: this.localInput.turnDirection,
-        isThrusting: this.localInput.isThrusting,
-        isFiring: this.localInput.isFiring,
-        isHyperspacing: this.localInput.isHyperspacing,
+        slotIndex: slot,
+        turnDirection: input.turnDirection,
+        isThrusting: input.isThrusting,
+        isFiring: input.isFiring,
+        isHyperspacing: input.isHyperspacing,
       });
-    }
+    });
 
     const snapshot = this.latestSnapshot;
     if (snapshot) {
@@ -3084,12 +3111,52 @@ export class GameScene extends Phaser.Scene {
    * message this scene could ever receive in that direction.
    */
   private handleHostDisconnected(): void {
+    const online = this.clientSession instanceof OnlineClientSession;
     this.clientSession?.stop();
+    this.leaveClientMatch();
+    // Online, say what happened instead of dropping the player at the main menu.
+    if (online) this.scene.start('Online', { message: 'The connection to the server was lost.' });
+    else this.scene.start('Menu');
+  }
+
+  /** Common teardown for every way a client leaves a networked match. */
+  private leaveClientMatch(): void {
+    this.reconnectText?.destroy();
+    this.reconnectText = undefined;
     this.entityMirrors.clear();
     this.teardownClientOverlay();
     this.teardownClientShop();
     stopSound(this, GAMEPLAY_MUSIC_KEY);
-    this.scene.start('Menu');
+  }
+
+  /**
+   * Online client only (online phase 5) - what an online session adds on
+   * top of a LAN one: the match ending (the server says the lobby is back),
+   * and a dropped link being won back inside the server's reconnect window.
+   */
+  private wireOnlineClient(session: OnlineClientSession): (() => void)[] {
+    const offLobby = session.onLobby((lobby) => {
+      if (lobby.status !== 'lobby') return;
+      this.leaveClientMatch();
+      this.scene.start('Online', { session });
+    });
+    const offReconnecting = session.onReconnecting((secondsLeft) => {
+      this.reconnectText ??= this.add
+        .text(ARENA_WIDTH / 2, 80, '', {
+          fontFamily: 'monospace',
+          fontSize: '28px',
+          fontStyle: 'bold',
+          color: '#ffb347',
+        })
+        .setOrigin(0.5)
+        .setDepth(1000);
+      this.reconnectText.setText(`CONNECTION LOST - RECONNECTING... (${secondsLeft}s)`);
+    });
+    const offReconnected = session.onReconnected(() => {
+      this.reconnectText?.destroy();
+      this.reconnectText = undefined;
+    });
+    return [offLobby, offReconnecting, offReconnected];
   }
 
   /**
@@ -3112,6 +3179,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, deltaMs: number): void {
+    this.updateFrame(deltaMs);
+
+    // Broadcast after *every* kind of frame. `updateFrame` returns early for
+    // everything that is not plain play (game over, the shop, pause, boss
+    // announcements, initials entry), and the snapshot used to be sent only
+    // at the very end of the playing path - so on a host, clients simply
+    // stopped hearing anything the moment a round was not being played, and
+    // the overlay and shop state the snapshot carries could never arrive.
+    if (this.networkRole === 'host') {
+      const nowMs = this.time.now;
+      this.refreshGhostInvulnerability(nowMs);
+      if (this.hostSession) {
+        this.snapshotThrottle ??= new SnapshotThrottle(this.hostSession.snapshotHz);
+        if (this.snapshotThrottle.shouldSend(performance.now())) this.broadcastHostSnapshot(nowMs);
+      }
+    }
+  }
+
+  private updateFrame(deltaMs: number): void {
     const nowMs = this.time.now;
 
     if (this.networkRole === 'client') {
@@ -3478,11 +3564,6 @@ export class GameScene extends Phaser.Scene {
       this.enterStageClear();
     }
 
-    if (this.networkRole === 'host') this.refreshGhostInvulnerability(nowMs);
-    if (this.networkRole === 'host' && this.hostSession) {
-      this.snapshotThrottle ??= new SnapshotThrottle(this.hostSession.snapshotHz);
-      if (this.snapshotThrottle.shouldSend(performance.now())) this.broadcastHostSnapshot(nowMs);
-    }
   }
 
   /**

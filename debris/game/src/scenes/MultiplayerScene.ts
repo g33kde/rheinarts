@@ -1,16 +1,13 @@
 import Phaser from 'phaser';
 import { ARENA_WIDTH, COLORS } from '../config/GameConfig';
-import { resolveOnlineServerUrl } from '../systems/OnlineServerConfig';
 
 /**
  * The "MULTIPLAYER" hub (docs/roadmap.md's "Windows + LAN multiplayer" -
  * online phase 2): one entry in the main menu, then LAN or ONLINE here.
  * LAN keeps the existing host/join flow in `LanLobbyScene` untouched.
  *
- * ONLINE is the join-only screen for the dedicated server
- * (`debris/server`, not built yet) - until that lands it shows which
- * server this build points at and says so, rather than offering a button
- * that cannot work. Same plain rectangles-and-text style as
+ * ONLINE is the join-only flow for the dedicated server (`debris/server`),
+ * in `OnlineScene`. Same plain rectangles-and-text style as
  * `LanLobbyScene`; visual polish isn't this scene's job.
  */
 export class MultiplayerScene extends Phaser.Scene {
@@ -70,16 +67,7 @@ export class MultiplayerScene extends Phaser.Scene {
     this.titleText.setText('MULTIPLAYER');
     this.bodyText.setText('');
     this.makeButton(ARENA_WIDTH / 2, 420, 'LAN', () => this.scene.start('LanLobby'));
-    this.makeButton(ARENA_WIDTH / 2, 510, 'ONLINE', () => this.showOnline());
+    this.makeButton(ARENA_WIDTH / 2, 510, 'ONLINE', () => this.scene.start('Online'));
     this.makeButton(ARENA_WIDTH / 2, 600, 'BACK', () => this.scene.start('Menu'));
-  }
-
-  private showOnline(): void {
-    this.clearScreen();
-    this.titleText.setText('ONLINE');
-    this.bodyText.setText(
-      `Server: ${resolveOnlineServerUrl()}\n\nOnline play is not available yet -\nthe dedicated server is still being built.`,
-    );
-    this.makeButton(ARENA_WIDTH / 2, 600, 'BACK', () => this.showHub());
   }
 }

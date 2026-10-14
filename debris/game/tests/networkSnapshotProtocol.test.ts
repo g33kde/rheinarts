@@ -287,3 +287,31 @@ describe('snapshot rounding', () => {
     expect(encodeSnapshot(snap).length).toBeLessThan(JSON.stringify(snap).length * 0.85);
   });
 });
+
+describe('ships that are not invulnerable', () => {
+  // The host sends -Infinity for "never invulnerable"; JSON writes that as null.
+  const vulnerable: GameSnapshot = { ...SNAPSHOT, ships: [{ ...SHIP, invulnerableUntilMs: -Infinity }] };
+
+  it('still decodes - the whole snapshot used to be dropped', () => {
+    const decoded = decodeSnapshot(encodeSnapshot(vulnerable));
+    expect(decoded).toBeDefined();
+    expect(decoded!.ships[0]!.invulnerableUntilMs).toBe(-Infinity);
+  });
+
+  it('keeps every other ship in the snapshot', () => {
+    const mixed: GameSnapshot = {
+      ...SNAPSHOT,
+      ships: [
+        { ...SHIP, slotIndex: 0, invulnerableUntilMs: -Infinity },
+        { ...SHIP, slotIndex: 1, invulnerableUntilMs: 5000 },
+      ],
+    };
+    const decoded = decodeSnapshot(encodeSnapshot(mixed))!;
+    expect(decoded.ships.map((s) => s.invulnerableUntilMs)).toEqual([-Infinity, 5000]);
+  });
+
+  it('still rejects a ship whose invulnerableUntilMs is some other non-number', () => {
+    const raw = JSON.stringify({ ...SNAPSHOT, ships: [{ ...SHIP, invulnerableUntilMs: 'soon' }] });
+    expect(decodeSnapshot(raw)).toBeUndefined();
+  });
+});

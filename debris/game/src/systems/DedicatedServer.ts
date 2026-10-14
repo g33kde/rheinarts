@@ -264,6 +264,7 @@ export class DedicatedServer {
         inMatch: resumed && this.lobby.isInMatch,
         serverName: this.config.name,
         motd: this.config.motd,
+        reconnectGraceMs: this.config.gameplay.reconnectGraceMs,
       }),
     );
   }
@@ -294,6 +295,11 @@ export class DedicatedServer {
   private onClosed(session: Session): void {
     if (session.joinTimer) clearTimeout(session.joinTimer);
     this.sessionByConnection.delete(session.connection);
+    // The peer is gone, but our end of the WebRTC connection is not closed
+    // by that: left open it keeps its UDP port from the pinned range and
+    // keeps sending keep-alive probes at a dead address, for every player
+    // who ever left. Close it (a no-op if it is already closed).
+    session.connection.close();
     const owner = session.owner;
     if (owner === undefined || session.superseded) return;
     if (this.sessionByOwner.get(owner) === session) this.sessionByOwner.delete(owner);

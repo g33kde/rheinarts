@@ -1,14 +1,19 @@
-import { LAN_DISCOVERY } from '../config/GameConfig';
 import { RtcConnection } from './RtcConnection';
 import { decodeSignal, encodeSignal, type SignalKind } from './RtcSignalingProtocol';
-import { LanHostSignalingChannel, type HostSignalingChannel } from './SignalingChannel';
+import {
+  LanHostSignalingChannel,
+  type ClientSignalingChannel,
+  type HostSignalingChannel,
+} from './SignalingChannel';
 
 /**
- * Wires `RtcConnection` (Sprint 5's WebRTC wrapper) to the LAN discovery
- * channel `LanDiscovery.ts` already established (Sprint 4), so a host
- * and a joining client can actually reach a connected `RtcConnection`
- * rather than each holding an unconnected one with nowhere to send its
- * offer/answer/candidates.
+ * Wires `RtcConnection` (Sprint 5's WebRTC wrapper) to a signaling channel,
+ * so a host and a joining client can actually reach a connected
+ * `RtcConnection` rather than each holding an unconnected one with nowhere
+ * to send its offer/answer/candidates. The channel is pluggable
+ * (`SignalingChannel.ts`): the LAN discovery socket `LanDiscovery.ts`
+ * established (Sprint 4) - what the notes below describe - or, online, the
+ * dedicated server's WebSocket.
  *
  * Reuses `LAN_DISCOVERY.broadcastPort` for signaling too, rather than a
  * second port - one socket, two message shapes (`debris-announce` vs
@@ -21,12 +26,6 @@ import { LanHostSignalingChannel, type HostSignalingChannel } from './SignalingC
  * via `window.debrisLan`'s presence, not a separate flag to keep in
  * sync.
  */
-
-type Sender = (address: string, port: number, connectionId: string, kind: SignalKind, payload: string) => void;
-
-function send(address: string, port: number, connectionId: string, kind: SignalKind, payload: string): void {
-  window.debrisLan?.sendTo(address, port, encodeSignal({ type: 'debris-signal', connectionId, kind, payload }));
-}
 
 /**
  * The host side - listens for incoming offers, answers each one, and hands back a connection per successful handshake. Handles more than one in-flight join attempt at once via `connectionId`.
@@ -82,49 +81,61 @@ export class RtcSignalingHost {
   }
 }
 
-/** The joining-client side - one connection attempt per instance. `hostSignalPort` comes from the `AnnouncePacket` a player picked off the discovered-games list (`LanDiscoveryProtocol.ts`'s own `signalPort` field), not assumed to equal the broadcast port even though v1 always sets it that way. */
+/**
+ * The joining-client side - one connection attempt per instance. What carries the messages is a `ClientSignalingChannel`: LAN UDP to a host picked off the discovered-games list, or the dedicated server's WebSocket. `iceServers` is the STUN list (empty on a LAN).
+ *
+ * Gives up after `timeoutMs` rather than waiting forever - a host that answers signaling but never completes the WebRTC handshake (a firewalled UDP range, say) would otherwise leave the player on "Connecting..." for good.
+ */
 export class RtcSignalingClient {
   private readonly connectionId = crypto.randomUUID();
   private connection: RtcConnection | undefined;
-  private unsubscribe: (() => void) | undefined;
+  private channel: ClientSignalingChannel | undefined;
 
-  connect(hostAddress: string, hostSignalPort: number, sender: Sender = send): Promise<RtcConnection> {
+  connect(channel: ClientSignalingChannel, iceServers: RTCIceServer[] = [], timeoutMs = 15000): Promise<RtcConnection> {
+    this.channel = channel;
     return new Promise((resolve, reject) => {
-      if (!window.debrisLan) {
-        reject(new Error('LAN networking is not available outside the desktop app.'));
-        return;
-      }
+      const fail = (error: Error): void => {
+        clearTimeout(timer);
+        this.close();
+        reject(error);
+      };
+      const timer = setTimeout(
+        () => fail(new Error('Connected to the server, but the game connection could not be established (is the UDP port range open?).')),
+        timeoutMs,
+      );
 
-      window.debrisLan.startListening(LAN_DISCOVERY.broadcastPort);
-      const connection = new RtcConnection(true);
-      this.connection = connection;
-
-      connection.onLocalIceCandidate((candidate) => {
-        sender(hostAddress, hostSignalPort, this.connectionId, 'ice-candidate', JSON.stringify(candidate));
-      });
-      connection.onConnected(() => resolve(connection));
-
-      this.unsubscribe = window.debrisLan.onMessage(({ data }) => {
-        const envelope = decodeSignal(data);
-        if (!envelope || envelope.connectionId !== this.connectionId) return;
-
-        if (envelope.kind === 'answer') {
-          void connection.applyAnswer(JSON.parse(envelope.payload) as RTCSessionDescriptionInit);
-        } else if (envelope.kind === 'ice-candidate') {
-          void connection.addRemoteIceCandidate(JSON.parse(envelope.payload) as RTCIceCandidateInit);
-        }
-      });
-
-      void connection.createOffer().then((offer) => {
-        sender(hostAddress, hostSignalPort, this.connectionId, 'offer', JSON.stringify(offer));
-      });
+      void channel
+        .open((data) => {
+          const envelope = decodeSignal(data);
+          const connection = this.connection;
+          if (!envelope || !connection || envelope.connectionId !== this.connectionId) return;
+          if (envelope.kind === 'answer') {
+            void connection.applyAnswer(JSON.parse(envelope.payload) as RTCSessionDescriptionInit);
+          } else if (envelope.kind === 'ice-candidate') {
+            void connection.addRemoteIceCandidate(JSON.parse(envelope.payload) as RTCIceCandidateInit);
+          }
+        })
+        .then(async () => {
+          const connection = new RtcConnection(true, iceServers);
+          this.connection = connection;
+          const send = (kind: SignalKind, payload: unknown): void =>
+            channel.send(
+              encodeSignal({ type: 'debris-signal', connectionId: this.connectionId, kind, payload: JSON.stringify(payload) }),
+            );
+          connection.onLocalIceCandidate((candidate) => send('ice-candidate', candidate));
+          connection.onConnected(() => {
+            clearTimeout(timer);
+            resolve(connection);
+          });
+          send('offer', await connection.createOffer());
+        })
+        .catch((error: unknown) => fail(error instanceof Error ? error : new Error(String(error))));
     });
   }
 
   close(): void {
-    window.debrisLan?.stopListening();
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+    this.channel?.close();
+    this.channel = undefined;
     this.connection?.close();
     this.connection = undefined;
   }

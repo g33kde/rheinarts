@@ -222,6 +222,22 @@ function isEntitySnapshot(value: unknown): value is EntitySnapshot {
 }
 
 /** `undefined` for anything that isn't a well-formed `GameSnapshot` - a malformed packet is silently ignored, not a crash, same convention every other decode function in this codebase follows. */
+/**
+ * A ship that is not invulnerable is sent with `invulnerableUntilMs:
+ * -Infinity` (`GameScene.broadcastHostSnapshot`), and `JSON.stringify`
+ * writes a non-finite number as `null`. Left alone, `isShipSnapshot`
+ * would reject the ship - and with it the *whole snapshot* - so a client
+ * would only ever see a frame while every ship happened to be dead or
+ * invulnerable. Read `null` back as the `-Infinity` it was.
+ */
+function restoreNonFiniteShipFields(ships: unknown[]): unknown[] {
+  return ships.map((ship) =>
+    typeof ship === 'object' && ship !== null && (ship as Record<string, unknown>).invulnerableUntilMs === null
+      ? { ...(ship as Record<string, unknown>), invulnerableUntilMs: -Infinity }
+      : ship,
+  );
+}
+
 export function decodeSnapshot(raw: string): GameSnapshot | undefined {
   let parsed: unknown;
   try {
@@ -232,6 +248,7 @@ export function decodeSnapshot(raw: string): GameSnapshot | undefined {
 
   if (typeof parsed !== 'object' || parsed === null) return undefined;
   const candidate = parsed as Record<string, unknown>;
+  if (Array.isArray(candidate.ships)) candidate.ships = restoreNonFiniteShipFields(candidate.ships);
 
   if (candidate.type !== 'debris-snapshot') return undefined;
   if (typeof candidate.tick !== 'number') return undefined;

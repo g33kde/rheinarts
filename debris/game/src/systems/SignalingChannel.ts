@@ -39,3 +39,93 @@ export class LanHostSignalingChannel implements HostSignalingChannel {
     this.unsubscribe = undefined;
   }
 }
+
+/**
+ * The joining side's view of signaling: send messages to the host, hear its
+ * replies. `open` resolves once messages can be sent and rejects if the host
+ * cannot be reached at all (a WebSocket that never connects) - a LAN's
+ * connectionless UDP has no such moment, so it resolves immediately.
+ */
+export interface ClientSignalingChannel {
+  open(onMessage: (data: string) => void): Promise<void>;
+  send(data: string): void;
+  close(): void;
+}
+
+/** LAN: datagrams to the host's address and signal port, over the UDP socket `desktop/main.js` exposes. Rejects outside Electron. */
+export class LanClientSignalingChannel implements ClientSignalingChannel {
+  private unsubscribe: (() => void) | undefined;
+
+  constructor(
+    private readonly hostAddress: string,
+    private readonly hostSignalPort: number,
+  ) {}
+
+  open(onMessage: (data: string) => void): Promise<void> {
+    if (!window.debrisLan) return Promise.reject(new Error('LAN networking is not available outside the desktop app.'));
+    window.debrisLan.startListening(LAN_DISCOVERY.broadcastPort);
+    this.unsubscribe = window.debrisLan.onMessage(({ data }) => onMessage(data));
+    return Promise.resolve();
+  }
+
+  send(data: string): void {
+    window.debrisLan?.sendTo(this.hostAddress, this.hostSignalPort, data);
+  }
+
+  close(): void {
+    window.debrisLan?.stopListening();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
+}
+
+/** Online: the dedicated server's signaling WebSocket. Works in a plain browser tab too - it needs no Node, only `WebSocket`. */
+export class WebSocketClientSignalingChannel implements ClientSignalingChannel {
+  private socket: WebSocket | undefined;
+
+  constructor(
+    private readonly url: string,
+    private readonly timeoutMs = 8000,
+  ) {}
+
+  open(onMessage: (data: string) => void): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(this.url);
+      } catch {
+        reject(new Error(`"${this.url}" is not a valid server address.`));
+        return;
+      }
+      this.socket = socket;
+      const fail = (message: string): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.close();
+        reject(new Error(message));
+      };
+      const timer = setTimeout(() => fail('The server did not answer in time.'), this.timeoutMs);
+      socket.onopen = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      socket.onerror = () => fail('Could not reach the server.');
+      socket.onmessage = (event) => {
+        if (typeof event.data === 'string') onMessage(event.data);
+      };
+    });
+  }
+
+  send(data: string): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(data);
+  }
+
+  close(): void {
+    this.socket?.close();
+    this.socket = undefined;
+  }
+}

@@ -9,6 +9,7 @@
     "start": "electron . --config=config.json",
     "start:linux": "xvfb-run -a electron . --no-sandbox --config=config.json",
     "smoke": "electron tools/smoke-main.js",
+    "e2e": "electron tools/client-e2e-main.js",
     "test": "node --test"
   },
   "dependencies": {

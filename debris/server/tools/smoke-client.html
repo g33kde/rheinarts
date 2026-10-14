@@ -9,6 +9,8 @@
 //            a full lobby, input bound to the connection's own slots, reconnect inside the window,
 //            takeover by a quick reconnect, and a seat released when the window closes
 //            (needs password "secret" and reconnectGraceMs 3000 in the server config)
+//   bot      joins as one more player and leaves ?leaveAfter= ms after the match starts (used by
+//            client-e2e-main.js as the opponent that disappears)
 const q = new URLSearchParams(location.search);
 const URL_ = q.get('url') || 'ws://127.0.0.1:8765';
 const SCENARIO = q.get('scenario') || 'play';
@@ -301,9 +303,22 @@ async function scenarioSession() {
   late.close(); a2.close();
 }
 
+async function scenarioBot() {
+  const leaveAfter = Number(q.get('leaveAfter') || 3000);
+  const bot = await join('bot', { password: PASSWORD });
+  say(`bot: ${bot.joined ? `seated in slot ${bot.slots}` : `rejected ${JSON.stringify(bot.reject)}`}`);
+  if (!bot.joined) return check(false, 'bot was seated');
+  const started = await waitFor(() => bot.snaps > 0, 60000, 'the match to start');
+  if (!started) return;
+  await sleep(leaveAfter);
+  say(`bot: leaving ${leaveAfter}ms into the match`);
+  bot.close();
+}
+
 (async () => {
   try {
-    if (SCENARIO === 'lobby') await scenarioLobby();
+    if (SCENARIO === 'bot') await scenarioBot();
+    else if (SCENARIO === 'lobby') await scenarioLobby();
     else if (SCENARIO === 'session') await scenarioSession();
     else await scenarioPlay();
   } catch (err) { check(false, `unexpected error: ${err && err.stack || err}`); }

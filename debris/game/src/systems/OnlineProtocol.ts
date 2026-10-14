@@ -50,6 +50,8 @@ export interface JoinedMessage {
   readonly inMatch: boolean;
   readonly serverName: string;
   readonly motd: string;
+  /** How long the server holds this seat after a mid-match drop - the client keeps trying to come back for this long. */
+  readonly reconnectGraceMs: number;
 }
 
 /** Client -> server over the signaling socket. */
@@ -120,6 +122,7 @@ export function decodeJoined(raw: string): JoinedMessage | undefined {
   if (!Array.isArray(c.hulls) || !c.hulls.every((h) => HULL_IDS.includes(h as HullId))) return undefined;
   if (typeof c.resumed !== 'boolean' || typeof c.inMatch !== 'boolean') return undefined;
   if (typeof c.serverName !== 'string' || typeof c.motd !== 'string') return undefined;
+  if (!isNonNegInt(c.reconnectGraceMs)) return undefined;
   return {
     type: 'debris-joined',
     protocolVersion: c.protocolVersion,
@@ -131,6 +134,7 @@ export function decodeJoined(raw: string): JoinedMessage | undefined {
     inMatch: c.inMatch,
     serverName: c.serverName,
     motd: c.motd,
+    reconnectGraceMs: c.reconnectGraceMs,
   };
 }
 

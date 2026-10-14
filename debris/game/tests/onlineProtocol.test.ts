@@ -27,6 +27,7 @@ const JOINED: JoinedMessage = {
   inMatch: false,
   serverName: 'Debris Server',
   motd: 'Welcome',
+  reconnectGraceMs: 30000,
 };
 
 const STATUS: StatusReply = {
@@ -97,6 +98,8 @@ describe('joined', () => {
     expect(decodeJoined(JSON.stringify({ ...JOINED, hulls: ['battleship'] }))).toBeUndefined();
     expect(decodeJoined(JSON.stringify({ ...JOINED, resumed: 'no' }))).toBeUndefined();
     expect(decodeJoined(JSON.stringify({ ...JOINED, motd: null }))).toBeUndefined();
+    expect(decodeJoined(JSON.stringify({ ...JOINED, reconnectGraceMs: -1 }))).toBeUndefined();
+    expect(decodeJoined(JSON.stringify({ ...JOINED, reconnectGraceMs: '30' }))).toBeUndefined();
   });
 });
 

@@ -9,6 +9,8 @@
 // (signaling envelope, welcome, snapshot, input) on purpose: it checks the
 // server against the protocol itself, not against the game's own client
 // code. Exits 0 on PASS, 1 on FAIL. Output is only printed by the page.
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow } = require('electron');
 
@@ -19,6 +21,9 @@ const args = Object.fromEntries(
   }),
 );
 
+// Own throwaway profile: Electron processes sharing the default profile directory interfere with each
+// other's networking (see client-e2e-main.js), and the smoke client is routinely run beside a server.
+app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'debris-smoke-')));
 app.disableHardwareAcceleration();
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });

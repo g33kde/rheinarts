@@ -1065,4 +1065,6 @@ export const NETWORK_SYNC = {
 export const ONLINE_SERVER = {
   defaultUrl: 'ws://debris.rheinarts.de:8765',
   storageKey: 'debris.onlineServerUrl',
+  /** STUN servers a client uses to learn its public address behind NAT. Several, because a public STUN server is a free service that is occasionally unreachable (seen in testing: one lookup failed while another succeeded). */
+  stunServers: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'],
 } as const;
