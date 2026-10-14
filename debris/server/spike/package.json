@@ -1,0 +1,11 @@
+{
+  "name": "debris-server-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Throwaway spike: can headless Electron on Linux host a WebRTC data-channel session with a remote client?",
+  "main": "main.js",
+  "dependencies": {
+    "electron": "^33.2.0",
+    "ws": "^8.18.0"
+  }
+}

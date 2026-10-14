@@ -1,0 +1,107 @@
+<!doctype html><meta charset="utf-8"><body>
+<script>
+const q = new URLSearchParams(location.search);
+const role = q.get('role');
+const log = (...a) => console.log(`[${role}]`, ...a);
+const ICE = q.get('stun') === '0' ? [] : [{ urls: 'stun:stun.l.google.com:19302' }];
+const SECONDS = Number(q.get('seconds') || 10);
+const HZ = 60;
+
+// ~6 KB JSON like a mid-game snapshot (unrounded floats, 40 entities).
+function fakeSnapshot(seq) {
+  const entities = Array.from({ length: 40 }, (_, i) => ({
+    id: i, type: 'asteroid', x: Math.random() * 1000, y: Math.random() * 700,
+    rotation: Math.random() * 6.28, data: { size: 'large' },
+  }));
+  return JSON.stringify({ type: 'snap', seq, t: performance.now(), entities });
+}
+
+function logCandidate(c) {
+  if (c) log('local candidate:', c.candidate);
+}
+async function report(pc) {
+  const stats = await pc.getStats();
+  let pair; const cands = new Map();
+  stats.forEach((s) => {
+    if (s.type === 'candidate-pair' && s.nominated) pair = s;
+    if (s.type === 'local-candidate' || s.type === 'remote-candidate') cands.set(s.id, s);
+  });
+  if (!pair) return log('no nominated candidate pair');
+  const l = cands.get(pair.localCandidateId), r = cands.get(pair.remoteCandidateId);
+  log(`selected pair: local ${l.candidateType} ${l.address}:${l.port} <-> remote ${r.candidateType} ${r.address}:${r.port}`);
+  log(`bytesSent=${pair.bytesSent} bytesReceived=${pair.bytesReceived} rtt=${(pair.currentRoundTripTime * 1000).toFixed(1)}ms`);
+}
+
+if (role === 'server') {
+  const { WebSocketServer } = require('ws');
+  const port = Number(q.get('port') || 8765);
+  const wss = new WebSocketServer({ port });
+  log(`signaling listening on ws://0.0.0.0:${port}  (stun=${ICE.length > 0})`);
+  wss.on('connection', (ws, req) => {
+    log('signaling client from', req.socket.remoteAddress);
+    const pc = new RTCPeerConnection({ iceServers: ICE });
+    pc.onicecandidate = (e) => { logCandidate(e.candidate); if (e.candidate) ws.send(JSON.stringify({ ice: e.candidate })); };
+    pc.onconnectionstatechange = () => log('connection state:', pc.connectionState);
+    pc.ondatachannel = ({ channel }) => {
+      log('data channel opened by client:', channel.label);
+      if (channel.label !== 'unreliable') return;
+      channel.onmessage = (m) => { const d = JSON.parse(m.data); if (d.type === 'ping') channel.send(m.data); if (d.type === 'go') stream(channel, pc); };
+    };
+    ws.on('message', async (raw) => {
+      const m = JSON.parse(raw);
+      if (m.offer) { await pc.setRemoteDescription(m.offer); const a = await pc.createAnswer(); await pc.setLocalDescription(a); ws.send(JSON.stringify({ answer: a })); }
+      if (m.ice) await pc.addIceCandidate(m.ice);
+    });
+    ws.on('close', () => log('signaling closed'));
+  });
+  function stream(channel, pc) {
+    // Fixed-step sender; measures the rate it ACTUALLY achieves.
+    const total = SECONDS * HZ; let sent = 0; const start = performance.now();
+    const timer = setInterval(() => {
+      channel.send(fakeSnapshot(sent++));
+      if (sent >= total) {
+        clearInterval(timer);
+        const secs = (performance.now() - start) / 1000;
+        log(`sent ${sent} snapshots in ${secs.toFixed(2)}s = ${(sent / secs).toFixed(1)} Hz achieved (target ${HZ})`);
+        report(pc);
+      }
+    }, 1000 / HZ);
+  }
+} else {
+  const url = q.get('url');
+  if (!url) { log('missing --url'); process.exit(1); }
+  const ws = new WebSocket(url);
+  const pc = new RTCPeerConnection({ iceServers: ICE });
+  const reliable = pc.createDataChannel('reliable');
+  const unreliable = pc.createDataChannel('unreliable', { ordered: false, maxRetransmits: 0 });
+  pc.onicecandidate = (e) => { logCandidate(e.candidate); if (e.candidate) ws.send(JSON.stringify({ ice: e.candidate })); };
+  pc.onconnectionstatechange = () => log('connection state:', pc.connectionState);
+  let got = 0, bytes = 0, firstSeq = -1, lastSeq = -1, maxGap = 0, lastArrival = 0; const rtts = [];
+  unreliable.onopen = () => {
+    log('unreliable channel open - requesting stream');
+    unreliable.send(JSON.stringify({ type: 'go' }));
+    const pinger = setInterval(() => unreliable.send(JSON.stringify({ type: 'ping', t: performance.now() })), 100);
+    setTimeout(async () => {
+      clearInterval(pinger);
+      const expected = lastSeq - firstSeq + 1;
+      rtts.sort((a, b) => a - b);
+      log(`received ${got}/${expected} snapshots (${(100 * (1 - got / Math.max(expected, 1))).toFixed(2)}% loss), ${(bytes / SECONDS / 1024).toFixed(0)} KB/s = ${(bytes * 8 / SECONDS / 1e6).toFixed(2)} Mbps`);
+      log(`longest gap between snapshots: ${maxGap.toFixed(0)} ms; RTT p50=${rtts[Math.floor(rtts.length / 2)]?.toFixed(1)}ms p95=${rtts[Math.floor(rtts.length * 0.95)]?.toFixed(1)}ms max=${rtts.at(-1)?.toFixed(1)}ms`);
+      await report(pc);
+      log('DONE'); process.exit(0);
+    }, (SECONDS + 2) * 1000);
+  };
+  unreliable.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.type === 'ping') return rtts.push(performance.now() - d.t);
+    const now = performance.now();
+    if (lastArrival) maxGap = Math.max(maxGap, now - lastArrival);
+    lastArrival = now; got++; bytes += m.data.length;
+    if (firstSeq < 0) firstSeq = d.seq; lastSeq = d.seq;
+  };
+  ws.onopen = async () => { const o = await pc.createOffer(); await pc.setLocalDescription(o); ws.send(JSON.stringify({ offer: o })); };
+  ws.onmessage = async (e) => { const m = JSON.parse(e.data); if (m.answer) await pc.setRemoteDescription(m.answer); if (m.ice) await pc.addIceCandidate(m.ice); };
+  ws.onerror = () => { log('signaling error - is the port reachable?'); process.exit(1); };
+  setTimeout(() => { log('TIMEOUT: no data channel after 30s'); process.exit(1); }, 30000);
+}
+</script>
