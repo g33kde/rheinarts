@@ -7,5 +7,8 @@
   "dependencies": {
     "electron": "^33.2.0",
     "ws": "^8.18.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
   }
 }
