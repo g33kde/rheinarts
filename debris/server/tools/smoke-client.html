@@ -9,6 +9,8 @@
 //            a full lobby, input bound to the connection's own slots, reconnect inside the window,
 //            takeover by a quick reconnect, and a seat released when the window closes
 //            (needs password "secret" and reconnectGraceMs 3000 in the server config)
+//   scoring  one player spins and fires until it scores, then leaves; the match ends, the server posts the
+//            score, and smoke-main.js (given --api) checks the real API's online board for it
 //   bot      joins as one more player and leaves ?leaveAfter= ms after the match starts (used by
 //            client-e2e-main.js as the opponent that disappears)
 const q = new URLSearchParams(location.search);
@@ -18,7 +20,8 @@ const SECONDS = Number(q.get('seconds') || 6);
 const PLAYERS = Number(q.get('players') || 1);
 const MODE = q.get('mode') || 'cooperative';
 const PASSWORD = q.get('password') || '';
-const PROTOCOL_VERSION = 4;
+const INITIALS = q.get('initials') || 'SMK';
+const PROTOCOL_VERSION = 5;
 const STUN = q.get('stun') === '1' ? [{ urls: 'stun:stun.l.google.com:19302' }] : [];
 const say = (...a) => console.log(...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -91,7 +94,9 @@ class Player {
     return !!open;
   }
   sendJoin(over = {}) {
-    this.reliable.send(JSON.stringify({ type: 'debris-join', protocolVersion: PROTOCOL_VERSION, password: PASSWORD, localPlayers: 1, ...over }));
+    const localPlayers = over.localPlayers ?? 1;
+    const initials = over.initials ?? (localPlayers === 2 ? ['AAA', 'BBB'] : [INITIALS]);
+    this.reliable.send(JSON.stringify({ type: 'debris-join', protocolVersion: PROTOCOL_VERSION, password: PASSWORD, localPlayers, initials, ...over }));
   }
   sendRaw(text) { this.reliable.send(text); }
   command(action, extra = {}) { this.reliable.send(JSON.stringify({ type: 'debris-lobby-command', action, ...extra })); }
@@ -238,7 +243,15 @@ async function scenarioSession() {
   check(garbage.reject?.reason === 'badRequest', 'a first message that is not a join -> badRequest');
   const badLocal = await join('badLocal', { password: 'secret', localPlayers: 3 });
   check(badLocal.reject?.reason === 'badRequest', 'localPlayers 3 -> badRequest');
-  [noPw, badPw, oldVer, garbage, badLocal].forEach((p) => p.close());
+  const noInitials = new Player('noInitials'); await noInitials.connect();
+  noInitials.reliable.send(JSON.stringify({ type: 'debris-join', protocolVersion: PROTOCOL_VERSION, password: 'secret', localPlayers: 1 }));
+  await waitFor(() => noInitials.reject, 5000, 'a join without initials to be rejected');
+  check(noInitials.reject?.reason === 'badRequest', 'a join without initials -> badRequest');
+  const badInitials = await join('badInitials', { password: 'secret', initials: ['a1'] });
+  check(badInitials.reject?.reason === 'badRequest', 'initials that are not three capital letters -> badRequest');
+  const wrongCount = await join('wrongCount', { password: 'secret', localPlayers: 2, initials: ['ABC'] });
+  check(wrongCount.reject?.reason === 'badRequest', 'one set of initials for two players -> badRequest');
+  [noPw, badPw, oldVer, garbage, badLocal, noInitials, badInitials, wrongCount].forEach((p) => p.close());
   await sleep(500);
   const st2 = await queryStatus();
   check(st2?.players.current === 0, 'none of them took a seat');
@@ -303,6 +316,31 @@ async function scenarioSession() {
   late.close(); a2.close();
 }
 
+async function scenarioScoring() {
+  say(`scoring: one player (initials ${INITIALS}) spins and fires until it scores -> ${URL_}`);
+  const p = await join('scorer', { password: PASSWORD });
+  if (!check(!!p.joined, 'seated')) return;
+  await waitFor(() => p.lobby, 5000, 'lobby state');
+  p.startInput();
+  p.command('start');
+  // The snapshot carries every player's score: wait for ours to go above zero.
+  let best = 0;
+  const scoreOf = () => p.lastScore ?? 0;
+  p.unreliable.addEventListener('message', (e) => {
+    const s = JSON.parse(e.data);
+    if (s.type !== 'debris-snapshot') return;
+    const mine = s.players.find((pl) => pl.slotIndex === p.slots[0]);
+    if (mine) { p.lastScore = mine.score; best = Math.max(best, mine.score); }
+  });
+  await waitFor(() => scoreOf() > 0, 90000, 'the ship to score a point by shooting something');
+  say(`  scored ${best} so far`);
+  check(best > 0, `the ship scored (${best})`);
+  console.log(`__SCORE__ ${best}`);
+  // Leave; the seat is held for the grace period, then released, and everyone being gone ends the match.
+  p.close();
+  await sleep(12000);
+}
+
 async function scenarioBot() {
   const leaveAfter = Number(q.get('leaveAfter') || 3000);
   const bot = await join('bot', { password: PASSWORD });
@@ -318,6 +356,7 @@ async function scenarioBot() {
 (async () => {
   try {
     if (SCENARIO === 'bot') await scenarioBot();
+    else if (SCENARIO === 'scoring') await scenarioScoring();
     else if (SCENARIO === 'lobby') await scenarioLobby();
     else if (SCENARIO === 'session') await scenarioSession();
     else await scenarioPlay();

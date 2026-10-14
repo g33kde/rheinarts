@@ -64,6 +64,8 @@ export type JoinOutcome =
 export interface JoinRequest {
   readonly password: string;
   readonly localPlayers: 1 | 2;
+  /** One set of initials (three capital letters) per local player. */
+  readonly initials: readonly string[];
 }
 
 /** How long to wait for `debris-joined` / `debris-reject` once the connection is up. */
@@ -248,6 +250,7 @@ export class OnlineClientSession implements ClientSessionLike {
           protocolVersion: PROTOCOL_VERSION,
           password: request.password,
           localPlayers: request.localPlayers,
+          initials: request.initials,
           ...(token !== undefined ? { token } : {}),
         }),
       );

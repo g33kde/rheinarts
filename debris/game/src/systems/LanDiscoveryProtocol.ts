@@ -29,11 +29,14 @@
  * reliable-channel messages (`debris-lobby`, `debris-lobby-command`,
  * `debris-reject`) that an older client would not understand.
  *
+ * Bumped to 5 for online phase 6: a join now carries the players' initials
+ * (the server posts their scores to the online leaderboard).
+ *
  * Bumped to 4 for online phase 5: clients now open with `debris-join`
  * (password, local player count, reconnect token), the server answers with
  * `debris-joined`, and the lobby state carries `heldSlots`.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 export interface AnnouncePacket {
   readonly type: 'debris-announce';

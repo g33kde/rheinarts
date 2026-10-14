@@ -39,12 +39,32 @@ export interface ServerStatus {
   readonly players: { readonly current: number; readonly max: number };
 }
 
+/**
+ * A finished match as the main process needs it to post scores: the
+ * `MatchResult`, plus who each slot was (their initials, from the join) and
+ * which leaderboard generation this build writes to. The main process owns
+ * the API address and key; this page never sees them.
+ */
+export interface ScoreReport {
+  readonly leaderboardVersion: number;
+  readonly mode: 'cooperative' | 'competitive';
+  readonly outcome: 'win' | 'draw' | 'loss';
+  readonly winnerSlot: number | null;
+  readonly scores: readonly number[];
+  readonly pooledScore: number;
+  readonly lastEliminatedSlot: number | null;
+  readonly participants: readonly number[];
+  /** Slot (as a string key, because it travels as JSON) -> three capital letters. */
+  readonly initialsBySlot: Readonly<Record<string, string>>;
+}
+
 declare global {
   interface Window {
     debrisServer?: {
       ready: () => void;
       getConfig: () => Promise<ServerRuntimeConfig>;
       setStatus: (status: ServerStatus) => void;
+      reportResult: (report: ScoreReport) => void;
       onSignal: (callback: (payload: { peerId: string; data: string }) => void) => () => void;
       sendSignal: (peerId: string, data: string) => void;
       log: (level: ServerLogLevel, message: string) => void;

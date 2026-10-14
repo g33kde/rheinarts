@@ -23,6 +23,56 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-14 — Online play, phase 6: the server posts the scores
+
+A finished online match now puts its score on the leaderboard - posted by the
+**server**, not by a client. Verified on this Mac with the real API running:
+a player scored 20, left, the match ended, and `SMK 20` appeared on the
+`onlineCooperative` board; all earlier scenarios and the real-client e2e still
+pass. Not yet run against the production API or from another machine.
+
+- **Two new boards, writable only by the server** (`highscore-api`):
+  `onlineCooperative` and `onlineCompetitive`, in their own files next to the
+  existing ones (nothing moves). A POST to either needs the header
+  `X-Debris-Server-Key` equal to the API's `DEBRIS_SERVER_KEY` (constant-time
+  compare): `401` without/with a wrong key, and **`403` when the API has no key
+  configured at all** - an unset variable never means "anyone may write". The
+  three existing boards are untouched and still open to any client; reading
+  every board stays public. `isWriteAuthorized` is pure and tested (33 API
+  tests, was 26). The K8s manifest reads the key from an optional Secret
+  (`debris-server-key`); `DEPLOYMENT.md` has the steps. **This needs a new API
+  image** (build, push, bump the tag).
+- **Why separate boards**: the only reason "the server submits" means anything
+  is that the board can *only* be written by the server. Folding online scores
+  into the open boards would have let anyone with `curl` sit above them.
+- **Initials are part of joining** (`PROTOCOL_VERSION` 5): one set of three
+  capital letters per local player, validated by the server (a join without
+  them, or with the wrong count or shape, is `badRequest`). The Online screen
+  has an initials field per player on the PC (letters only, capitalised), Tab
+  or the up/down arrows move between fields, joining is blocked until every
+  player has initials, and they are remembered between visits (localStorage).
+- **What gets posted** (`server/src/scores.js`, pure and tested): *Competitive* -
+  the winner's own score, credited to the winner; a draw earns nothing.
+  *Cooperative* - the team's pooled score, credited to the last player to fall
+  (`MatchResult.lastEliminatedSlot`, the rule a local game uses for who types
+  the initials), falling back to the first participant with initials on record.
+  A score of 0 is never posted. Initials are captured when the match starts, so
+  a player who leaves mid-match is still credited.
+- **Posting never holds up the game**: the server's main process does it (the
+  key never reaches the page), a failure is retried with a growing delay (4
+  tries, 8 s timeout each), then dropped with a log line; a 4xx is final with a
+  hint for 401/403. Nothing is queued across restarts. The key is never logged.
+- Tests: game 451 (was 432), API 33, server 42 (was 22) incl. one against a real
+  local HTTP server; smoke `scoring` scenario (real API, `--api`), `session`
+  now also covers bad initials, and the e2e covers the initials form.
+- **Not done**: the game client does not display the online boards yet (they
+  are public via `GET /highscores?mode=onlineCooperative&version=2`); no
+  per-player scores for Cooperative; no cheat-resistance beyond "the server
+  simulated it".
+- `server/TESTING-LINUX.md`: the step-by-step guide for the first real-network
+  test (DNS, firewall, install, config, the four smoke scenarios from another
+  network, playing for real, what to send back, a troubleshooting table).
+
 ## 2026-10-14 — Online play, phase 5: the client, joining, reconnect
 
 The real game client can now join the dedicated server: **MULTIPLAYER ->

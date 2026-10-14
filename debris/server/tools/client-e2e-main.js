@@ -58,6 +58,19 @@ app.whenReady().then(async () => {
         r.emit('pointerdown');
         return true;
       },
+      // Fill the join form: for each visible field, focus it (Tab), clear it, type the value.
+      fill: (k, values) => {
+        const sc = window.__debrisGame.scene.getScene(k);
+        const kb = sc.input.keyboard;
+        const ids = sc.visibleFields();
+        for (const id of ids) {
+          if (!(id in values)) continue;
+          for (let guard = 0; sc.focus !== id && guard < 6; guard += 1) kb.emit('keydown', { key: 'Tab' });
+          while (sc.fieldValue(id).length > 0) kb.emit('keydown', { key: 'Backspace' });
+          for (const ch of values[id]) kb.emit('keydown', { key: ch });
+        }
+        return ids.map((id) => id + '=' + (id === 'password' ? '*'.repeat(sc.fieldValue(id).length) : sc.fieldValue(id))).join(' ');
+      },
       type: (k, str) => { const kb = window.__debrisGame.scene.getScene(k).input.keyboard; for (const ch of str) kb.emit('keydown', { key: ch }); },
     };
     localStorage.setItem('debris.onlineServerUrl', ${JSON.stringify(URL_)});
@@ -82,6 +95,7 @@ app.whenReady().then(async () => {
     while (Date.now() - t0 < ms) { const s = await gameState(); if (s && pred(s)) return s; await sleep(100); }
     check(false, `timed out: ${label} (last state ${JSON.stringify(await gameState())})`); return null;
   };
+  const fill = async (values) => run(`window.__e2e.fill('Online', ${JSON.stringify(values)})`);
   const toOnline = () => run(`(() => { const g = window.__debrisGame; g.scene.getScenes(true).forEach((s) => g.scene.stop(s.scene.key)); g.scene.start('Online'); return true; })()`);
 
   // Wait for the real boot (assets) to finish, then go straight to the Online screen.
@@ -95,15 +109,20 @@ app.whenReady().then(async () => {
   check(texts1.join('\n').includes('Local Test') || texts1.join('\n').includes('Server'), 'shows the server name');
 
   log('2. joining without the password is refused in words');
+  await fill({ initials1: 'MAS' });
   await click('Online', 'JOIN');
   await waitText('Online', 'Wrong password', 15000, 'reject message');
   await click('Online', 'BACK');
   await waitText('Online', 'Players: 0/4', 15000, 'status again');
 
   log('3. with the password, two local players, the lobby shows both');
-  await run(`window.__e2e.type('Online', ${JSON.stringify(PASSWORD)})`);
   await click('Online', 'PLAYERS ON THIS PC');
   check((await run(`window.__e2e.texts('Online')`)).some((t) => t.includes('PLAYERS ON THIS PC: 2')), 'toggled to two local players');
+  check((await run(`window.__e2e.texts('Online')`)).some((t) => t.includes('PLAYER 1 INITIALS: MAS')), 'the first player\'s initials were remembered from the last visit');
+  await click('Online', 'JOIN'); // player 2 has no initials yet
+  check((await run(`window.__e2e.texts('Online')`)).some((t) => t.includes('Enter three letters')), 'joining is blocked until every player has initials');
+  check(await run(`window.__e2e.active('Online') && window.__e2e.scene('Online').session === undefined`), 'no connection was made');
+  check((await fill({ initials1: 'MAS', initials2: 'ZED', password: PASSWORD })).includes('initials2=ZED'), 'filled initials for both players and the password');
   await click('Online', 'JOIN');
   await waitText('Online', 'PLAYER 2', 20000, 'lobby with two players');
   const lobby = (await run(`window.__e2e.texts('Online')`)).join('\n');
@@ -145,10 +164,10 @@ app.whenReady().then(async () => {
   await waitText('Online', 'Players:', 30000, 'status after the previous match');
   // The previous match must have ended for the lobby to accept joiners again.
   for (let i = 0; i < 100; i += 1) { if ((await run(`window.__e2e.texts('Online').some((t) => t.includes('Waiting in the lobby'))`))) break; await sleep(200); }
-  await run(`window.__e2e.type('Online', ${JSON.stringify(PASSWORD)})`);
   // The "players on this PC" choice is remembered from step 3 - this part is one player.
   if ((await run(`window.__e2e.texts('Online')`)).some((t) => t.includes('PLAYERS ON THIS PC: 2'))) await click('Online', 'PLAYERS ON THIS PC');
   check((await run(`window.__e2e.texts('Online')`)).some((t) => t.includes('PLAYERS ON THIS PC: 1')), 'one player on this PC');
+  await fill({ initials1: 'MAS', password: PASSWORD });
   await click('Online', 'JOIN');
   await waitText('Online', 'PLAYER 1', 20000, 'lobby (one player)');
   await click('Online', 'MODE');

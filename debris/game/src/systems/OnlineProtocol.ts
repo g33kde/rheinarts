@@ -21,6 +21,10 @@ import type { LobbyMode } from './NetworkHandshakeProtocol';
 
 export const MAX_PASSWORD_LENGTH = 64;
 export const TOKEN_LENGTH = 32;
+export const INITIALS_LENGTH = 3;
+
+/** Exactly three capital letters - the shape the high score API accepts (`debris-highscore-api`'s `isValidInitials`). */
+export const isValidInitials = (v: unknown): v is string => typeof v === 'string' && /^[A-Z]{3}$/.test(v);
 
 /** Client -> server, first thing on the reliable channel. */
 export interface JoinMessage {
@@ -30,6 +34,12 @@ export interface JoinMessage {
   readonly password: string;
   /** How many players are on this PC (1 or 2): they take consecutive-ish slots and share the connection. */
   readonly localPlayers: 1 | 2;
+  /**
+   * One set of initials per local player, in slot order - what a score
+   * posted to the online leaderboard is credited to. Three capital letters
+   * each, and exactly `localPlayers` of them.
+   */
+  readonly initials: readonly string[];
   /** The token from a previous `debris-joined`, to take back a seat held after a drop. */
   readonly token?: string;
 }
@@ -98,12 +108,16 @@ export function decodeJoin(raw: string): JoinMessage | undefined {
   if (typeof c.protocolVersion !== 'number') return undefined;
   if (typeof c.password !== 'string' || c.password.length > MAX_PASSWORD_LENGTH) return undefined;
   if (c.localPlayers !== 1 && c.localPlayers !== 2) return undefined;
+  if (!Array.isArray(c.initials) || c.initials.length !== c.localPlayers || !c.initials.every(isValidInitials)) {
+    return undefined;
+  }
   if (c.token !== undefined && !isValidToken(c.token)) return undefined;
   return {
     type: 'debris-join',
     protocolVersion: c.protocolVersion,
     password: c.password,
     localPlayers: c.localPlayers,
+    initials: c.initials as string[],
     ...(c.token !== undefined ? { token: c.token } : {}),
   };
 }

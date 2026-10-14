@@ -6,6 +6,9 @@ import {
   isValidInitials,
   isValidMode,
   isValidScore,
+  isWriteAuthorized,
+  isServerOnlyMode,
+  VALID_MODES,
   normalizeInitials,
   qualifies,
   type LeaderboardEntry,
@@ -204,5 +207,54 @@ describe('parseMajorVersion', () => {
   it('rejects out-of-range values rather than trusting them', () => {
     expect(parseMajorVersion('0')).toBe(1);
     expect(parseMajorVersion('100')).toBe(1);
+  });
+});
+
+describe('online boards', () => {
+  it('are two extra modes alongside the three existing ones', () => {
+    expect(VALID_MODES).toEqual(['singlePlayer', 'cooperative', 'competitive', 'onlineCooperative', 'onlineCompetitive']);
+    expect(isValidMode('onlineCooperative')).toBe(true);
+    expect(isValidMode('onlineSinglePlayer')).toBe(false);
+  });
+
+  it('have their own files, so nothing existing moves', () => {
+    expect(filePathForMode('./data/h.json', 'onlineCompetitive', 2)).toBe('./data/h-onlineCompetitive-v2.json');
+    expect(filePathForMode('./data/h.json', 'singlePlayer', 1)).toBe('./data/h.json');
+  });
+
+  it('are the only server-only boards', () => {
+    expect(isServerOnlyMode('onlineCooperative')).toBe(true);
+    expect(isServerOnlyMode('onlineCompetitive')).toBe(true);
+    expect(isServerOnlyMode('cooperative')).toBe(false);
+  });
+});
+
+describe('isWriteAuthorized', () => {
+  it('leaves the existing boards open whatever the key setup', () => {
+    for (const mode of ['singlePlayer', 'cooperative', 'competitive'] as const) {
+      expect(isWriteAuthorized(mode, undefined, undefined)).toBe('allowed');
+      expect(isWriteAuthorized(mode, undefined, 'secret')).toBe('allowed');
+      expect(isWriteAuthorized(mode, 'wrong', 'secret')).toBe('allowed');
+    }
+  });
+
+  it('lets an online board be written with the right key', () => {
+    expect(isWriteAuthorized('onlineCooperative', 'secret', 'secret')).toBe('allowed');
+    expect(isWriteAuthorized('onlineCompetitive', 'secret', 'secret')).toBe('allowed');
+  });
+
+  it('refuses a missing or wrong key', () => {
+    expect(isWriteAuthorized('onlineCooperative', undefined, 'secret')).toBe('unauthorized');
+    expect(isWriteAuthorized('onlineCooperative', 'wrong', 'secret')).toBe('unauthorized');
+    expect(isWriteAuthorized('onlineCooperative', '', 'secret')).toBe('unauthorized');
+    expect(isWriteAuthorized('onlineCooperative', 'secre', 'secret')).toBe('unauthorized');
+    expect(isWriteAuthorized('onlineCooperative', 'secretx', 'secret')).toBe('unauthorized');
+  });
+
+  it('treats an unset or empty configured key as disabled, never as open', () => {
+    expect(isWriteAuthorized('onlineCompetitive', 'anything', undefined)).toBe('disabled');
+    expect(isWriteAuthorized('onlineCompetitive', undefined, undefined)).toBe('disabled');
+    expect(isWriteAuthorized('onlineCompetitive', '', '')).toBe('disabled');
+    expect(isWriteAuthorized('onlineCompetitive', 'anything', '')).toBe('disabled');
   });
 });

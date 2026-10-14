@@ -18,6 +18,8 @@ export interface MatchResult {
   readonly pooledScore: number;
   /** Slots that were seated when the match started. */
   readonly participants: readonly number[];
+  /** The last Cooperative player to fall - the one a local game lets enter the team's initials. `null` when none was tracked. */
+  readonly lastEliminatedSlot: number | null;
 }
 
 /**

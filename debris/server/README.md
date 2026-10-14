@@ -45,7 +45,7 @@ default. All problems are reported at once. Not every key is acted on yet:
 | `password` | in use - empty = none; checked at join (constant-time compare). Sent over the plain `ws://` signaling channel, so it is only as private as that path |
 | `gameplay.returnToLobbyDelayMs` | in use - how long the end screen shows before the lobby reopens |
 | `gameplay.reconnectGraceMs` | in use - how long a mid-match drop keeps its seat (default 30000; 0 = eliminated at once) |
-| `ops.highscoreApi*` | phase 6 |
+| `ops.highscoreApiUrl`, `ops.highscoreApiKey` | in use - where online results are posted and the key that lets the server write the online boards (both or neither) |
 
 ### Firewall
 
@@ -62,6 +62,7 @@ npm start                                  # in one terminal
 npm run smoke -- --players=4               # in another: join 4, leader starts, snapshots + input checked
 npm run smoke -- --scenario=lobby          # the lobby rules end to end (~30 s)
 npm run smoke -- --scenario=session --password=secret   # join checks, reconnect, two-player PC (needs the config below)
+npm run smoke -- --scenario=scoring [--api=http://host:8081/highscores]   # earns a score; with --api, checks the board
 npm run e2e                                # the REAL game client, clicking through the Online screens
 npm run smoke -- --url=ws://host:8765 --stun=1   # against a remote server
 ```
@@ -135,6 +136,36 @@ Every connection the server accepts is closed when its player leaves. (It
 used to be left open, which kept a UDP port from the pinned range and kept
 probing a dead address for every player who ever left.)
 
+## Online high scores
+
+When a match ends, the server posts the result to the high score API
+(`ops.highscoreApiUrl`, with `ops.highscoreApiKey` as `X-Debris-Server-Key`).
+The main process does it - the key never reaches the game page - and it never
+holds up the lobby: a failed post is retried with a growing delay (4 tries),
+then dropped with a log line. Nothing is queued across restarts; this is a
+leaderboard, not a ledger. With the URL/key unset the server just logs what it
+would have posted.
+
+- **Why the server**: a match is simulated here, so its result is not
+  something a client can make up. The API has two boards that only accept
+  writes with the key - `onlineCooperative` and `onlineCompetitive` - separate
+  from the three local boards (which stay open to any client, as before).
+  Reading is public.
+- **Who gets credited**: players give three-letter initials when they join (the
+  Online screen remembers them; one set per player on the PC). *Competitive*:
+  the winner's own score, to the winner; a draw earns nothing. *Cooperative*:
+  the team's pooled score, to the last player to fall - the same rule a local
+  game uses for who types the initials - or the first participant with
+  initials if that player has none on record. A score of 0 is never posted.
+- **The API must be deployed with the key**: `DEBRIS_SERVER_KEY` set on the
+  API. Without it the online boards answer `403` (never open). See
+  `../../DEPLOYMENT.md`, "Online boards and the server key".
+- The log says what happened: `score onlineCooperative SMK 20: posted`, `... did
+  not make the board`, `... the API rejected the key`, `... the online boards are
+  not enabled`, `... giving up after 4 attempts`. The key is never logged.
+- Not built: the game client does not show the online boards yet (they are
+  readable at `GET /highscores?mode=onlineCooperative&version=2`).
+
 ## Running more than one Electron process on a machine
 
 Electron processes that share the default profile directory interfere with
@@ -186,9 +217,9 @@ leader's commands.
 
 ## Known limits
 
-- Nothing submits scores yet (phase 6). The roadmap's ops work - systemd
-  unit, install script, firewall guide - is phase 7; rate limiting and an
-  idle-leader timeout are phase 8.
+- The roadmap's ops work - systemd unit, install script - is phase 7; rate
+  limiting and an idle-leader timeout are phase 8. A first real-network test
+  guide is in `TESTING-LINUX.md`.
 - A leader who joins and goes idle blocks everyone from starting.
 - A player whose connection is *cut* (not closed) is only noticed after
   ICE's keep-alive timeout, several seconds. A deliberate leave is seen at
@@ -200,7 +231,7 @@ leader's commands.
 - Online play is desktop-only for now (the MULTIPLAYER menu entry is hidden
   in a plain browser tab), although nothing in the Online flow needs Node.
 - Verified on macOS against `127.0.0.1` only - not yet on the Linux server
-  or across the internet.
+  or across the internet (`TESTING-LINUX.md` is how to do that).
 
 ## Node version
 

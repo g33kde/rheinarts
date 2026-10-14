@@ -4,6 +4,7 @@ import {
   insertEntry,
   isValidInitials,
   isValidMode,
+  isWriteAuthorized,
   parseMajorVersion,
   isValidScore,
   MAX_ENTRIES,
@@ -21,7 +22,11 @@ import { loadEntries, saveEntries } from './storage.js';
  * `k8s/rheinarts.yaml`'s deployment comment) so there's never more than
  * one writer to the JSON file `storage.ts` persists to.
  *
- * **No gameplay verification happens here.** A `POST` is trusted input,
+ * Two of the boards (`onlineCooperative`, `onlineCompetitive`) are written
+ * by the dedicated game server and only with `DEBRIS_SERVER_KEY` - the one
+ * place a score is vouched for rather than trusted.
+ *
+ * **No gameplay verification happens here** (for the open boards). A `POST` is trusted input,
  * same trust model as most simple arcade-style leaderboards without
  * full server-authoritative gameplay - `leaderboard.ts`'s validation is
  * spam/garbage prevention (well-formed initials, a plausible score),
@@ -31,6 +36,8 @@ import { loadEntries, saveEntries } from './storage.js';
 
 const PORT = Number(process.env.PORT ?? 8081);
 const FILE_PATH = process.env.HIGHSCORE_FILE_PATH ?? './data/debris-highscores.json';
+/** Shared secret for the server-only online boards (`leaderboard.ts`'s `isWriteAuthorized`). Unset = those boards are disabled, never open. */
+const SERVER_KEY = process.env.DEBRIS_SERVER_KEY;
 const MAX_BODY_BYTES = 1024; // a {initials, score} payload is a few dozen bytes - generous headroom, not an invitation
 
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
@@ -62,7 +69,7 @@ async function handleGetHighScores(req: IncomingMessage, res: ServerResponse): P
   // exactly what already-deployed clients send.
   const majorVersion = parseMajorVersion(query.get('version'));
   if (!isValidMode(mode)) {
-    sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive' });
+    sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive, onlineCooperative, onlineCompetitive' });
     return;
   }
   const entries = await loadEntries(filePathForMode(FILE_PATH, mode, majorVersion));
@@ -84,11 +91,22 @@ async function handlePostHighScores(req: IncomingMessage, res: ServerResponse): 
   const majorVersion = parseMajorVersion((body as { version?: unknown } | null)?.version);
 
   if (!isValidMode(mode)) {
-    sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive' });
+    sendJson(res, 400, { error: 'mode must be one of singlePlayer, cooperative, competitive, onlineCooperative, onlineCompetitive' });
     return;
   }
   if (typeof initialsRaw !== 'string') {
     sendJson(res, 400, { error: 'initials must be a string' });
+    return;
+  }
+  // Before anything is parsed further: a server-only board needs the key.
+  const providedKey = req.headers['x-debris-server-key'];
+  const decision = isWriteAuthorized(mode, typeof providedKey === 'string' ? providedKey : undefined, SERVER_KEY);
+  if (decision === 'disabled') {
+    sendJson(res, 403, { error: 'this board is not enabled on this server' });
+    return;
+  }
+  if (decision === 'unauthorized') {
+    sendJson(res, 401, { error: 'this board can only be written by the game server' });
     return;
   }
   const initials = normalizeInitials(initialsRaw);

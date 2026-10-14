@@ -86,3 +86,51 @@ export function applyTextKey(text: string, key: string, maxLength = MAX_PASSWORD
   }
   return { text, submitted: false };
 }
+
+// ---------------------------------------------------------------
+// The join form: initials for each local player, and the password
+// ---------------------------------------------------------------
+
+export type FieldKind = 'initials' | 'password';
+export type FieldId = 'initials1' | 'initials2' | 'password';
+
+export const INITIALS_LENGTH = 3;
+
+/** Applies a key to one field. Initials accept letters only (stored capitalised, at most three); the password takes any printable character. */
+export function applyFieldKey(text: string, kind: FieldKind, key: string): TextEntryResult {
+  if (kind === 'password') return applyTextKey(text, key, MAX_PASSWORD_LENGTH);
+  if (key.length === 1 && /^[a-zA-Z]$/.test(key)) {
+    return { text: text.length < INITIALS_LENGTH ? text + key.toUpperCase() : text, submitted: false };
+  }
+  // Backspace, Enter and everything else behave as in any text field - but a stray character that is
+  // not a letter must not be typed into initials.
+  return key.length === 1 ? { text, submitted: false } : applyTextKey(text, key, INITIALS_LENGTH);
+}
+
+/** Which field has focus after `key`: Tab/ArrowDown move forward (wrapping), ArrowUp back. `undefined` for any other key. */
+export function nextFocus(ids: readonly FieldId[], current: FieldId, key: string): FieldId | undefined {
+  if (ids.length === 0) return undefined;
+  const index = Math.max(0, ids.indexOf(current));
+  if (key === 'Tab' || key === 'ArrowDown') return ids[(index + 1) % ids.length];
+  if (key === 'ArrowUp') return ids[(index - 1 + ids.length) % ids.length];
+  return undefined;
+}
+
+/** Whether every local player has a full set of initials. */
+export function initialsReady(initials: readonly string[], players: 1 | 2): boolean {
+  return initials.slice(0, players).length === players && initials.slice(0, players).every((i) => /^[A-Z]{3}$/.test(i));
+}
+
+/** Initials remembered from a previous visit (`localStorage` text). Anything malformed becomes empty. */
+export function parseStoredInitials(raw: string | null): [string, string] {
+  try {
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const pick = (v: unknown): string => (typeof v === 'string' && /^[A-Z]{3}$/.test(v) ? v : '');
+      return [pick(parsed[0]), pick(parsed[1])];
+    }
+  } catch {
+    // fall through to empty
+  }
+  return ['', ''];
+}

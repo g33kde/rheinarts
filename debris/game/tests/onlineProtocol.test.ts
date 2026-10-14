@@ -8,6 +8,7 @@ import {
   encodeStatusReply,
   encodeStatusRequest,
   isStatusRequest,
+  isValidInitials,
   isValidToken,
   MAX_PASSWORD_LENGTH,
   type JoinedMessage,
@@ -18,7 +19,7 @@ const TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 
 const JOINED: JoinedMessage = {
   type: 'debris-joined',
-  protocolVersion: 4,
+  protocolVersion: 5,
   slotIndices: [1, 3],
   token: TOKEN,
   mode: 'cooperative',
@@ -32,7 +33,7 @@ const JOINED: JoinedMessage = {
 
 const STATUS: StatusReply = {
   type: 'debris-status-reply',
-  protocolVersion: 4,
+  protocolVersion: 5,
   name: 'Debris Server',
   motd: 'Hi',
   passwordRequired: true,
@@ -40,6 +41,13 @@ const STATUS: StatusReply = {
   mode: 'competitive',
   players: { current: 2, max: 4 },
 };
+
+describe('initials', () => {
+  it('are exactly three capital letters', () => {
+    expect(isValidInitials('MAS')).toBe(true);
+    for (const bad of ['mas', 'MA', 'MASS', 'M4S', '', ' AB', 7, null]) expect(isValidInitials(bad)).toBe(false);
+  });
+});
 
 describe('token', () => {
   it('is 32 lowercase hex characters', () => {
@@ -53,7 +61,7 @@ describe('token', () => {
 });
 
 describe('join', () => {
-  const join = { type: 'debris-join', protocolVersion: 4, password: 'pw', localPlayers: 2 } as const;
+  const join = { type: 'debris-join', protocolVersion: 5, password: 'pw', localPlayers: 2, initials: ['ABC', 'XYZ'] } as const;
 
   it('round-trips with and without a token', () => {
     expect(decodeJoin(encodeJoin(join))).toEqual(join);
@@ -62,6 +70,24 @@ describe('join', () => {
 
   it('accepts an empty password (a server with none)', () => {
     expect(decodeJoin(encodeJoin({ ...join, password: '' }))?.password).toBe('');
+  });
+
+  it('carries one set of initials per local player', () => {
+    expect(decodeJoin(encodeJoin({ ...join, localPlayers: 1, initials: ['MAS'] }))?.initials).toEqual(['MAS']);
+    expect(decodeJoin(encodeJoin(join))?.initials).toEqual(['ABC', 'XYZ']);
+  });
+
+  it('rejects initials that are missing, the wrong count, or not three capital letters', () => {
+    const base = { type: 'debris-join', protocolVersion: 5, password: '', localPlayers: 1 };
+    expect(decodeJoin(JSON.stringify(base))).toBeUndefined();
+    expect(decodeJoin(JSON.stringify({ ...base, initials: [] }))).toBeUndefined();
+    expect(decodeJoin(JSON.stringify({ ...base, initials: ['ABC', 'DEF'] }))).toBeUndefined();
+    expect(decodeJoin(JSON.stringify({ ...join, initials: ['ABC'] }))).toBeUndefined();
+    for (const bad of ['ab', 'abc', 'ABCD', 'A1C', 'A C', '', 'ÄÖÜ']) {
+      expect(decodeJoin(JSON.stringify({ ...base, initials: [bad] }))).toBeUndefined();
+    }
+    expect(decodeJoin(JSON.stringify({ ...base, initials: 'ABC' }))).toBeUndefined();
+    expect(decodeJoin(JSON.stringify({ ...base, initials: [7] }))).toBeUndefined();
   });
 
   it('drops extra fields', () => {

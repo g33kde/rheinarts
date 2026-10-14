@@ -1,0 +1,631 @@
+<title>Drift Mine</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Archivo:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --void: #05050a;
+    --hull: #0d0d16;
+    --line: #23263a;
+    --ink: #c9c9d6;
+    --ink-bright: #eaeaf2;
+    --muted: #6b6f82;
+    --danger: #e0463c;
+    --shield: #5dade2;
+    --metal: #3c4560;
+    --metal-fill: #14141c;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--void);
+    color: var(--ink);
+    font-family: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  }
+
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 64px 28px 96px;
+  }
+
+  .eyebrow {
+    font-family: 'Space Mono', 'Courier New', monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--danger);
+    margin: 0 0 18px;
+  }
+
+  h1 {
+    font-family: 'Space Mono', 'Courier New', monospace;
+    font-weight: 700;
+    font-size: clamp(34px, 5vw, 50px);
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+    margin: 0 0 20px;
+    color: var(--ink-bright);
+    text-wrap: balance;
+  }
+
+  .lede {
+    max-width: 66ch;
+    font-size: 16.5px;
+    line-height: 1.6;
+    color: var(--ink);
+    margin: 0 0 40px;
+  }
+
+  .lede strong { color: var(--ink-bright); font-weight: 600; }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 0 0 14px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 12px;
+  }
+
+  .section-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  .section-note {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  .hero {
+    border: 1px solid var(--line);
+    background: var(--hull);
+    margin-bottom: 14px;
+  }
+
+  .hero-viewport {
+    position: relative;
+    background: var(--void);
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+  }
+
+  .hero-viewport::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 24px 24px;
+    pointer-events: none;
+  }
+
+  .hero-viewport canvas {
+    position: relative;
+    z-index: 1;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .hero-caption {
+    padding: 14px 18px;
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .hero-caption b { color: var(--ink-bright); font-weight: 600; }
+
+  .trigger-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin-bottom: 56px;
+  }
+
+  @media (max-width: 600px) {
+    .trigger-row { grid-template-columns: 1fr; }
+  }
+
+  .trigger-cell {
+    background: var(--hull);
+    padding: 16px 18px;
+  }
+
+  .trigger-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--danger);
+    margin: 0 0 6px;
+  }
+
+  .trigger-cell p.body {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  .lower {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 28px;
+  }
+
+  @media (max-width: 720px) {
+    .lower { grid-template-columns: 1fr; }
+  }
+
+  .anatomy {
+    border: 1px solid var(--line);
+    background: var(--hull);
+  }
+
+  .anatomy-viewport {
+    position: relative;
+    background: var(--void);
+    aspect-ratio: 1 / 1;
+  }
+
+  .anatomy-viewport canvas { display: block; width: 100%; height: 100%; }
+
+  .anatomy-list {
+    padding: 14px 16px 16px;
+    margin: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .anatomy-list li {
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--muted);
+    padding-left: 14px;
+    border-left: 2px solid var(--line);
+  }
+
+  .anatomy-list b {
+    display: block;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-bright);
+    margin-bottom: 2px;
+  }
+
+  .ideas {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .idea {
+    border: 1px solid var(--line);
+    background: var(--hull);
+    padding: 16px 18px;
+  }
+
+  .idea-name {
+    font-family: 'Space Mono', monospace;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--ink-bright);
+    margin: 0 0 6px;
+  }
+
+  .idea p {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  footer {
+    margin-top: 48px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  code { font-family: 'Space Mono', monospace; font-size: 0.92em; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+  }
+</style>
+
+<div class="page">
+  <p class="eyebrow">Hazard Design — Drift Mine</p>
+  <h1>Drift Mine</h1>
+  <p class="lede">
+    A passive hazard, not an enemy attack - it just drifts, like an
+    asteroid. Shoot it or let anything touch it (a ship, a rock, a UFO)
+    and it detonates in an expanding shockwave; anything else the
+    shockwave reaches - including <strong>another mine</strong> - goes up
+    a beat later. One well-placed shot into a cluster can clear several
+    rocks at once. One stray collision near a drifting ship can kill it
+    with zero warning beyond the radius it was already standing in.
+  </p>
+
+  <div class="section-head">
+    <p class="section-title">A chain, live</p>
+    <p class="section-note">looping scenario, actual blast-radius scale</p>
+  </div>
+
+  <div class="hero">
+    <div class="hero-viewport">
+      <canvas data-mode="hero"></canvas>
+    </div>
+    <p class="hero-caption">
+      A shot clips the left mine. Its shockwave clears two nearby rocks
+      and reaches the second mine, which detonates in turn a beat later
+      and catches a third rock - and very nearly the ship sitting right
+      at the edge of its radius. The dashed rings are always visible,
+      not just during the blast; that is the entire warning a player gets.
+    </p>
+  </div>
+
+  <div class="trigger-row">
+    <div class="trigger-cell">
+      <p class="trigger-tag">Trigger A — Shot</p>
+      <p class="body">A player's own projectile hitting it detonates it
+        immediately - the deliberate, offensive use: aim for the mine,
+        not the rocks around it.</p>
+    </div>
+    <div class="trigger-cell">
+      <p class="trigger-tag">Trigger B — Collision</p>
+      <p class="body">Anything physically touching it - a ship, an
+        asteroid drifting into it, a UFO, another mine's shockwave -
+        detonates it identically. No special case by collider type.</p>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <p class="section-title">Anatomy</p>
+    <p class="section-note">idle state, always-visible telegraph</p>
+  </div>
+
+  <div class="lower">
+    <div class="anatomy">
+      <div class="anatomy-viewport">
+        <canvas data-mode="anatomy"></canvas>
+      </div>
+      <ul class="anatomy-list">
+        <li><b>Contact spikes</b>Eight radiating prongs, slow ambient
+          tumble - the one silhouette in the game that reads as "ordnance"
+          rather than "debris" on shape alone.</li>
+        <li><b>Warning core</b>Slow steady pulse in the existing
+          <code>COLORS.ufo</code> red while idle - the same hue every
+          other danger cue in the game already uses.</li>
+        <li><b>Blast ring</b>A dashed boundary at the exact detonation
+          radius, drawn at all times - the fair-telegraph rule every other
+          hazard in Debris already follows, applied to a threat that can
+          trigger without the player doing anything at all.</li>
+      </ul>
+    </div>
+
+    <div class="ideas">
+      <div class="idea">
+        <p class="idea-name">Feed the combo multiplier</p>
+        <p>A mine-triggered multi-kill is exactly the moment
+          <code>ComboMultiplier.ts</code> exists to reward - clearing three
+          rocks in one shockwave should read as a real chain, not three
+          separate, disconnected kills.</p>
+      </div>
+      <div class="idea">
+        <p class="idea-name">Propagation delay, not instant chain</p>
+        <p>Each hop in the chain fires a beat after the shockwave actually
+          reaches it, not all at once - the delay is what makes a chain
+          <em>look</em> like a chain instead of one simultaneous flash.</p>
+      </div>
+      <div class="idea">
+        <p class="idea-name">Rare, not a minefield</p>
+        <p>A handful per stage reads as "a notable local hazard." Enough
+          of them and the arena just becomes a no-go zone - the opposite
+          of an interesting decision.</p>
+      </div>
+      <div class="idea">
+        <p class="idea-name">Open question: does it clear Wreck?</p>
+        <p>Terrain is deliberately non-destructible everywhere else in
+          the game. A mine could be the one deliberate exception - "blow
+          up this cover on purpose" - rather than a loose end to patch
+          later.</p>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Every color above is already in Debris's palette - danger red
+    (<code>COLORS.ufo</code>) for the core and blast, shield blue
+    (<code>COLORS.shield</code>) for the near-miss flash on the ship,
+    metal tones matching the Cardinal's own plating. Nothing new
+    introduced.
+  </footer>
+</div>
+
+<script>
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const DANGER = '#e0463c';
+  const METAL = '#3c4560';
+  const METAL_FILL = '#14141c';
+  const SHIELD = '#5dade2';
+  const FLASH = '#fff3d6';
+
+  function fitCanvas(canvas) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width));
+    const h = Math.max(1, Math.round(rect.height));
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w, h };
+  }
+  function clear(ctx, w, h) { ctx.clearRect(0, 0, w, h); }
+  function easeOutCubic(t) { return 1 - (1 - t) ** 3; }
+
+  function drawDashedRing(ctx, x, y, r, alpha) {
+    ctx.save();
+    ctx.setLineDash([4, 5]);
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = DANGER;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawMine(ctx, x, y, s, spin, pulse) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(spin);
+    ctx.scale(s, s);
+
+    for (let i = 0; i < 8; i += 1) {
+      const a = (i / 8) * Math.PI * 2;
+      const len = 13;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 5, Math.sin(a) * 5);
+      ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = METAL;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * len, Math.sin(a) * len, 1.3, 0, Math.PI * 2);
+      ctx.fillStyle = METAL;
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
+    ctx.fillStyle = METAL_FILL;
+    ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = METAL;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 3 * (0.8 + pulse * 0.35), 0, Math.PI * 2);
+    ctx.fillStyle = DANGER;
+    ctx.globalAlpha = 0.55 + pulse * 0.45;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  function drawShockwave(ctx, x, y, progress, maxR) {
+    const r = maxR * easeOutCubic(progress);
+    const fade = 1 - progress;
+    ctx.save();
+    ctx.globalAlpha = fade * 0.9;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = FLASH;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = fade * 0.3;
+    ctx.fillStyle = DANGER;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    if (progress < 0.25) {
+      ctx.save();
+      ctx.globalAlpha = (1 - progress / 0.25);
+      ctx.fillStyle = FLASH;
+      ctx.beginPath();
+      ctx.arc(x, y, 10 * (1 - progress / 0.25) + 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawRockBurst(ctx, x, y, r, destroyT) {
+    if (destroyT >= 1) return;
+    if (destroyT <= 0) {
+      ctx.save();
+      ctx.translate(x, y);
+      const pts = 7;
+      ctx.beginPath();
+      for (let i = 0; i < pts; i += 1) {
+        const a = (i / pts) * Math.PI * 2;
+        const rr = r * (0.8 + Math.sin(i * 2.7) * 0.2);
+        const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#14141c';
+      ctx.fill();
+      ctx.lineWidth = 1.3;
+      ctx.strokeStyle = '#c9c9d6';
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.globalAlpha = 1 - destroyT;
+      for (let i = 0; i < 5; i += 1) {
+        const a = (i / 5) * Math.PI * 2 + destroyT;
+        const dist = destroyT * r * 3.2;
+        ctx.beginPath();
+        ctx.arc(x + Math.cos(a) * dist, y + Math.sin(a) * dist, 1.6, 0, Math.PI * 2);
+        ctx.fillStyle = '#c9c9d6';
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawShip(ctx, x, y, flashT) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-0.6);
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.lineTo(-7, -7);
+    ctx.lineTo(-3, 0);
+    ctx.lineTo(-7, 7);
+    ctx.closePath();
+    ctx.fillStyle = '#0d0d16';
+    ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = '#00e5ff';
+    ctx.stroke();
+    ctx.restore();
+
+    if (flashT > 0 && flashT < 1) {
+      ctx.save();
+      ctx.globalAlpha = 1 - flashT;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = SHIELD;
+      ctx.beginPath();
+      ctx.arc(x, y, 10 + flashT * 10, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // ---- Hero: scripted chain-reaction loop ----
+  const LOOP_MS = 6500;
+  const SCENE = {
+    mineA: { fx: 0.26, fy: 0.64 },
+    mineB: { fx: 0.46, fy: 0.46 },
+    rock1: { fx: 0.40, fy: 0.70 },
+    rock2: { fx: 0.20, fy: 0.42 },
+    rock3: { fx: 0.60, fy: 0.40 },
+    ship: { fx: 0.66, fy: 0.60 },
+  };
+  const BLAST_FRAC = 0.22;
+  const SHOT_START = 500;
+  const A_EXPLODE = 1250;
+  const EXPAND_MS = 320;
+  const B_EXPLODE = A_EXPLODE + EXPAND_MS * 0.85;
+  const ROCK1_DESTROY = A_EXPLODE + EXPAND_MS * 0.55;
+  const ROCK2_DESTROY = A_EXPLODE + EXPAND_MS * 0.9;
+  const ROCK3_DESTROY = B_EXPLODE + EXPAND_MS * 0.75;
+  const SHIP_FLASH = B_EXPLODE + EXPAND_MS * 0.95;
+
+  function runHero(canvas) {
+    function frame(t) {
+      const { ctx, w, h } = fitCanvas(canvas);
+      clear(ctx, w, h);
+      const minDim = Math.min(w, h);
+      const blastR = BLAST_FRAC * minDim;
+      const tm = reduceMotion ? A_EXPLODE + EXPAND_MS * 0.5 : t % LOOP_MS;
+
+      const P = {};
+      Object.keys(SCENE).forEach((k) => { P[k] = { x: SCENE[k].fx * w, y: SCENE[k].fy * h }; });
+
+      const mineAAlive = tm < A_EXPLODE;
+      const mineBAlive = tm < B_EXPLODE;
+
+      // idle telegraph rings, only while each mine is still armed
+      if (mineAAlive) drawDashedRing(ctx, P.mineA.x, P.mineA.y, blastR, 0.55);
+      if (mineBAlive) drawDashedRing(ctx, P.mineB.x, P.mineB.y, blastR, 0.55);
+
+      // rocks
+      const rockT = (destroyAt) => Math.max(0, Math.min(1, (tm - destroyAt) / 260));
+      drawRockBurst(ctx, P.rock1.x, P.rock1.y, 9, tm < ROCK1_DESTROY ? -1 : rockT(ROCK1_DESTROY));
+      drawRockBurst(ctx, P.rock2.x, P.rock2.y, 8, tm < ROCK2_DESTROY ? -1 : rockT(ROCK2_DESTROY));
+      drawRockBurst(ctx, P.rock3.x, P.rock3.y, 10, tm < ROCK3_DESTROY ? -1 : rockT(ROCK3_DESTROY));
+
+      // incoming shot
+      if (tm >= SHOT_START && tm < A_EXPLODE) {
+        const st = (tm - SHOT_START) / (A_EXPLODE - SHOT_START);
+        const sx = -20 + (P.mineA.x + 20) * st;
+        const sy = h * 0.8 + (P.mineA.y - h * 0.8) * st;
+        ctx.save();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#00e5ff';
+        ctx.beginPath();
+        ctx.moveTo(sx - 10, sy - 4);
+        ctx.lineTo(sx, sy);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // mines (drawn idle or as a dimming husk once exploded)
+      const spin = reduceMotion ? 0.4 : t / 2600;
+      const pulse = 0.5 + Math.sin(t / 500) * 0.5;
+      if (mineAAlive) drawMine(ctx, P.mineA.x, P.mineA.y, 1.4, spin, pulse);
+      if (mineBAlive) drawMine(ctx, P.mineB.x, P.mineB.y, 1.4, spin + 1, pulse);
+
+      // shockwaves
+      if (tm >= A_EXPLODE && tm < A_EXPLODE + EXPAND_MS) {
+        drawShockwave(ctx, P.mineA.x, P.mineA.y, (tm - A_EXPLODE) / EXPAND_MS, blastR);
+      }
+      if (tm >= B_EXPLODE && tm < B_EXPLODE + EXPAND_MS) {
+        drawShockwave(ctx, P.mineB.x, P.mineB.y, (tm - B_EXPLODE) / EXPAND_MS, blastR);
+      }
+
+      // ship + near-miss shield flash
+      const flashT = tm < SHIP_FLASH ? -1 : (tm - SHIP_FLASH) / 500;
+      drawShip(ctx, P.ship.x, P.ship.y, flashT < 0 ? -1 : flashT);
+
+      if (!reduceMotion) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function runAnatomy(canvas) {
+    function frame(t) {
+      const { ctx, w, h } = fitCanvas(canvas);
+      clear(ctx, w, h);
+      const cx = w / 2, cy = h / 2;
+      const r = Math.min(w, h) * 0.34;
+      const spin = reduceMotion ? 0.5 : t / 3000;
+      const pulse = reduceMotion ? 0.8 : 0.5 + Math.sin(t / 500) * 0.5;
+      drawDashedRing(ctx, cx, cy, r, 0.6);
+      drawMine(ctx, cx, cy, Math.min(w, h) / 90, spin, pulse);
+      if (!reduceMotion) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  document.querySelectorAll('canvas[data-mode]').forEach((canvas) => {
+    if (canvas.dataset.mode === 'hero') runHero(canvas);
+    else runAnatomy(canvas);
+  });
+</script>

@@ -2,6 +2,7 @@ import type { HullId } from '../config/GameConfig';
 import { RemoteInput } from '../input/RemoteInput';
 import { DedicatedLobby } from './DedicatedLobby';
 import type { DedicatedMatchControl, MatchResult } from './DedicatedMatch';
+import { LEADERBOARD_VERSION } from './HighScoreApi';
 import { PROTOCOL_VERSION } from './LanDiscoveryProtocol';
 import {
   decodeLobbyCommand,
@@ -18,6 +19,7 @@ import { safeEqual } from './SafeEqual';
 import {
   BridgeHostSignalingChannel,
   type ServerLogLevel,
+  type ScoreReport,
   type ServerRuntimeConfig,
   type ServerStatus,
 } from './ServerBridge';
@@ -55,6 +57,8 @@ export interface DedicatedServerEnv {
   readonly returnToLobby: () => void;
   /** Tell the main process what to answer signaling-socket status queries with. */
   readonly setStatus: (status: ServerStatus) => void;
+  /** Hand a finished match to the main process, which posts the scores. Fire and forget: it must never hold up the lobby. */
+  readonly reportResult: (report: ScoreReport) => void;
   /** Injected so tests (and the 30 s window) never depend on the wall clock. */
   readonly now?: () => number;
 }
@@ -114,6 +118,10 @@ export class DedicatedServer {
   private readonly heldOwners = new Set<number>();
   private readonly ledger: ReconnectLedger<{ owner: number }>;
   private remoteInputsBySlot = new Map<number, RemoteInput>();
+  /** Who each seated slot is, from the join - what a posted score is credited to. */
+  private readonly initialsBySlot = new Map<number, string>();
+  /** The same, frozen when a match starts: players who leave mid-match must still be credited when it ends. */
+  private matchInitials = new Map<number, string>();
   private control: DedicatedMatchControl | undefined;
   private nextOwner = 1;
 
@@ -215,6 +223,7 @@ export class DedicatedServer {
 
     const token = randomToken();
     this.seat(session, owner, seated.slots, token);
+    seated.slots.forEach((slot, index) => this.initialsBySlot.set(slot, join.initials[index]!));
     this.sendJoined(session, false);
     this.env.log('info', `Player joined as slot${seated.slots.length > 1 ? 's' : ''} ${seated.slots.join('+')} (${this.lobby.playerCount}/${this.config.gameplay.maxPlayers})`);
     this.broadcastLobby();
@@ -330,6 +339,7 @@ export class DedicatedServer {
   private releaseOwner(owner: number, eliminate: boolean): void {
     const slots = this.lobby.slotsOf(owner);
     this.lobby.leave(owner);
+    slots.forEach((slot) => this.initialsBySlot.delete(slot));
     this.heldOwners.delete(owner);
     const token = this.tokenByOwner.get(owner);
     if (token !== undefined) {
@@ -350,6 +360,7 @@ export class DedicatedServer {
 
   private startMatch(): void {
     const slots = [...this.lobby.memberSlots];
+    this.matchInitials = new Map(slots.flatMap((slot) => (this.initialsBySlot.has(slot) ? [[slot, this.initialsBySlot.get(slot)!] as const] : [])));
     // Fresh inputs every match, so a key held when the last one ended can't carry over.
     this.remoteInputsBySlot = new Map(slots.map((slot) => [slot, new RemoteInput()]));
     const connections = new Map<number, RtcConnection>();
@@ -387,6 +398,17 @@ export class DedicatedServer {
           ? 'draw'
           : `team lost with ${result.pooledScore}`;
     this.env.log('info', `Match over (${result.mode}): ${summary}`);
+    this.env.reportResult({
+      leaderboardVersion: LEADERBOARD_VERSION,
+      mode: result.mode,
+      outcome: result.outcome,
+      winnerSlot: result.winnerSlot,
+      scores: [...result.scores],
+      pooledScore: result.pooledScore,
+      lastEliminatedSlot: result.lastEliminatedSlot,
+      participants: [...result.participants],
+      initialsBySlot: Object.fromEntries([...this.matchInitials].map(([slot, initials]) => [String(slot), initials])),
+    });
 
     // Nothing is left to rejoin: release every seat still being held.
     this.ledger.clear().forEach(({ owner }) => this.releaseOwner(owner, false));

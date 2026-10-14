@@ -146,6 +146,30 @@ kubectl apply -f k8s/rheinarts.yaml
 No separate "find the IP" step - it's `ClusterIP`, reached only through
 the portal's own LoadBalancer IP at `/api/debris/`.
 
+### Online boards and the server key
+
+Two more boards exist, `onlineCooperative` and `onlineCompetitive`, for
+matches played on the dedicated game server (`debris/server`). They are the
+only boards whose scores the game can vouch for, so unlike the other three
+they are **writable only with a secret key** - the `DEBRIS_SERVER_KEY`
+environment variable, sent by the game server as an `X-Debris-Server-Key`
+header. Reading them stays public. With no key configured they answer
+`403` rather than being open.
+
+```bash
+# once: create the key (keep a copy - the game server's config needs the same value)
+KEY="$(openssl rand -hex 24)"
+kubectl -n rheinarts create secret generic debris-server-key --from-literal=key="$KEY"
+echo "$KEY"   # goes in the game server's config.json as ops.highscoreApiKey
+```
+
+The Deployment already reads it from that Secret (`optional: true`, so an API
+without the Secret still starts, with the online boards disabled). This needs
+a **new API image** (build, push and bump the tag as above): the online
+boards and the key check are new code. The game server then posts to
+`ops.highscoreApiUrl` - the public `https://<portal>/api/debris/highscores` -
+with that key. Scores are never posted for a score of 0 or a Competitive draw.
+
 **Honest limitation, not a deployment gap**: this API does basic input
 validation (initials must be 3 letters, score must be a plausible
 number) but no gameplay verification - there's no way to confirm a

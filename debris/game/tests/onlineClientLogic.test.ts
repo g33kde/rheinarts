@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from '../src/systems/LanDiscoveryProtocol';
 import type { RejectReason } from '../src/systems/NetworkHandshakeProtocol';
-import { applyTextKey, describeReject, describeStatus, reconnectDelay } from '../src/systems/OnlineClientLogic';
+import {
+  applyFieldKey,
+  applyTextKey,
+  describeReject,
+  describeStatus,
+  initialsReady,
+  nextFocus,
+  parseStoredInitials,
+  reconnectDelay,
+  type FieldId,
+} from '../src/systems/OnlineClientLogic';
 import type { StatusReply } from '../src/systems/OnlineProtocol';
 
 const REPLY: StatusReply = {
@@ -123,5 +133,100 @@ describe('applyTextKey', () => {
   it('stops at the maximum length', () => {
     expect(applyTextKey('abc', 'd', 3)).toEqual({ text: 'abc', submitted: false });
     expect(applyTextKey('ab', 'c', 3).text).toBe('abc');
+  });
+});
+
+describe('applyFieldKey', () => {
+  it('types capital letters into initials, whatever case was pressed', () => {
+    expect(applyFieldKey('', 'initials', 'm').text).toBe('M');
+    expect(applyFieldKey('M', 'initials', 'A').text).toBe('MA');
+    expect(applyFieldKey('MA', 'initials', 's').text).toBe('MAS');
+  });
+
+  it('stops at three letters', () => {
+    expect(applyFieldKey('MAS', 'initials', 'x').text).toBe('MAS');
+  });
+
+  it('refuses digits, spaces and punctuation in initials', () => {
+    for (const key of ['1', ' ', '-', '_', '.', 'ä']) expect(applyFieldKey('MA', 'initials', key).text).toBe('MA');
+  });
+
+  it('still lets Backspace edit initials, and ignores navigation keys', () => {
+    expect(applyFieldKey('MAS', 'initials', 'Backspace').text).toBe('MA');
+    expect(applyFieldKey('', 'initials', 'Backspace').text).toBe('');
+    expect(applyFieldKey('MA', 'initials', 'ArrowLeft').text).toBe('MA');
+    expect(applyFieldKey('MA', 'initials', 'Shift').text).toBe('MA');
+  });
+
+  it('submits on Enter without changing the text', () => {
+    expect(applyFieldKey('MAS', 'initials', 'Enter')).toEqual({ text: 'MAS', submitted: true });
+    expect(applyFieldKey('pw', 'password', 'Enter')).toEqual({ text: 'pw', submitted: true });
+  });
+
+  it('lets the password take any printable character, case kept', () => {
+    expect(applyFieldKey('a', 'password', 'B').text).toBe('aB');
+    expect(applyFieldKey('a', 'password', '1').text).toBe('a1');
+    expect(applyFieldKey('a', 'password', ' ').text).toBe('a ');
+  });
+});
+
+describe('nextFocus', () => {
+  const ids: FieldId[] = ['initials1', 'initials2', 'password'];
+
+  it('moves forward on Tab and ArrowDown, wrapping', () => {
+    expect(nextFocus(ids, 'initials1', 'Tab')).toBe('initials2');
+    expect(nextFocus(ids, 'initials2', 'ArrowDown')).toBe('password');
+    expect(nextFocus(ids, 'password', 'Tab')).toBe('initials1');
+  });
+
+  it('moves back on ArrowUp, wrapping', () => {
+    expect(nextFocus(ids, 'initials2', 'ArrowUp')).toBe('initials1');
+    expect(nextFocus(ids, 'initials1', 'ArrowUp')).toBe('password');
+  });
+
+  it('ignores every other key', () => {
+    expect(nextFocus(ids, 'initials1', 'a')).toBeUndefined();
+    expect(nextFocus(ids, 'initials1', 'Enter')).toBeUndefined();
+  });
+
+  it('copes with a single field, an empty list, and a focus that is no longer shown', () => {
+    expect(nextFocus(['initials1'], 'initials1', 'Tab')).toBe('initials1');
+    expect(nextFocus([], 'initials1', 'Tab')).toBeUndefined();
+    expect(nextFocus(['initials1', 'password'], 'initials2', 'Tab')).toBe('password');
+  });
+});
+
+describe('initialsReady', () => {
+  it('needs three letters for each local player', () => {
+    expect(initialsReady(['MAS', ''], 1)).toBe(true);
+    expect(initialsReady(['MA', ''], 1)).toBe(false);
+    expect(initialsReady(['', ''], 1)).toBe(false);
+  });
+
+  it('needs both sets when two players are on the PC', () => {
+    expect(initialsReady(['MAS', 'ZED'], 2)).toBe(true);
+    expect(initialsReady(['MAS', ''], 2)).toBe(false);
+    expect(initialsReady(['MAS'], 2)).toBe(false);
+  });
+
+  it('ignores a second set that is not needed', () => {
+    expect(initialsReady(['MAS', 'junk'], 1)).toBe(true);
+  });
+});
+
+describe('parseStoredInitials', () => {
+  it('reads what was saved', () => {
+    expect(parseStoredInitials('["MAS","ZED"]')).toEqual(['MAS', 'ZED']);
+    expect(parseStoredInitials('["MAS"]')).toEqual(['MAS', '']);
+  });
+
+  it('turns anything malformed into empty fields', () => {
+    for (const bad of [null, '', 'nope', '{}', '[1,2]', '["mas","Z"]', '"MAS"']) {
+      expect(parseStoredInitials(bad)).toEqual(['', '']);
+    }
+  });
+
+  it('keeps the valid half of a half-valid entry', () => {
+    expect(parseStoredInitials('["MAS","z"]')).toEqual(['MAS', '']);
   });
 });

@@ -2,10 +2,13 @@ import Phaser from 'phaser';
 import { ARENA_WIDTH, COLORS, ONLINE_SERVER } from '../config/GameConfig';
 import type { LobbyStateMessage } from '../systems/NetworkHandshakeProtocol';
 import {
-  applyTextKey,
+  applyFieldKey,
   describeReject,
   describeStatus,
-  MAX_PASSWORD_LENGTH,
+  initialsReady,
+  nextFocus,
+  parseStoredInitials,
+  type FieldId,
   type StatusView,
 } from '../systems/OnlineClientLogic';
 import { OnlineClientSession, queryServerStatus } from '../systems/OnlineClientSession';
@@ -13,6 +16,7 @@ import { resolveOnlineServerUrl } from '../systems/OnlineServerConfig';
 import type { StatusReply } from '../systems/OnlineProtocol';
 
 const STATUS_POLL_MS = 3000;
+const INITIALS_STORAGE_KEY = 'debris.onlineInitials';
 const PLAYER_LABELS = ['PLAYER 1', 'PLAYER 2', 'PLAYER 3', 'PLAYER 4'];
 
 interface Button {
@@ -57,8 +61,11 @@ export class OnlineScene extends Phaser.Scene {
   private statusReply: StatusReply | null | undefined; // undefined = no answer yet
   private statusView: StatusView | undefined;
   private localPlayers: 1 | 2 = 1;
+  /** Initials for the (up to two) local players - what the server credits an online score to. Remembered between visits. */
+  private initials: [string, string] = ['', ''];
   private password = '';
-  private passwordText: Phaser.GameObjects.Text | undefined;
+  private focus: FieldId = 'initials1';
+  private fieldTexts = new Map<FieldId, Phaser.GameObjects.Text>();
 
   constructor() {
     super('Online');
@@ -73,6 +80,8 @@ export class OnlineScene extends Phaser.Scene {
     this.statusReply = undefined;
     this.statusView = undefined;
     this.password = '';
+    this.initials = this.loadInitials();
+    this.focus = 'initials1';
 
     this.titleText = this.add
       .text(ARENA_WIDTH / 2, 110, 'ONLINE', {
@@ -127,7 +136,7 @@ export class OnlineScene extends Phaser.Scene {
   private clearScreen(): void {
     this.screenObjects.forEach((object) => object.destroy());
     this.screenObjects = [];
-    this.passwordText = undefined;
+    this.fieldTexts.clear();
     if (this.pollTimer !== undefined) clearTimeout(this.pollTimer);
     this.pollTimer = undefined;
     this.noticeText.setText('');
@@ -172,30 +181,35 @@ export class OnlineScene extends Phaser.Scene {
     if (!view) return;
     this.screenObjects.forEach((object) => object.destroy());
     this.screenObjects = [];
-    this.passwordText = undefined;
+    this.fieldTexts.clear();
 
-    this.bodyText.setPosition(ARENA_WIDTH / 2, 320).setText([`Server: ${this.url}`, '', ...view.lines].join('\n'));
+    this.bodyText.setPosition(ARENA_WIDTH / 2, 300).setText([`Server: ${this.url}`, '', ...view.lines].join('\n'));
 
-    const needsPassword = this.statusReply?.passwordRequired === true;
-    let y = 560;
-    if (needsPassword) {
-      this.passwordText = this.add
-        .text(ARENA_WIDTH / 2, y, '', { fontFamily: 'monospace', fontSize: '24px', color: '#ffffff' })
-        .setOrigin(0.5);
-      this.screenObjects.push(this.passwordText);
-      this.refreshPasswordText();
-      y += 80;
-    }
+    let y = 520;
     if (view.joinable) {
+      // The join form: initials for each player on this PC, then the password if the server has one.
+      this.visibleFields().forEach((id) => {
+        const text = this.add
+          .text(ARENA_WIDTH / 2, y, '', { fontFamily: 'monospace', fontSize: '24px', color: '#ffffff' })
+          .setOrigin(0.5);
+        this.screenObjects.push(text);
+        this.fieldTexts.set(id, text);
+        y += 44;
+      });
+      this.refreshFields();
+      y += 24;
       this.makeButton(ARENA_WIDTH / 2, y, `PLAYERS ON THIS PC: ${this.localPlayers}`, () => {
         this.localPlayers = this.localPlayers === 1 ? 2 : 1;
+        if (!this.visibleFields().includes(this.focus)) this.focus = 'initials1';
         this.renderStatus();
       });
       this.makeButton(ARENA_WIDTH / 2, y + 80, 'JOIN', () => void this.join());
-      this.noticeText.setPosition(ARENA_WIDTH / 2, y + 160).setText(
-        this.localPlayers === 2 ? 'Player 1: WASD + Space    Player 2: arrow keys + Right Ctrl' : 'Controls: WASD + Space',
+      this.noticeText.setPosition(ARENA_WIDTH / 2, y + 150).setText(
+        this.localPlayers === 2
+          ? 'Player 1: WASD + Space    Player 2: arrow keys + Right Ctrl\nTab or the up/down arrows switch field'
+          : 'Controls: WASD + Space    -    Tab or the up/down arrows switch field',
       );
-      y += 160;
+      y += 150;
     } else if (view.blocker) {
       this.noticeText.setPosition(ARENA_WIDTH / 2, y).setText(view.blocker);
       y += 40;
@@ -203,18 +217,72 @@ export class OnlineScene extends Phaser.Scene {
     this.makeButton(ARENA_WIDTH / 2, y + 100, 'BACK', () => this.scene.start('Multiplayer'));
   }
 
-  private refreshPasswordText(): void {
-    this.passwordText?.setText(`PASSWORD: ${'•'.repeat(this.password.length)}_`);
+  /** The fields on screen, top to bottom: initials per local player, then the password when the server asks for one. */
+  private visibleFields(): FieldId[] {
+    return [
+      'initials1',
+      ...(this.localPlayers === 2 ? (['initials2'] as const) : []),
+      ...(this.statusReply?.passwordRequired ? (['password'] as const) : []),
+    ];
   }
 
-  /** Typing goes to the password field while the status screen shows one. */
+  private fieldValue(id: FieldId): string {
+    return id === 'initials1' ? this.initials[0] : id === 'initials2' ? this.initials[1] : this.password;
+  }
+
+  private setFieldValue(id: FieldId, value: string): void {
+    if (id === 'initials1') this.initials[0] = value;
+    else if (id === 'initials2') this.initials[1] = value;
+    else this.password = value;
+  }
+
+  private refreshFields(): void {
+    const labels: Record<FieldId, string> = {
+      initials1: this.localPlayers === 2 ? 'PLAYER 1 INITIALS' : 'YOUR INITIALS',
+      initials2: 'PLAYER 2 INITIALS',
+      password: 'PASSWORD',
+    };
+    this.fieldTexts.forEach((text, id) => {
+      const value = this.fieldValue(id);
+      const shown = id === 'password' ? '•'.repeat(value.length) : value.padEnd(3, '-');
+      const focused = id === this.focus;
+      text.setText(`${focused ? '> ' : '  '}${labels[id]}: ${shown}${focused && id === 'password' ? '_' : ''}`);
+      text.setColor(focused ? '#ffffff' : '#8a8ea0');
+    });
+  }
+
+  /** Typing goes to the focused field of the join form, while the status screen shows one. */
   private readonly onKey = (event: KeyboardEvent): void => {
-    if (!this.passwordText) return;
-    const result = applyTextKey(this.password, event.key, MAX_PASSWORD_LENGTH);
-    this.password = result.text;
-    this.refreshPasswordText();
+    if (this.fieldTexts.size === 0) return;
+    const moved = nextFocus(this.visibleFields(), this.focus, event.key);
+    if (moved !== undefined) {
+      event.preventDefault?.();
+      this.focus = moved;
+      this.refreshFields();
+      return;
+    }
+    const kind = this.focus === 'password' ? 'password' : 'initials';
+    const result = applyFieldKey(this.fieldValue(this.focus), kind, event.key);
+    this.setFieldValue(this.focus, result.text);
+    this.refreshFields();
     if (result.submitted && this.statusView?.joinable) void this.join();
   };
+
+  private loadInitials(): [string, string] {
+    try {
+      return parseStoredInitials(window.localStorage.getItem(INITIALS_STORAGE_KEY));
+    } catch {
+      return ['', ''];
+    }
+  }
+
+  private saveInitials(): void {
+    try {
+      window.localStorage.setItem(INITIALS_STORAGE_KEY, JSON.stringify(this.initials));
+    } catch {
+      // Remembering them is a convenience only.
+    }
+  }
 
   // ---------------------------------------------------------------
   // Joining
@@ -222,7 +290,18 @@ export class OnlineScene extends Phaser.Scene {
 
   private async join(): Promise<void> {
     if (this.session) return;
-    const request = { password: this.password, localPlayers: this.localPlayers } as const;
+    if (!initialsReady(this.initials, this.localPlayers)) {
+      this.noticeText.setPosition(ARENA_WIDTH / 2, this.noticeText.y).setText(
+        this.localPlayers === 2 ? 'Enter three letters of initials for each player first.' : 'Enter your three-letter initials first.',
+      );
+      return;
+    }
+    this.saveInitials();
+    const request = {
+      password: this.password,
+      localPlayers: this.localPlayers,
+      initials: this.initials.slice(0, this.localPlayers),
+    } as const;
     this.clearScreen();
     this.titleText.setText('ONLINE');
     this.bodyText.setPosition(ARENA_WIDTH / 2, 330).setText(`Connecting to ${this.statusReply?.name ?? this.url}...`);

@@ -37,6 +37,7 @@ export class DedicatedServerScene extends Phaser.Scene {
       const server = new DedicatedServer(config, {
         log: bridge.log,
         setStatus: bridge.setStatus,
+        reportResult: bridge.reportResult,
         startMatch: (start) => this.scene.start('Game', start),
         // Through GameScene's own scene plugin, not this one's: only the
         // caller's plugin stops the caller, and it is GameScene that must stop.

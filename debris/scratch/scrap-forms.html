@@ -1,0 +1,904 @@
+<title>Salvage Forms</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Archivo:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --void: #05050a;
+    --hull: #0d0d16;
+    --hull-raised: #11121f;
+    --line: #23263a;
+    --line-soft: #1a1b2c;
+    --ink: #c9c9d6;
+    --ink-bright: #eaeaf2;
+    --muted: #6b6f82;
+    --current: #4fae82;
+    --current-dim: #2f6f55;
+    --signal: #ffd166;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--void);
+    color: var(--ink);
+    font-family: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  }
+
+  body {
+    min-height: 100vh;
+  }
+
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 64px 28px 96px;
+  }
+
+  .eyebrow {
+    font-family: 'Space Mono', 'Courier New', monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--current);
+    margin: 0 0 18px;
+  }
+
+  h1 {
+    font-family: 'Space Mono', 'Courier New', monospace;
+    font-weight: 700;
+    font-size: clamp(34px, 5vw, 50px);
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+    margin: 0 0 20px;
+    color: var(--ink-bright);
+    text-wrap: balance;
+  }
+
+  .lede {
+    max-width: 62ch;
+    font-size: 16.5px;
+    line-height: 1.6;
+    color: var(--ink);
+    margin: 0 0 36px;
+  }
+
+  .lede strong { color: var(--ink-bright); font-weight: 600; }
+
+  /* --- spec strip --- */
+  .spec-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--line);
+    background: var(--hull);
+    margin-bottom: 56px;
+  }
+
+  .spec {
+    padding: 16px 18px;
+    border-right: 1px solid var(--line);
+  }
+  .spec:last-child { border-right: none; }
+
+  .spec-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+
+  .spec-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 16px;
+    color: var(--ink-bright);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .spec-value small {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* --- section heading --- */
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 0 0 18px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 12px;
+  }
+
+  .section-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  .section-note {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  /* --- baseline card --- */
+  .baseline {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 0;
+    border: 1px solid var(--line);
+    background: var(--hull);
+    margin-bottom: 64px;
+  }
+
+  @media (max-width: 620px) {
+    .baseline { grid-template-columns: 1fr; }
+  }
+
+  .viewport {
+    position: relative;
+    background:
+      radial-gradient(circle at 50% 50%, rgba(79,174,130,0.06), transparent 65%),
+      var(--void);
+    border-right: 1px solid var(--line);
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  @media (max-width: 620px) {
+    .viewport { border-right: none; border-bottom: 1px solid var(--line); }
+  }
+
+  .viewport::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 20px 20px;
+    pointer-events: none;
+  }
+
+  .viewport canvas {
+    position: relative;
+    z-index: 1;
+    display: block;
+  }
+
+  .scale-tag {
+    position: absolute;
+    bottom: 8px;
+    left: 10px;
+    font-family: 'Space Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    z-index: 2;
+  }
+
+  .card-body {
+    padding: 22px 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .card-name {
+    font-family: 'Space Mono', monospace;
+    font-weight: 700;
+    font-size: 19px;
+    color: var(--ink-bright);
+    margin: 0;
+  }
+
+  .card-pitch {
+    font-size: 14.5px;
+    line-height: 1.55;
+    color: var(--ink);
+    margin: 0;
+  }
+
+  .card-specs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin-top: 4px;
+  }
+
+  .card-specs span {
+    font-family: 'Space Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .card-specs span b {
+    color: var(--ink);
+    font-weight: 400;
+  }
+
+  .tag {
+    display: inline-block;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border: 1px solid var(--line-soft);
+    color: var(--muted);
+    width: fit-content;
+  }
+
+  /* --- option grid --- */
+  .options {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .option {
+    display: grid;
+    grid-template-columns: 1fr 220px;
+    border: 1px solid var(--line);
+    background: var(--hull);
+  }
+
+  .option.alt { grid-template-columns: 220px 1fr; }
+  .option.alt .card-body { order: 1; }
+  .option.alt .viewport { order: 2; border-right: none; border-left: 1px solid var(--line); }
+
+  @media (max-width: 620px) {
+    .option, .option.alt { grid-template-columns: 1fr; }
+    .option .viewport, .option.alt .viewport { order: 0; border: none; border-bottom: 1px solid var(--line); }
+    .option .card-body, .option.alt .card-body { order: 1; }
+  }
+
+  .option .viewport { border-right: 1px solid var(--line); border-left: none; }
+
+  .pick {
+    margin-top: 6px;
+    font-size: 12.5px;
+    color: var(--signal);
+  }
+
+  .pick b {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-right: 6px;
+  }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+  }
+</style>
+
+<div class="page">
+  <p class="eyebrow">Asset Review — Scrap Pickup</p>
+  <h1>Salvage Forms</h1>
+  <p class="lede">
+    The Scrap pickup's hitbox just <strong>doubled</strong>, and at the new
+    size its tetromino silhouette reads less like salvage and more like a
+    falling block from a different game. Five replacement forms below, each
+    rendered live at the new footprint and judged against the same brief the
+    rest of Debris already follows: flat fills, a thin stroke, one accent
+    hue, no shape anyone could mistake for a rock, a Shield, or a boss part.
+  </p>
+
+  <div class="spec-strip">
+    <div class="spec">
+      <p class="spec-label">Hitbox</p>
+      <p class="spec-value">44px <small>was 22px</small></p>
+    </div>
+    <div class="spec">
+      <p class="spec-label">Draw radius</p>
+      <p class="spec-value">22px</p>
+    </div>
+    <div class="spec">
+      <p class="spec-label">Hue</p>
+      <p class="spec-value">#4fae82 <small>muted jade</small></p>
+    </div>
+    <div class="spec">
+      <p class="spec-label">Behavior</p>
+      <p class="spec-value">sensor <small>always safe</small></p>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <p class="section-title">Baseline, at the new size</p>
+    <p class="section-note">current tetromino, enlarged 2×</p>
+  </div>
+
+  <div class="baseline">
+    <div class="viewport">
+      <canvas data-shape="baseline" width="180" height="180"></canvas>
+      <span class="scale-tag">dashed ring = small asteroid, 16px, for scale</span>
+    </div>
+    <div class="card-body">
+      <span class="tag">Incumbent</span>
+      <p class="card-name">Tetris Block</p>
+      <p class="card-pitch">
+        Reads clearly as debris at 22px radius. At 44px the grid lines and
+        right angles stop looking like scrap plating and start looking like
+        a puzzle-game piece drifting through the arena — the one shape in
+        the game nobody designed to look mechanical on purpose.
+      </p>
+      <div class="card-specs">
+        <span>Family — <b>tetromino</b></span>
+        <span>Parts — <b>4 cells</b></span>
+        <span>Motion — <b>bob + pulse</b></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <p class="section-title">Five replacements</p>
+    <!-- note: five flat-fill options below, two wireframe options further down -->
+
+    <p class="section-note">live render, actual new scale</p>
+  </div>
+
+  <div class="options">
+
+    <div class="option">
+      <div class="viewport">
+        <canvas data-shape="ingot" width="180" height="180"></canvas>
+        <span class="scale-tag">dashed ring = small asteroid, 16px</span>
+      </div>
+      <div class="card-body">
+        <p class="card-name">Ingot</p>
+        <p class="card-pitch">
+          A dense, beveled hex-cut nugget — one solid mass with a single
+          highlight facet. Reads instantly as raw salvageable metal rather
+          than a toy, and the bevel alone is enough detail to survive
+          getting small again later.
+        </p>
+        <div class="card-specs">
+          <span>Family — <b>single facet</b></span>
+          <span>Parts — <b>1 piece</b></span>
+          <span>Motion — <b>slow tumble</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="option alt">
+      <div class="viewport">
+        <canvas data-shape="coil" width="180" height="180"></canvas>
+        <span class="scale-tag">dashed ring = small asteroid, 16px</span>
+      </div>
+      <div class="card-body">
+        <p class="card-name">Coil</p>
+        <p class="card-pitch">
+          An open loop of scavenged wire, bent and sprung — debris with a
+          past life rather than a geometric primitive. The gap in the ring
+          is the whole read: unmistakably <em>cut from something</em>, not
+          grown as a shape.
+        </p>
+        <div class="card-specs">
+          <span>Family — <b>open ring</b></span>
+          <span>Parts — <b>1 strand</b></span>
+          <span>Motion — <b>tumble + wobble</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="option">
+      <div class="viewport">
+        <canvas data-shape="gear" width="180" height="180"></canvas>
+        <span class="scale-tag">dashed ring = small asteroid, 16px</span>
+      </div>
+      <div class="card-body">
+        <p class="card-name">Gear Tooth</p>
+        <p class="card-pitch">
+          A broken wedge of a gear, two teeth still intact on the outer
+          arc. The most literally "machine wreckage" of the five — no
+          ambiguity about what it used to be part of, which is exactly
+          what the brief for a scrap pickup actually asks for.
+        </p>
+        <div class="card-specs">
+          <span>Family — <b>gear wedge</b></span>
+          <span>Parts — <b>1 piece</b></span>
+          <span>Motion — <b>tumble</b></span>
+        </div>
+      </div>
+      <p class="pick" style="grid-column: 1 / -1; padding: 0 24px 18px;">
+        <b>Lead's pick</b> most legible at a glance of the literal-debris
+        options, and the silhouette survives being shrunk back down if the
+        size ever gets revisited.
+      </p>
+    </div>
+
+    <div class="option alt">
+      <div class="viewport">
+        <canvas data-shape="cluster" width="180" height="180"></canvas>
+        <span class="scale-tag">dashed ring = small asteroid, 16px</span>
+      </div>
+      <div class="card-body">
+        <p class="card-name">Cluster</p>
+        <p class="card-pitch">
+          Three small faceted chips in loose orbit around a glowing seed —
+          the same "welded plate" language the Assembler already uses, at
+          pickup scale. Reads as a cluster of parts rather than one solid
+          object, which plays well with "a handful of scrap," not "a brick
+          of scrap."
+        </p>
+        <div class="card-specs">
+          <span>Family — <b>orbiting chips</b></span>
+          <span>Parts — <b>3 + core</b></span>
+          <span>Motion — <b>independent orbit</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="option">
+      <div class="viewport">
+        <canvas data-shape="token" width="180" height="180"></canvas>
+        <span class="scale-tag">dashed ring = small asteroid, 16px</span>
+      </div>
+      <div class="card-body">
+        <p class="card-name">Token</p>
+        <p class="card-pitch">
+          A single bold ring with one notch — the least literal of the
+          five, closest to how a currency pickup usually reads in games
+          that aren't trying to depict wreckage at all. Wins on pure
+          at-a-glance legibility; costs the "this used to be a machine"
+          read the other four options keep.
+        </p>
+        <div class="card-specs">
+          <span>Family — <b>annulus</b></span>
+          <span>Parts — <b>1 ring</b></span>
+          <span>Motion — <b>spin + pulse</b></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="section-head">
+    <p class="section-title">Two more, in a different register</p>
+    <p class="section-note">unfilled wireframe, not flat fill</p>
+  </div>
+
+  <p class="lede" style="margin-bottom: 36px;">
+    These two break from the flat-fill convention the other five (and
+    every other pickup in the game) use, and that's deliberate: an
+    <strong>unfilled vector outline</strong> is exactly how the original
+    1979 Asteroids ship itself was drawn, before this codebase's own ships
+    ever got a fill color. Worth weighing as its own axis — literal 3D
+    wireframe debris vs. the flat-shaded language everything else in
+    Debris already speaks.
+  </p>
+
+  <div class="options">
+
+    <div class="option alt">
+      <div class="viewport">
+        <canvas data-shape="core" width="180" height="180"></canvas>
+        <span class="scale-tag">dashed ring = small asteroid, 16px</span>
+      </div>
+      <div class="card-body">
+        <p class="card-name">Shattered Core</p>
+        <p class="card-pitch">
+          A hollow cube, drawn as an open wireframe rather than a filled
+          solid — no faces, just the twelve edges, tumbling freely in true
+          3D. Reads as the structural skeleton of a dead satellite, not a
+          rock, on silhouette alone.
+        </p>
+        <div class="card-specs">
+          <span>Family — <b>wireframe cube</b></span>
+          <span>Parts — <b>12 edges</b></span>
+          <span>Motion — <b>true 3D tumble</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="option">
+      <div class="viewport">
+        <canvas data-shape="cargo" width="180" height="180"></canvas>
+        <span class="scale-tag">dashed ring = small asteroid, 16px</span>
+      </div>
+      <div class="card-body">
+        <p class="card-name">Cargo Crate</p>
+        <p class="card-pitch">
+          An elongated wireframe prism, plain edges only — no cross-bracing,
+          just the box itself tumbling in true 3D. Reads as a modular cargo
+          module by proportion alone (long and rectangular, unlike anything
+          else in the set) rather than leaning on an arcade container icon
+          to make the point.
+        </p>
+        <div class="card-specs">
+          <span>Family — <b>wireframe prism</b></span>
+          <span>Parts — <b>12 edges</b></span>
+          <span>Motion — <b>true 3D tumble</b></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>
+    Every render above uses only the game's existing Scrap hue (#4fae82).
+    The first five keep the flat-fill-plus-stroke convention every other
+    entity in Debris already draws with; Shattered Core and Cargo Crate
+    deliberately switch to unfilled wireframe instead, so they read as a
+    genuine alternative visual language rather than two more shapes in the
+    same set. Dashed reference ring in each viewport is a 16px-diameter
+    circle, matching the exact comparison basis
+    <code>FRACTURE.swarmRadius</code>'s own doc comments already use
+    against <code>ASTEROID.small</code>.
+  </footer>
+</div>
+
+<script>
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const JADE = '#4fae82';
+  const JADE_FILL = 'rgba(79, 174, 130, 0.16)';
+  const EDGE = '#3c4560';
+  const REF_STROKE = 'rgba(201, 201, 214, 0.35)';
+
+  function setupCanvas(canvas) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const size = canvas.width; // logical css size, square
+    canvas.style.width = size + 'px';
+    canvas.style.height = size + 'px';
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    return { ctx, size };
+  }
+
+  function drawRefRing(ctx, cx, cy, pxPerUnit) {
+    // small asteroid is 16px diameter in-game; our pieces are drawn at
+    // pxPerUnit px per in-game px, so scale the reference ring the same way.
+    const r = 8 * pxPerUnit;
+    ctx.save();
+    ctx.setLineDash([3, 4]);
+    ctx.strokeStyle = REF_STROKE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function glow(ctx, cx, cy, r, pulse) {
+    ctx.save();
+    ctx.fillStyle = JADE_FILL;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * (1.15 + pulse * 0.12), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function fillStroke(ctx, path, fillColor) {
+    ctx.fillStyle = fillColor;
+    ctx.fill(path);
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = EDGE;
+    ctx.stroke(path);
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = JADE;
+    ctx.globalAlpha = 0.75;
+    ctx.stroke(path);
+    ctx.globalAlpha = 1;
+  }
+
+  // in-game px -> canvas px. Our 44px-diameter (22 radius) piece should
+  // occupy a comfortable chunk of a 180px viewport, so scale 1 in-game px
+  // to ~3.1 canvas px (≈137px across for the 44px footprint).
+  const SCALE = 3.1;
+
+  // Minimal 3D wireframe helper, shared by Shattered Core and Cargo
+  // Crate: rotate a point around Y (continuous spin) and X (fixed tilt,
+  // so the object reads as a solid in space rather than a flat spinning
+  // card), then project to screen space. Depth (z) comes back out so
+  // callers can fade far edges slightly, the only concession to "3D"
+  // beyond the projection itself - true hidden-line removal would fight
+  // the "it's hollow" point of drawing it as a wireframe at all.
+  const TILT = 0.55;
+  function project3D(p, spin, cx, cy, unit) {
+    const cosA = Math.cos(spin), sinA = Math.sin(spin);
+    const x1 = p.x * cosA + p.z * sinA;
+    const z1 = -p.x * sinA + p.z * cosA;
+    const y1 = p.y;
+    const cosT = Math.cos(TILT), sinT = Math.sin(TILT);
+    const y2 = y1 * cosT - z1 * sinT;
+    const z2 = y1 * sinT + z1 * cosT;
+    return { x: cx + x1 * unit, y: cy - y2 * unit, z: z2 };
+  }
+
+  function strokeEdge3D(ctx, a, b, color) {
+    const depth = (a.z + b.z) / 2; // roughly -1.4..1.4 for our shapes
+    const alpha = 0.55 + Math.max(0, Math.min(1, (depth + 1.4) / 2.8)) * 0.45;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  const renderers = {
+    baseline(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      const bob = Math.sin(t / 900) * 1.5 * SCALE;
+      glow(ctx, cx, cy + bob, 22 * SCALE, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+      // 4 cells of a Z-tetromino, matching the in-game proportions
+      const span = 44 * SCALE;
+      const cell = span / 3;
+      const cells = [[0, 0], [1, 0], [1, 1], [2, 1]];
+      cells.forEach(([cx0, cy0]) => {
+        const x = cx + (cx0 - 1) * cell;
+        const y = cy + bob + (cy0 - 0.5) * cell;
+        const inset = cell * 0.07;
+        const path = new Path2D();
+        path.rect(x + inset, y + inset, cell - inset * 2, cell - inset * 2);
+        fillStroke(ctx, path, '#111420');
+      });
+    },
+
+    ingot(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      const spin = reduceMotion ? 0.3 : t / 5200;
+      const bob = Math.sin(t / 900) * 1.5 * SCALE;
+      const r = 20 * SCALE;
+      glow(ctx, cx, cy + bob, r, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+      ctx.save();
+      ctx.translate(cx, cy + bob);
+      ctx.rotate(spin);
+      const pts = [];
+      const w = 1.0, h = 0.56;
+      [[-w, -h], [0, -h * 1.15], [w, -h], [w * 0.8, h], [-w * 0.8, h]].forEach(([x, y]) => {
+        pts.push([x * r * 0.62, y * r * 0.62]);
+      });
+      const path = new Path2D();
+      path.moveTo(pts[0][0], pts[0][1]);
+      pts.slice(1).forEach(p => path.lineTo(p[0], p[1]));
+      path.closePath();
+      fillStroke(ctx, path, '#111420');
+      // facet highlight
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      ctx.lineTo(pts[1][0], pts[1][1]);
+      ctx.lineTo(pts[1][0] * 0.3, pts[1][1] * 0.1);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(234,234,242,0.18)';
+      ctx.fill();
+      ctx.restore();
+    },
+
+    coil(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      const spin = reduceMotion ? 0.4 : t / 4600;
+      const wobble = reduceMotion ? 0 : Math.sin(t / 1300) * 0.12;
+      const r = 19 * SCALE;
+      glow(ctx, cx, cy, r, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(spin);
+      ctx.scale(1, 0.82 + wobble);
+      ctx.lineWidth = 7.5;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#111420';
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.62, Math.PI * 0.18, Math.PI * 1.82);
+      ctx.stroke();
+      ctx.lineWidth = 7.5;
+      ctx.strokeStyle = JADE;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.62, Math.PI * 0.18, Math.PI * 1.82);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = EDGE;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.62, Math.PI * 0.18, Math.PI * 1.82);
+      ctx.stroke();
+      ctx.restore();
+    },
+
+    gear(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      const spin = reduceMotion ? 0.2 : t / 5000;
+      const r = 20 * SCALE;
+      glow(ctx, cx, cy, r, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(spin);
+      const path = new Path2D();
+      const inner = r * 0.38;
+      const outer = r * 0.66;
+      const toothOuter = r * 0.82;
+      const startA = -0.9, endA = 0.9; // wedge arc span
+      const teeth = 2;
+      path.moveTo(Math.cos(startA) * inner, Math.sin(startA) * inner);
+      for (let i = 0; i <= teeth; i += 1) {
+        const a0 = startA + (endA - startA) * (i / teeth) - 0.07;
+        const a1 = startA + (endA - startA) * (i / teeth) + 0.07;
+        path.lineTo(Math.cos(a0) * outer, Math.sin(a0) * outer);
+        path.lineTo(Math.cos(a0) * toothOuter, Math.sin(a0) * toothOuter);
+        path.lineTo(Math.cos(a1) * toothOuter, Math.sin(a1) * toothOuter);
+        path.lineTo(Math.cos(a1) * outer, Math.sin(a1) * outer);
+      }
+      path.lineTo(Math.cos(endA) * inner, Math.sin(endA) * inner);
+      path.closePath();
+      fillStroke(ctx, path, '#111420');
+      ctx.restore();
+    },
+
+    cluster(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      glow(ctx, cx, cy, 14 * SCALE, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+      // core seed
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3.5 * SCALE * (0.8 + pulse * 0.3), 0, Math.PI * 2);
+      ctx.fillStyle = JADE;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      const chips = [
+        { a0: 0.2, speed: 1, dist: 14, size: 6.5 },
+        { a0: 2.4, speed: -0.8, dist: 13, size: 5.5 },
+        { a0: 4.4, speed: 0.65, dist: 15, size: 6 },
+      ];
+      chips.forEach((chip, i) => {
+        const a = chip.a0 + (reduceMotion ? 0 : t / 2400) * chip.speed;
+        const dist = chip.dist * SCALE;
+        const x = cx + Math.cos(a) * dist;
+        const y = cy + Math.sin(a) * dist * 0.9;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(a * 1.6);
+        const s = chip.size * SCALE * 0.5;
+        const path = new Path2D();
+        path.moveTo(-s, -s * 0.6);
+        path.lineTo(s * 0.7, -s);
+        path.lineTo(s, s * 0.5);
+        path.lineTo(-s * 0.4, s);
+        path.closePath();
+        fillStroke(ctx, path, '#111420');
+        ctx.restore();
+      });
+    },
+
+    token(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      const spin = reduceMotion ? 0.5 : t / 5600;
+      const r = 20 * SCALE;
+      glow(ctx, cx, cy, r, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(spin);
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.68, 0, Math.PI * 2);
+      ctx.arc(0, 0, r * 0.42, 0, Math.PI * 2, true);
+      ctx.fillStyle = '#111420';
+      ctx.fill('evenodd');
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = EDGE;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.68, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = JADE;
+      ctx.globalAlpha = 0.8 + pulse * 0.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.68, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      // notch
+      ctx.fillStyle = '#05050a';
+      ctx.beginPath();
+      ctx.moveTo(0, -r * 0.3);
+      ctx.lineTo(r * 0.12, -r * 0.72);
+      ctx.lineTo(-r * 0.12, -r * 0.72);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    },
+
+    core(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      const spin = reduceMotion ? 0.6 : t / 3800;
+      const unit = 44; // tuned independently of the flat-shape SCALE constant - a wireframe's edges read smaller per-pixel than a fill, so this needs its own larger footprint to match the others visually
+      glow(ctx, cx, cy, 16 * SCALE, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+
+      const s = 1;
+      const verts = [];
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+        verts.push({ x: sx * s, y: sy * s, z: sz * s, sx, sy, sz });
+      }
+      const idx = (sx, sy, sz) => verts.findIndex(v => v.sx === sx && v.sy === sy && v.sz === sz);
+      const edges = [];
+      for (const sy of [-1, 1]) for (const sz of [-1, 1]) edges.push([idx(-1, sy, sz), idx(1, sy, sz)]);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) edges.push([idx(sx, -1, sz), idx(sx, 1, sz)]);
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) edges.push([idx(sx, sy, -1), idx(sx, sy, 1)]);
+
+      const projected = verts.map(v => project3D(v, spin, cx, cy, unit));
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = EDGE;
+      edges.forEach(([ia, ib]) => strokeEdge3D(ctx, projected[ia], projected[ib], EDGE));
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = JADE;
+      edges.forEach(([ia, ib]) => strokeEdge3D(ctx, projected[ia], projected[ib], JADE));
+    },
+
+    cargo(ctx, cx, cy, t) {
+      const pulse = 0.5 + Math.sin(t / 700) * 0.5;
+      const spin = reduceMotion ? 0.6 : t / 4200;
+      const unit = 44;
+      glow(ctx, cx, cy, 16 * SCALE, pulse);
+      drawRefRing(ctx, cx, cy, SCALE);
+
+      const L = 1.55, H = 0.62, D = 0.62;
+      const verts = [];
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+        verts.push({ x: sx * L, y: sy * H, z: sz * D, sx, sy, sz });
+      }
+      const idx = (sx, sy, sz) => verts.findIndex(v => v.sx === sx && v.sy === sy && v.sz === sz);
+      const edges = [];
+      for (const sy of [-1, 1]) for (const sz of [-1, 1]) edges.push([idx(-1, sy, sz), idx(1, sy, sz)]);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) edges.push([idx(sx, -1, sz), idx(sx, 1, sz)]);
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) edges.push([idx(sx, sy, -1), idx(sx, sy, 1)]);
+
+      const projected = verts.map(v => project3D(v, spin, cx, cy, unit));
+      ctx.lineWidth = 1.5;
+      edges.forEach(([ia, ib]) => strokeEdge3D(ctx, projected[ia], projected[ib], EDGE));
+      ctx.strokeStyle = JADE;
+      edges.forEach(([ia, ib]) => strokeEdge3D(ctx, projected[ia], projected[ib], JADE));
+    },
+  };
+
+  const canvases = Array.from(document.querySelectorAll('canvas[data-shape]')).map((canvas) => {
+    const { ctx, size } = setupCanvas(canvas);
+    return { ctx, size, render: renderers[canvas.dataset.shape] };
+  });
+
+  function frame(t) {
+    canvases.forEach(({ ctx, size, render }) => {
+      ctx.clearRect(0, 0, size, size);
+      render(ctx, size / 2, size / 2, t);
+    });
+    if (!reduceMotion) requestAnimationFrame(frame);
+  }
+
+  if (reduceMotion) {
+    frame(1200);
+  } else {
+    requestAnimationFrame(frame);
+  }
+</script>

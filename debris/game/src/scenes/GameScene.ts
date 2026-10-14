@@ -6876,6 +6876,7 @@ export class GameScene extends Phaser.Scene {
       scores: [...this.scores],
       pooledScore,
       participants: this.players.map((player) => player.slotIndex),
+      lastEliminatedSlot: this.lastEliminatedSlotIndex ?? null,
     };
 
     const headline =

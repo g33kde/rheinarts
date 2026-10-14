@@ -126,6 +126,18 @@ spec:
               value: "8081"
             - name: HIGHSCORE_FILE_PATH
               value: /data/debris-highscores.json
+            # The two online boards (onlineCooperative / onlineCompetitive) are
+            # written only by the dedicated game server, and only with this
+            # key. `optional: true`: without the Secret the API still starts
+            # and the online boards are simply disabled (403) - never open.
+            # Create it with (see DEPLOYMENT.md):
+            #   kubectl -n rheinarts create secret generic debris-server-key --from-literal=key="$(openssl rand -hex 24)"
+            - name: DEBRIS_SERVER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: debris-server-key
+                  key: key
+                  optional: true
           volumeMounts:
             - name: highscores
               mountPath: /data

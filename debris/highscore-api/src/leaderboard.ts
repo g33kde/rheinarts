@@ -57,12 +57,49 @@ export function insertEntry(
 }
 
 /**
- * Three separately-tracked leaderboards now, one per game mode -
- * "behave like the one for single player, but are separately tracked,"
- * decided.
+ * Separately-tracked leaderboards - "behave like the one for single
+ * player, but are separately tracked," decided - one per game mode, plus
+ * two **online** boards.
+ *
+ * The online boards exist because they are the only ones whose scores the
+ * game can vouch for: a match on the dedicated server is simulated there,
+ * so its result is not something a client can make up. They are therefore
+ * writable only by the server (see `isWriteAuthorized`), while the other
+ * three stay open to any client, as they always were.
  */
-export const VALID_MODES = ['singlePlayer', 'cooperative', 'competitive'] as const;
+export const VALID_MODES = ['singlePlayer', 'cooperative', 'competitive', 'onlineCooperative', 'onlineCompetitive'] as const;
 export type Mode = (typeof VALID_MODES)[number];
+
+/** Boards only the dedicated server may write. */
+export const SERVER_ONLY_MODES: readonly Mode[] = ['onlineCooperative', 'onlineCompetitive'];
+
+export function isServerOnlyMode(mode: Mode): boolean {
+  return SERVER_ONLY_MODES.includes(mode);
+}
+
+/** Compares without bailing out at the first difference, so response time does not reveal how much of a guess was right. */
+function constantTimeEqual(a: string, b: string): boolean {
+  let diff = a.length ^ b.length;
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i += 1) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+}
+
+export type WriteDecision = 'allowed' | 'unauthorized' | 'disabled';
+
+/**
+ * May this request write `mode`'s board? Open boards: always. A server-only
+ * board: only with the configured key. When **no key is configured at all**
+ * the server-only boards are `disabled` (a distinct answer from a wrong key)
+ * rather than left open - an unset variable must never mean "anyone may
+ * write".
+ */
+export function isWriteAuthorized(mode: Mode, providedKey: string | undefined, configuredKey: string | undefined): WriteDecision {
+  if (!isServerOnlyMode(mode)) return 'allowed';
+  if (configuredKey === undefined || configuredKey === '') return 'disabled';
+  if (providedKey === undefined) return 'unauthorized';
+  return constantTimeEqual(providedKey, configuredKey) ? 'allowed' : 'unauthorized';
+}
 
 export function isValidMode(value: unknown): value is Mode {
   return typeof value === 'string' && (VALID_MODES as readonly string[]).includes(value);

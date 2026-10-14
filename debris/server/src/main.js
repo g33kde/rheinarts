@@ -5,6 +5,7 @@ const path = require('node:path');
 const { app, BrowserWindow, ipcMain } = require('electron');
 const { ConfigError, parseConfig, validateConfig, redactConfig } = require('./config');
 const { createLogger } = require('./logger');
+const { createScoreSubmitter } = require('./scores');
 const { createSignalingServer } = require('./signaling');
 
 /**
@@ -90,6 +91,9 @@ app.whenReady().then(async () => {
   wc.setWebRTCUDPPortRange({ min: minPort, max: maxPort });
   logger.info(`WebRTC UDP ports pinned to ${minPort}-${maxPort}`);
 
+  const scores = createScoreSubmitter({ url: config.ops.highscoreApiUrl, key: config.ops.highscoreApiKey, logger });
+  logger.info(scores.enabled ? `online scores will be posted to ${config.ops.highscoreApiUrl}` : 'online score posting is off (ops.highscoreApiUrl/highscoreApiKey not set)');
+
   // Signaling starts before the page has finished booting and registered
   // its listener; anything that arrives in that gap is held and flushed
   // when the lobby reports ready, rather than silently dropped.
@@ -141,6 +145,10 @@ app.whenReady().then(async () => {
       Number.isInteger(status.players.current) &&
       Number.isInteger(status.players.max);
     if (valid) lastStatus = status;
+  });
+  // Fire and forget: posting scores must never hold up the lobby.
+  ipcMain.on('server:result', (_event, report) => {
+    scores.submit(report).catch((error) => logger.error(`score submission failed unexpectedly: ${error && error.message}`));
   });
   ipcMain.on('server:ready', () => {
     pageReady = true;
