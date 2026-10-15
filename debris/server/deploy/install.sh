@@ -10,9 +10,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_USER="${SUDO_USER:-}"
 DO_APT=1
 DO_FW=1
+NODE_BIN=""
 for arg in "$@"; do
   case "$arg" in
     --user=*) RUN_USER="${arg#--user=}" ;;
+    --node=*) NODE_BIN="${arg#--node=}" ;;
     --no-apt) DO_APT=0 ;;
     --no-firewall) DO_FW=0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
@@ -24,9 +26,15 @@ done
 id "$RUN_USER" >/dev/null 2>&1 || { echo "no such user: $RUN_USER" >&2; exit 1; }
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 
-# The user's Node (it may live under nvm), which must be 22.
-NODE_BIN="$(sudo -u "$RUN_USER" -H bash -lc 'command -v node' || true)"
-[ -n "$NODE_BIN" ] || { echo "$RUN_USER has no node on PATH - install Node 22 (see TESTING-LINUX.md)" >&2; exit 1; }
+# The user's Node 22: --node=<path>, else a login shell's node, else nvm's 22
+# (Ubuntu's .bashrc returns early for non-interactive shells, so nvm is not always on PATH).
+if [ -z "$NODE_BIN" ]; then
+  NODE_BIN="$(sudo -u "$RUN_USER" -H bash -lc 'command -v node' || true)"
+  case "$([ -n "$NODE_BIN" ] && "$NODE_BIN" -v)" in v22.*) ;; *)
+    NODE_BIN="$(sudo -u "$RUN_USER" -H bash -c 'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 && nvm use 22 >/dev/null 2>&1 && command -v node' || true)" ;;
+  esac
+fi
+[ -n "$NODE_BIN" ] || { echo "$RUN_USER has no node on PATH - install Node 22 (see TESTING-LINUX.md) or pass --node=<path>" >&2; exit 1; }
 case "$("$NODE_BIN" -v)" in
   v22.*) ;;
   *) echo "Node is $("$NODE_BIN" -v), need v22 (Electron's installer fails silently on newer ones)" >&2; exit 1 ;;
