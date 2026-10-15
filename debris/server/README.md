@@ -74,7 +74,7 @@ the service. Open the same ports in your hosting provider's panel yourself.
 
 - The service restarts after a crash (3 s), but gives up after 5 failed starts in a
   minute, so a broken config does not loop. `systemctl stop` sends SIGTERM, a clean shutdown.
-- Logs go to the journal: `./deploy/debrisctl.sh logs`. Set `ops.logFile` as well for a file.
+- Logs go to the journal: `./deploy/debrisctl.sh logs [n]` prints the last n lines, `logs -f` follows. Set `ops.logFile` as well for a file.
 - After editing `config.json`: `./deploy/debrisctl.sh check` then `restart`
   (`npm run check-config` does the same check by hand).
 - After pulling a new version: rebuild (`cd ../game && npm run build:desktop`; `npm ci` here if
@@ -218,6 +218,7 @@ machine, do it for the second.
   time a player leaves. They are not game errors; ignore them. (Switching
   Chromium's logging off through Electron's command-line switches did not
   work on macOS, so they are left alone rather than hidden by a fragile wrapper.)
+  Likewise `Failed to connect to the bus` at startup (Chromium looking for a desktop D-Bus).
 - A leader who joins and goes idle blocks everyone from starting.
 - A player whose connection is *cut* (not closed) is only noticed after
   ICE's keep-alive timeout, several seconds. A deliberate leave is seen at
