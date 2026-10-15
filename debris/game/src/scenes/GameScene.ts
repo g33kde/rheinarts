@@ -1400,6 +1400,7 @@ export class GameScene extends Phaser.Scene {
         alive: player.ship.isAlive,
         thrusting: player.input.isThrusting,
         invulnerableUntilMs: player.ship.isInvulnerable(nowMs) ? nowMs + 1 : -Infinity,
+        shieldCharges: player.ship.shieldChargeCount,
       }));
 
     this.hostSession.broadcastSnapshot({
@@ -1615,6 +1616,12 @@ export class GameScene extends Phaser.Scene {
         weapon: { active: new Set(), heat: INITIAL_HEAT_STATE },
         hudText,
       };
+    });
+
+    // Nothing is shown until the host says who is playing (the first snapshot).
+    this.players.forEach((player) => {
+      player.ship.hideForNetwork();
+      player.hudText.setVisible(false);
     });
 
     this.state = 'playing';
@@ -2919,6 +2926,14 @@ export class GameScene extends Phaser.Scene {
       this.applyClientEngineSound(snapshot);
       this.applyClientWrecks(snapshot.wrecks);
       this.applyClientScrapCountdown(snapshot.scrapSeconds);
+      // Only what the host lists is on screen: a slot nobody plays (or whose ship is gone) is hidden,
+      // ship and HUD alike, rather than left sitting at its start position.
+      const listedShips = new Set(snapshot.ships.map((ship) => ship.slotIndex));
+      const listedPlayers = new Set(snapshot.players.map((hud) => hud.slotIndex));
+      this.players.forEach((player) => {
+        if (!listedShips.has(player.slotIndex)) player.ship.hideForNetwork();
+        player.hudText.setVisible(listedPlayers.has(player.slotIndex));
+      });
       snapshot.ships.forEach((shipSnapshot) => {
         const player = this.players.find((p) => p.slotIndex === shipSnapshot.slotIndex);
         player?.ship.applyNetworkSnapshot(shipSnapshot, snapshot.nowMs);

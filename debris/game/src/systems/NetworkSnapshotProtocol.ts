@@ -46,6 +46,8 @@ export interface ShipSnapshot {
   readonly thrusting: boolean;
   /** Carried as-is rather than a derived "isInvulnerable" bool, so a client's own Ship.render() flicker check (Ship.ts's `isInvulnerable(this.lastNowMs)`) reproduces identically off the host's own clock. */
   readonly invulnerableUntilMs: number;
+  /** Shield charges up (0-3), drawn as rings round the ship. Absent from older hosts (read as 0). */
+  readonly shieldCharges?: number;
 }
 
 /**
@@ -185,7 +187,8 @@ function isShipSnapshot(value: unknown): value is ShipSnapshot {
     typeof s.heading === 'number' &&
     typeof s.alive === 'boolean' &&
     typeof s.thrusting === 'boolean' &&
-    typeof s.invulnerableUntilMs === 'number'
+    typeof s.invulnerableUntilMs === 'number' &&
+    (s.shieldCharges === undefined || typeof s.shieldCharges === 'number')
   );
 }
 

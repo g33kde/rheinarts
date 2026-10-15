@@ -420,3 +420,19 @@ describe('terrain and the scrap countdown in a snapshot', () => {
     }
   });
 });
+
+describe('ship shield charges', () => {
+  it('travel with the ship, and an older host without them still decodes', () => {
+    const withShield: GameSnapshot = { ...SNAPSHOT, ships: [{ ...SHIP, shieldCharges: 2 }] };
+    expect(decodeSnapshot(encodeSnapshot(withShield))!.ships[0]!.shieldCharges).toBe(2);
+    const old = decodeSnapshot(encodeSnapshot({ ...SNAPSHOT, ships: [{ ...SHIP }] }));
+    expect(old).toBeDefined();
+    expect(old!.ships[0]!.shieldCharges).toBeUndefined();
+  });
+
+  it('a non-numeric value drops the snapshot rather than being drawn', () => {
+    const bad = JSON.parse(encodeSnapshot({ ...SNAPSHOT, ships: [{ ...SHIP, shieldCharges: 1 }] }));
+    bad.ships[0].shieldCharges = 'lots';
+    expect(decodeSnapshot(JSON.stringify(bad))).toBeUndefined();
+  });
+});

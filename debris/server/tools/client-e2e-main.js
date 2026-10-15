@@ -142,6 +142,12 @@ app.whenReady().then(async () => {
   const later = await gameState();
   check(later && first && later.tick > first.tick + 10, `snapshots keep coming (tick ${first && first.tick} -> ${later && later.tick})`);
 
+  const seen = JSON.parse(await run(`JSON.stringify(window.__e2e.scene('Game').players.map((p) => ({ ship: p.ship.visual.visible, hud: p.hudText.visible })))`));
+  check(seen[0].ship && seen[1].ship && !seen[2].ship && !seen[3].ship, `only the two joined players' ships are shown (${JSON.stringify(seen.map((v) => v.ship))})`);
+  check(seen[0].hud && seen[1].hud && !seen[2].hud && !seen[3].hud, `and only their HUDs (${JSON.stringify(seen.map((v) => v.hud))})`);
+  const shield = JSON.parse(await run(`(() => { const g = window.__e2e.scene('Game'); const sn = g.latestSnapshot; const mine = sn.ships.find((x) => x.slotIndex === 0); g.players[0].ship.applyNetworkSnapshot({ ...mine, shieldCharges: 2 }, sn.nowMs); return JSON.stringify({ charges: g.players[0].ship.shieldChargeCount }); })()`));
+  check(shield.charges === 2, `a host-reported shield is applied to the mirrored ship (${shield.charges} charges)`);
+
   log('4b. the real client replays what the host announces (sounds, explosions, shake, popups, music, engine)');
   await run(`(() => {
     const g = window.__e2e.scene('Game');

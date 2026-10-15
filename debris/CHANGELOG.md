@@ -23,6 +23,28 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-15 — Online/LAN clients: shields drawn, empty slots hidden
+
+Found by playing the desktop client on Windows against the Linux server.
+
+- **Shields were never visible on a client.** `ShipSnapshot` carried no shield
+  state, so a picked-up shield rendered only on the host. It now has
+  `shieldCharges` (optional: older hosts read as 0), applied in
+  `Ship.applyNetworkSnapshot`, so the same rings are drawn.
+- **Slots nobody plays were visible.** A client builds ships and HUDs for all
+  four slots and only ever updated the ones the host listed, so with one
+  player the other three sat at their start positions. Now nothing is shown
+  until the first snapshot, and afterwards only slots the host lists (ship) /
+  reports (HUD). Applies to LAN clients too.
+- **Not a bug, by design:** a pilot flown to the Space Station is not picked up -
+  a teammate must tow them (`docs/gameplay.md`, "never enough to save yourself").
+- **Freeze when leaving: not reproduced.** Escape -> LEAVE (also with a drifting
+  pilot), a leaver among others, and a pilot's timeout -> game over -> lobby all
+  behave in the real-client e2e. Needs the exact steps from whoever saw it.
+- Tests: protocol round-trip for `shieldCharges`; the real-client e2e checks the hidden
+  slots/HUDs and applies a shield; `smoke --scenario=leave` now checks the match goes on
+  for the others after a leave.
+
 ## 2026-10-14 — Online clients now see the terrain and the scrap countdown, and can leave
 
 The second "show everything the host shows" batch, after the event channel.

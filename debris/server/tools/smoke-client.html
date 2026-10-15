@@ -384,6 +384,10 @@ async function scenarioLeave() {
   check((a.lobby?.heldSlots.length ?? 1) === 0, 'it is released, not held for the reconnect window');
   check(took < 2000, `and promptly - far faster than the 3s a dropped player is held (${took.toFixed(0)}ms)`);
   b.close();
+  const tickAfterLeave = a.lastTick; await sleep(2000);
+  check(a.lastTick > tickAfterLeave + 30, `the match keeps running for the others after a leave (tick ${tickAfterLeave} -> ${a.lastTick})`);
+  a.baseline(); await sleep(1500);
+  check(a.moved(a.slots[0]) > 1, 'and the remaining ship still answers input');
 
   say('2. C just drops: that one IS held');
   c.close();

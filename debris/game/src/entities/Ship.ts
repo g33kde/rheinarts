@@ -103,6 +103,16 @@ export class Ship {
     return this.shieldCharges > 0;
   }
 
+  /** How many shield charges are up (0-3) - what a network host reports so a client can draw the same rings. */
+  get shieldChargeCount(): number {
+    return this.shieldCharges;
+  }
+
+  /** Hides a ship the host does not list (a slot nobody is playing, or a ship that is gone) - client mirrors only. */
+  hideForNetwork(): void {
+    this.visual.setVisible(false);
+  }
+
   /** Stacks up to this hull's own `maxShieldCharges` (2 for most, 3 for the Rescue hull) - a no-op past the cap, same "wasted pickup" semantics the old single-charge version had at 1. */
   grantShield(): void {
     this.shieldCharges = Math.min(this.shieldCharges + 1, this.hull.maxShieldCharges);
@@ -140,7 +150,7 @@ export class Ship {
    * host's own `alive` flag changes.
    */
   applyNetworkSnapshot(
-    snapshot: { x: number; y: number; heading: number; alive: boolean; thrusting: boolean; invulnerableUntilMs: number },
+    snapshot: { x: number; y: number; heading: number; alive: boolean; thrusting: boolean; invulnerableUntilMs: number; shieldCharges?: number },
     nowMs: number,
   ): void {
     const wasVisible = this.visual.visible;
@@ -159,6 +169,7 @@ export class Ship {
     this.visual.setRotation(snapshot.heading);
     this.thrusting = snapshot.thrusting;
     this.invulnerableUntilMs = snapshot.invulnerableUntilMs;
+    this.shieldCharges = Math.max(0, Math.min(3, Math.floor(snapshot.shieldCharges ?? 0)));
     this.lastNowMs = nowMs;
     this.render();
   }
