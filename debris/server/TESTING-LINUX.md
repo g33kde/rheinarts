@@ -122,6 +122,20 @@ INFO  [game] Debris Test: lobby open, waiting for players
 If it exits instead: the last line says why (a config problem, "game build not
 found" -> redo `npm run build:desktop` in `game/`, or a port already in use).
 
+### Keep it running: install as a service
+
+Once the tests pass, stop the tmux run (Ctrl-C) and install the systemd
+service so it starts at boot and restarts after a crash:
+
+```bash
+cd ~/rheinarts/debris/server
+sudo ./deploy/install.sh
+./deploy/debrisctl.sh logs        # Ctrl-C leaves the log view; the server keeps running
+```
+
+See "Run it as a service" in `README.md` (stop/restart/update). The tmux run
+and the service use the same ports, so run only one.
+
 ## 5. Check reachability from the CLIENT
 
 ```bash

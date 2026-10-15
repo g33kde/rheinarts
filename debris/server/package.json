@@ -8,6 +8,7 @@
     "build-game": "npm --prefix ../game run build:desktop",
     "start": "electron . --config=config.json",
     "start:linux": "xvfb-run -a electron . --no-sandbox --config=config.json",
+    "check-config": "node tools/check-config.js config.json",
     "smoke": "electron tools/smoke-main.js",
     "e2e": "electron tools/client-e2e-main.js",
     "test": "node --test"

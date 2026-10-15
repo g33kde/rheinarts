@@ -54,6 +54,39 @@ Open **TCP** `network.signalingPort` (default 8765) and **UDP**
 fronts this server it must be a plain DNS record - Cloudflare's proxy and
 Tunnel carry HTTP only, not WebRTC's UDP.
 
+## Run it as a service (Linux, systemd)
+
+On a Debian/Ubuntu box, after the build steps in `TESTING-LINUX.md` (Node 22,
+`npm ci`, the game built) and a filled-in `config.json`:
+
+```bash
+sudo ./deploy/install.sh               # runs as the user who ran sudo; --user=<name> picks another
+./deploy/debrisctl.sh status           # start | stop | restart | status | logs [n] | check
+```
+
+`install.sh` refuses to continue unless Node is 22, Electron and the game build
+exist and `config.json` is valid (it creates one from the example, mode 600, if
+missing). It installs the Electron libraries and `xvfb`, writes
+`/etc/systemd/system/debris-server.service` from `deploy/debris-server.service.in`
+(the paths of *this checkout*, so move the checkout and re-run it), opens the
+configured ports in `ufw` if that firewall is active, then enables and starts
+the service. Open the same ports in your hosting provider's panel yourself.
+
+- The service restarts after a crash (3 s), but gives up after 5 failed starts in a
+  minute, so a broken config does not loop. `systemctl stop` sends SIGTERM, a clean shutdown.
+- Logs go to the journal: `./deploy/debrisctl.sh logs`. Set `ops.logFile` as well for a file.
+- After editing `config.json`: `./deploy/debrisctl.sh check` then `restart`
+  (`npm run check-config` does the same check by hand).
+- After pulling a new version: rebuild (`cd ../game && npm run build:desktop`; `npm ci` here if
+  `package-lock.json` changed), then `restart`.
+- Uninstall: `sudo systemctl disable --now debris-server && sudo rm /etc/systemd/system/debris-server.service`.
+
+### macOS
+
+No installer. For an always-on Mac, a launchd agent running
+`npm start --prefix <this dir>` with `KeepAlive` and `WorkingDirectory` set does the same job;
+nothing in the server is platform-specific.
+
 ## Test it
 
 ```bash
@@ -176,51 +209,15 @@ like a game bug. Give each process its own: `--user-data-dir=<dir>`. The
 smoke and e2e tools do this themselves; if you run two servers on one
 machine, do it for the second.
 
-## Test it
-
-```bash
-npm test                                   # config + signaling unit tests (node --test)
-npm start                                  # in one terminal
-npm run smoke -- --players=4               # in another: join 4, leader starts, snapshots + input checked
-npm run smoke -- --scenario=lobby          # the lobby rules end to end (~30 s)
-npm run smoke -- --url=ws://host:8765 --stun=1   # against a remote server
-```
-
-The smoke client (`tools/`) is a plain-JS implementation of the client wire
-protocol, deliberately independent of the game's own client code. Exit code
-0 = PASS. `--scenario=play` (default) joins N players, has the leader
-(optionally `--mode=competitive`) start, then checks welcome, distinct
-slots, snapshot rate, monotonic ticks and that ships respond to input.
-`--scenario=lobby` walks the rules: a non-leader's commands are ignored,
-leadership passes when the leader leaves, Competitive refuses to start
-alone, input claiming someone else's slot is not honoured, a mid-match
-joiner is rejected, and the lobby reopens (and resets) after the match.
-It needs `gameplay.returnToLobbyDelayMs` small (e.g. 1000) to be quick.
-
-## The lobby
-
-One match at a time. The **first player to join is the leader**; if they
-leave, leadership passes to the earliest remaining joiner. Only the leader
-can start the match or switch Cooperative/Competitive, and only while the
-lobby is gathering. Competitive needs at least two players (a lone survivor
-"wins" instantly). Joiners during a match get a `debris-reject`
-(`matchInProgress`), a full lobby gets `full`. When a match ends the end
-screen shows for `returnToLobbyDelayMs`, everyone still connected stays
-seated, and the lobby reopens. An emptied lobby resets to
-`gameplay.defaultMode`.
-
-Who is allowed to do what is decided by `game/src/systems/DedicatedLobby.ts`
-(pure, unit-tested); `DedicatedServer.ts` feeds it real connections. Every
-message a client sends - lobby commands and ship input - is attributed to
-the slot its *connection* was seated in. A `slotIndex` inside a message is
-ignored, so a client cannot drive another player's ship or issue the
-leader's commands.
-
 ## Known limits
 
-- The roadmap's ops work - systemd unit, install script - is phase 7; rate
-  limiting and an idle-leader timeout are phase 8. A first real-network test
-  guide is in `TESTING-LINUX.md`.
+- Rate limiting, connection caps, an idle-leader timeout and TLS are phase 8.
+  A real-network test guide is in `TESTING-LINUX.md`.
+- Chromium prints harmless `ERROR:...dcsctp_transport... Close called` /
+  `DataChannel error ... Close called` lines to stderr (so the journal) every
+  time a player leaves. They are not game errors; ignore them. (Switching
+  Chromium's logging off through Electron's command-line switches did not
+  work on macOS, so they are left alone rather than hidden by a fragile wrapper.)
 - A leader who joins and goes idle blocks everyone from starting.
 - A player whose connection is *cut* (not closed) is only noticed after
   ICE's keep-alive timeout, several seconds. A deliberate leave is seen at

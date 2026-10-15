@@ -1,0 +1,28 @@
+[Unit]
+Description=Debris dedicated server (@NAME@)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@DIR@
+# node's directory first, so the right Node (22) is the one found
+Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=@HOME@
+# xvfb-run supplies the virtual display the hidden game window needs;
+# --no-sandbox because Chromium's sandbox needs user namespaces many servers lack
+ExecStart=/usr/bin/xvfb-run -a @DIR@/node_modules/.bin/electron . --no-sandbox --config=@CONFIG@
+Restart=on-failure
+RestartSec=3
+# a config / startup error exits with 1 - give up after a few tries instead of looping forever
+StartLimitIntervalSec=60
+StartLimitBurst=5
+# SIGTERM is a clean shutdown (signaling closed, logs flushed)
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

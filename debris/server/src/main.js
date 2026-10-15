@@ -56,6 +56,9 @@ function resolveGameIndex() {
 }
 
 app.disableHardwareAcceleration();
+// No GPU on a server, so the game's canvas falls back to software WebGL; recent
+// Chromium only does that when explicitly allowed (and warns every start otherwise).
+app.commandLine.appendSwitch('enable-unsafe-swiftshader');
 
 app.whenReady().then(async () => {
   let config;
@@ -162,7 +165,7 @@ app.whenReady().then(async () => {
   wc.on('console-message', (_event, level, message) => {
     // Warnings and errors only. The CSP notice is dev-build noise that
     // Electron prints for any page without a Content-Security-Policy meta tag.
-    if (level >= 2 && !message.includes('Electron Security Warning')) logger.warn(`[page] ${message}`);
+    if (level >= 2 && !message.includes('Electron Security Warning') && !message.includes('GPU stall due to ReadPixels')) logger.warn(`[page] ${message}`);
   });
   wc.on('render-process-gone', (_event, details) => {
     logger.error(`game page process gone: ${details.reason}`);
