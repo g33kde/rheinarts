@@ -285,7 +285,13 @@ app.whenReady().then(async () => {
   check(/PLAYER 1\s+\[YOU, LEADER\]/.test(after), 'back in the same lobby, still the leader, same session');
   check(await run(`window.__e2e.active('Online') && !window.__e2e.active('Game')`), 'the Game scene has been left');
 
-  await run(`window.__e2e.scene('Online').session && window.__e2e.scene('Online').session.stop(); true`);
+  log('8. LEAVE in the lobby goes back to the status screen (it used to put the same lobby back up, dead)');
+  await click('Online', 'LEAVE');
+  await waitText('Online', 'Players:', 15000, 'the status screen after LEAVE');
+  check(await run(`window.__e2e.scene('Online').session === undefined`), 'the session is gone');
+  check(!(await run(`window.__e2e.texts('Online')`)).some((t) => t.includes('[YOU')), 'the lobby is gone');
+  const fr0 = await run(`window.__debrisGame.loop.frame`); await sleep(500);
+  check((await run(`window.__debrisGame.loop.frame`)) > fr0 + 10, 'and the game loop is alive');
   log(failures.length === 0 ? 'PASS' : `FAIL (${failures.length})`);
   app.exit(failures.length === 0 ? 0 : 1);
 });

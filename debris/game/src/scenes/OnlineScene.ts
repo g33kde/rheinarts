@@ -408,7 +408,9 @@ export class OnlineScene extends Phaser.Scene {
       session.stop();
       this.session = undefined;
       this.cleanup();
-      this.scene.restart();
+      // Explicit data: a bare restart() hands create() the data the scene was last started with
+      // (the old {session}), which put the lobby straight back up on a dead session.
+      this.scene.restart({});
     });
   }
 
@@ -420,6 +422,6 @@ export class OnlineScene extends Phaser.Scene {
     this.clearScreen();
     this.titleText.setText('ONLINE');
     this.bodyText.setPosition(ARENA_WIDTH / 2, 330).setText(message);
-    this.makeButton(ARENA_WIDTH / 2, 560, 'BACK', () => this.scene.restart());
+    this.makeButton(ARENA_WIDTH / 2, 560, 'BACK', () => this.scene.restart({}));
   }
 }

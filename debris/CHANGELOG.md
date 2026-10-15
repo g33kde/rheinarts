@@ -38,9 +38,12 @@ Found by playing the desktop client on Windows against the Linux server.
   reports (HUD). Applies to LAN clients too.
 - **Not a bug, by design:** a pilot flown to the Space Station is not picked up -
   a teammate must tow them (`docs/gameplay.md`, "never enough to save yourself").
-- **Freeze when leaving: not reproduced.** Escape -> LEAVE (also with a drifting
-  pilot), a leaver among others, and a pilot's timeout -> game over -> lobby all
-  behave in the real-client e2e. Needs the exact steps from whoever saw it.
+- **"Freeze" after a match: LEAVE in the lobby.** Reproduced with: play, die, back in
+  the lobby, LEAVE. `OnlineScene` called `scene.restart()` with no data, and Phaser
+  hands `create()` the data the scene was last *started* with - the old `{ session }` -
+  so the lobby went straight back up on the session it had just stopped: every button
+  dead. Now `restart({})` (also for the message screen's BACK, which had the same
+  problem). The e2e covers it (step 8); the earlier e2e never pressed LEAVE in the lobby.
 - Tests: protocol round-trip for `shieldCharges`; the real-client e2e checks the hidden
   slots/HUDs and applies a shield; `smoke --scenario=leave` now checks the match goes on
   for the others after a leave.
