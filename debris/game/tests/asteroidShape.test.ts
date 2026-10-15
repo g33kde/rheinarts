@@ -4,6 +4,7 @@ import {
   generateCraters,
   pickCrackTargets,
   pickShapeFamily,
+  seededRng,
 } from '../src/systems/AsteroidShape';
 
 describe('generateAsteroidPoints', () => {
@@ -109,5 +110,23 @@ describe('pickCrackTargets', () => {
       expect(i).toBeGreaterThanOrEqual(0);
       expect(i).toBeLessThan(8);
     });
+  });
+});
+
+describe('seededRng', () => {
+  it('gives the same sequence for the same seed, a different one for another, all within [0, 1)', () => {
+    const a = seededRng(12345);
+    const b = seededRng(12345);
+    const seqA = Array.from({ length: 20 }, () => a());
+    expect(Array.from({ length: 20 }, () => b())).toEqual(seqA);
+    expect(seqA.every((v) => v >= 0 && v < 1)).toBe(true);
+    const c = seededRng(12346);
+    expect(Array.from({ length: 20 }, () => c())).not.toEqual(seqA);
+  });
+
+  it('rebuilds the same rock outline from the same seed', () => {
+    const points = (seed: number) => generateAsteroidPoints(10, 0.4, seededRng(seed));
+    expect(points(99)).toEqual(points(99));
+    expect(points(99)).not.toEqual(points(100));
   });
 });

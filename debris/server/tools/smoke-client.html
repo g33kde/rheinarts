@@ -54,7 +54,7 @@ class Player {
     this.ships = new Map(); // slot -> { first, last }
     this.firstAt = null; this.bytes = 0; this.tLast = null;
     // one-shot effects (sounds, bursts, shake, popups) seen in snapshots
-    this.wrecksMax = 0; this.wreckSample = null; this.eventSeen = new Map(); this.eventKinds = new Set(); this.sfxSeen = new Set(); this.musicSeen = new Set(); this.idsAscending = true; this.maxEventId = 0;
+    this.wrecksMax = 0; this.wreckSample = null; this.eventSeen = new Map(); this.eventKinds = new Set(); this.sfxSeen = new Set(); this.musicSeen = new Set(); this.shieldField = false; this.shieldMax = 0; this.rockSeeds = 0; this.rocks = 0; this.idsAscending = true; this.maxEventId = 0;
   }
   get slots() { return this.joined ? this.joined.slotIndices : []; }
   async connect() {
@@ -89,6 +89,8 @@ class Player {
       this.lastTick = Math.max(this.lastTick, s.tick);
       this.states.add(s.state);
       this.musicSeen.add(s.music);
+      s.ships.forEach((sh) => { if (typeof sh.shieldCharges === 'number') { this.shieldField = true; this.shieldMax = Math.max(this.shieldMax, sh.shieldCharges); } });
+      s.entities.forEach((en) => { if (en.type === 'asteroid') { this.rocks += 1; if (Number.isInteger(en.data && en.data.seed)) this.rockSeeds += 1; } });
       if ((s.wrecks || []).length > this.wrecksMax) { this.wrecksMax = s.wrecks.length; this.wreckSample = s.wrecks; }
       (s.events || []).forEach((ev) => {
         const seenBefore = this.eventSeen.get(ev.id) || 0;
@@ -170,6 +172,8 @@ async function scenarioPlay() {
     check(repeats.length > 0 && Math.max(...repeats) <= 3, `${p.name}: no effect repeats more than 3 times (max ${Math.max(0, ...repeats)})`);
     check(repeats.length > 0 && Math.min(...repeats) >= 1 && repeats.filter((n) => n >= 2).length > 0, `${p.name}: effects are repeated for loss tolerance`);
     check(p.idsAscending, `${p.name}: event ids arrive in order`);
+    check(p.shieldField, `${p.name}: ships report their shield charges (field present; highest seen ${p.shieldMax})`);
+    check(p.rocks > 0 && p.rockSeeds === p.rocks, `${p.name}: every asteroid carries its look seed (${p.rockSeeds}/${p.rocks})`);
     check(p.musicSeen.size === 1 && p.musicSeen.has('gameplay'), `${p.name}: the snapshot names the stage music (${[...p.musicSeen]})`);
   }
   players.forEach((p) => p.close());

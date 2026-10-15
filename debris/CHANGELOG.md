@@ -23,6 +23,17 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-15 — Online/LAN clients draw the host's real asteroids
+
+A client used to draw every rock from its own fresh random roll: a plain outline,
+none of the craters or cracks, and not even the host's silhouette (so the rock you
+hit was not the shape you saw). Each asteroid now carries an integer look seed in its
+snapshot data (`Asteroid.lookSeed`); `asteroidLookFor(size, seed)` / `drawAsteroid`
+(shared by the real rock and the client mirror, `seededRng` in `AsteroidShape.ts`)
+rebuild the identical rock. Older hosts send no seed (random look, as before).
+`smoke --scenario=play` now also checks that ships report `shieldCharges` and every
+asteroid has its seed - which doubles as a way to see whether a server runs the new build.
+
 ## 2026-10-15 — Online/LAN clients: shields drawn, empty slots hidden
 
 Found by playing the desktop client on Windows against the Linux server.

@@ -29,7 +29,7 @@ import {
   WEAPON_UPGRADES,
 } from '../config/GameConfig';
 import { PlayfieldBackground } from '../entities/Background';
-import { Asteroid } from '../entities/Asteroid';
+import { Asteroid, asteroidLookFor, drawAsteroid } from '../entities/Asteroid';
 import { BlackHole } from '../entities/BlackHole';
 import { Cardinal } from '../entities/Cardinal';
 import { CardinalPlasmaBall } from '../entities/CardinalPlasmaBall';
@@ -138,7 +138,7 @@ import {
 } from '../systems/NetworkSnapshotProtocol';
 import { EntityMirrorRegistry } from '../systems/EntityMirrorRegistry';
 import { formatPlayerHud, type PlayerHudData } from '../systems/PlayerHudFormat';
-import { generateAsteroidPoints, pickShapeFamily } from '../systems/AsteroidShape';
+import { generateAsteroidPoints } from '../systems/AsteroidShape';
 import { ringLethalRadiusAt, ringPhaseAt } from '../systems/FractureRing';
 import type { SwarmBitKind } from '../entities/FractureSwarmBit';
 import { RemoteInput } from '../input/RemoteInput';
@@ -1150,7 +1150,7 @@ export class GameScene extends Phaser.Scene {
         x: asteroid.position.x,
         y: asteroid.position.y,
         rotation: asteroid.visual.rotation,
-        data: { size: asteroid.size },
+        data: { size: asteroid.size, seed: asteroid.lookSeed },
       });
     });
 
@@ -1645,25 +1645,11 @@ export class GameScene extends Phaser.Scene {
     this.entityMirrors.registerFactory('asteroid', (scene, entity) => {
       const size = (typeof entity.data.size === 'string' ? entity.data.size : 'large') as AsteroidSize;
       const radius = ASTEROID[size].radius;
-      const family = pickShapeFamily(ASTEROID.shapeFamilies);
-      const vertexCount = Math.round(
-        family.vertexCountRange[0] + Math.random() * (family.vertexCountRange[1] - family.vertexCountRange[0]),
-      );
-      const points = generateAsteroidPoints(vertexCount, family.jaggedness);
-
+      // The host rolled this rock's looks from a seed and sent it; rebuilding from the same seed draws the
+      // same silhouette, craters and cracks (an older host sends none - any seed then, same style).
+      const seed = typeof entity.data.seed === 'number' ? entity.data.seed : Math.floor(Math.random() * 4294967296);
       const graphics = scene.add.graphics();
-      graphics.fillStyle(COLORS.asteroidFill, 1);
-      graphics.lineStyle(2, COLORS.asteroid, 1);
-      graphics.beginPath();
-      points.forEach((p, i) => {
-        const px = p.x * radius;
-        const py = p.y * radius;
-        if (i === 0) graphics.moveTo(px, py);
-        else graphics.lineTo(px, py);
-      });
-      graphics.closePath();
-      graphics.fillPath();
-      graphics.strokePath();
+      drawAsteroid(graphics, radius, asteroidLookFor(size, seed));
 
       return {
         applySnapshot: (snapshot) => graphics.setPosition(snapshot.x, snapshot.y).setRotation(snapshot.rotation),

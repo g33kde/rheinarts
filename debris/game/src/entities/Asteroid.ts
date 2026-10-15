@@ -5,6 +5,7 @@ import {
   generateCraters,
   pickCrackTargets,
   pickShapeFamily,
+  seededRng,
   type AsteroidCrater,
 } from '../systems/AsteroidShape';
 import type { AsteroidSize } from '../systems/AsteroidSplit';
@@ -22,6 +23,57 @@ import type { MatterGameObject } from './MatterGameObject';
 // at all, so they get none - only medium/large get any, large gets more.
 const CRATER_COUNT_BY_SIZE: Record<AsteroidSize, number> = { large: 3, medium: 2, small: 0 };
 const CRACK_COUNT_BY_SIZE: Record<AsteroidSize, number> = { large: 2, medium: 1, small: 0 };
+
+interface AsteroidLook {
+  readonly points: Vector2[];
+  readonly craters: AsteroidCrater[];
+  readonly crackTargets: Vector2[];
+}
+
+/** Everything about a rock's looks, rolled from one integer seed - so the host can send just the seed and a client draws the identical rock. */
+export function asteroidLookFor(size: AsteroidSize, seed: number): AsteroidLook {
+  const rng = seededRng(seed);
+  const family = pickShapeFamily(ASTEROID.shapeFamilies, rng);
+  const vertexCount = Math.round(
+    family.vertexCountRange[0] + rng() * (family.vertexCountRange[1] - family.vertexCountRange[0]),
+  );
+  const points = generateAsteroidPoints(vertexCount, family.jaggedness, rng);
+  const craters = generateCraters(CRATER_COUNT_BY_SIZE[size], rng);
+  const crackTargets = pickCrackTargets(points.length, CRACK_COUNT_BY_SIZE[size], rng).map((i) => points[i]!);
+  return { points, craters, crackTargets };
+}
+
+/** Draws a rock (silhouette, cracks, craters) around the graphics' own origin. Shared by the real asteroid and a client's mirror of it. */
+export function drawAsteroid(g: Phaser.GameObjects.Graphics, radius: number, look: AsteroidLook): void {
+  g.clear();
+  g.fillStyle(COLORS.asteroidFill, 1);
+  g.lineStyle(2, COLORS.asteroid, 1);
+  g.beginPath();
+  look.points.forEach((p, i) => {
+    const px = p.x * radius;
+    const py = p.y * radius;
+    if (i === 0) g.moveTo(px, py);
+    else g.lineTo(px, py);
+  });
+  g.closePath();
+  g.fillPath();
+  g.strokePath();
+
+  // Crack lines - from center out to one of the silhouette's own vertices (stopped a little short,
+  // 0.85, so the crack reads as reaching the surface rather than poking past it).
+  look.crackTargets.forEach((target) => {
+    g.lineStyle(1, COLORS.asteroid, 0.35);
+    g.beginPath();
+    g.moveTo(0, 0);
+    g.lineTo(target.x * radius * 0.85, target.y * radius * 0.85);
+    g.strokePath();
+  });
+
+  look.craters.forEach((crater) => {
+    g.lineStyle(1, COLORS.asteroid, 0.4);
+    g.strokeCircle(crater.x * radius, crater.y * radius, crater.radius * radius);
+  });
+}
 
 /**
  * A procedurally-shaped drifting rock - see docs/art_direction.md for why
@@ -54,6 +106,8 @@ export class Asteroid {
   readonly radius: number;
   private readonly spinSpeed: number;
   private readonly baseSpeed: number;
+  /** Seeds the rock's looks; carried in network snapshots so clients draw the same rock. */
+  readonly lookSeed: number;
   private alive = true;
 
   constructor(
@@ -69,13 +123,8 @@ export class Asteroid {
     this.radius = stats.radius;
     this.spinSpeed = (rng() - 0.5) * 0.6; // slow constant rotation, per docs/gameplay.md
 
-    const family = pickShapeFamily(ASTEROID.shapeFamilies, rng);
-    const vertexCount = Math.round(
-      family.vertexCountRange[0] + rng() * (family.vertexCountRange[1] - family.vertexCountRange[0]),
-    );
-    const points = generateAsteroidPoints(vertexCount, family.jaggedness, rng);
-    const craters = generateCraters(CRATER_COUNT_BY_SIZE[size], rng);
-    const crackTargets = pickCrackTargets(points.length, CRACK_COUNT_BY_SIZE[size], rng).map((i) => points[i]!);
+    this.lookSeed = Math.floor(rng() * 4294967296);
+    const look = asteroidLookFor(size, this.lookSeed);
 
     const visual = scene.add.graphics();
     scene.matter.add.gameObject(visual, {
@@ -94,7 +143,7 @@ export class Asteroid {
     this.visual.setPosition(x, y);
     this.visual.setData('entity', this);
 
-    this.draw(points, craters, crackTargets);
+    drawAsteroid(this.visual, this.radius, look);
 
     this.baseSpeed = stats.speed;
     this.visual.setVelocity(Math.cos(headingRad) * this.baseSpeed, Math.sin(headingRad) * this.baseSpeed);
@@ -140,40 +189,6 @@ export class Asteroid {
     if (wrapped.x !== this.position.x || wrapped.y !== this.position.y) {
       this.visual.setPosition(wrapped.x, wrapped.y);
     }
-  }
-
-  private draw(points: Vector2[], craters: AsteroidCrater[], crackTargets: Vector2[]): void {
-    const g = this.visual;
-    g.clear();
-    g.fillStyle(COLORS.asteroidFill, 1);
-    g.lineStyle(2, COLORS.asteroid, 1);
-    g.beginPath();
-    points.forEach((p, i) => {
-      const px = p.x * this.radius;
-      const py = p.y * this.radius;
-      if (i === 0) g.moveTo(px, py);
-      else g.lineTo(px, py);
-    });
-    g.closePath();
-    g.fillPath();
-    g.strokePath();
-
-    // Crack lines - from center out to one of the silhouette's own
-    // vertices (stopped a little short, 0.85, so the crack reads as
-    // reaching the surface rather than poking past it).
-    crackTargets.forEach((target) => {
-      g.lineStyle(1, COLORS.asteroid, 0.35);
-      g.beginPath();
-      g.moveTo(0, 0);
-      g.lineTo(target.x * this.radius * 0.85, target.y * this.radius * 0.85);
-      g.strokePath();
-    });
-
-    // Crater rings.
-    craters.forEach((crater) => {
-      g.lineStyle(1, COLORS.asteroid, 0.4);
-      g.strokeCircle(crater.x * this.radius, crater.y * this.radius, crater.radius * this.radius);
-    });
   }
 
   destroy(): void {
