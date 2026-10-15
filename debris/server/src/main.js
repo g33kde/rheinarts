@@ -126,6 +126,10 @@ app.whenReady().then(async () => {
       bindAddress: config.network.bindAddress,
       logger,
       getStatusReply: statusReply,
+      limits: config.limits,
+      onPeerClosed: (peerId) => {
+        if (pageReady && !wc.isDestroyed()) wc.send('server:peer-closed', peerId);
+      },
       onMessage: (peerId, data) => {
         if (!pageReady) held.push({ peerId, data });
         else if (!wc.isDestroyed()) wc.send('server:signal-in', { peerId, data });

@@ -14,7 +14,16 @@
     "defaultMode": "cooperative",
     "maxPlayers": 4,
     "returnToLobbyDelayMs": 8000,
-    "reconnectGraceMs": 30000
+    "reconnectGraceMs": 30000,
+    "idleLeaderMs": 120000
+  },
+
+  "limits": {
+    "maxConnections": 64,
+    "maxConnectionsPerIp": 8,
+    "messagesPerSecond": 30,
+    "burstMessages": 80,
+    "idleTimeoutMs": 30000
   },
 
   "ops": {

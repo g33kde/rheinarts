@@ -125,6 +125,9 @@ export class DedicatedServer {
   private matchInitials = new Map<number, string>();
   private control: DedicatedMatchControl | undefined;
   private nextOwner = 1;
+  /** The leader the idle timer is counting for, and when they last did something (joined, were promoted, or sent a lobby command). */
+  private watchedLeader = -1;
+  private leaderActiveAt = 0;
 
   constructor(
     private readonly config: ServerRuntimeConfig,
@@ -288,6 +291,7 @@ export class DedicatedServer {
   // ---------------------------------------------------------------
 
   private onCommand(owner: number, command: LobbyCommandMessage): void {
+    if (owner === this.lobby.leaderOwner) this.leaderActiveAt = this.now();
     const result = this.lobby.command(owner, command);
     if (result === 'ignored') {
       this.env.log('debug', `Ignored ${command.action} from owner ${owner}`);
@@ -345,7 +349,30 @@ export class DedicatedServer {
     setTimeout(() => session.connection.close(), 200);
   }
 
+  /**
+   * A leader who joins and then does nothing would block the lobby for everyone, so after
+   * `gameplay.idleLeaderMs` without a lobby command the next joiner leads instead. The old leader
+   * stays seated, at the back of the queue. Never with one owner (nobody to hand over to) or mid-match.
+   */
+  private rotateIdleLeader(): void {
+    const limit = this.config.gameplay.idleLeaderMs;
+    if (limit <= 0 || this.lobby.isInMatch) return;
+    const leader = this.lobby.leaderOwner;
+    const now = this.now();
+    if (leader !== this.watchedLeader) {
+      this.watchedLeader = leader;
+      this.leaderActiveAt = now;
+      return;
+    }
+    if (leader < 0 || now - this.leaderActiveAt < limit || !this.lobby.demoteLeader()) return;
+    this.env.log('info', `The leader was idle for ${Math.round(limit / 1000)}s - leadership passes to the next player`);
+    this.watchedLeader = this.lobby.leaderOwner;
+    this.leaderActiveAt = now;
+    this.broadcastLobby();
+  }
+
   private releaseExpiredSeats(): void {
+    this.rotateIdleLeader();
     this.ledger.expire(this.now()).forEach(({ owner }) => {
       this.env.log('info', 'Reconnect window closed - releasing the seat');
       this.releaseOwner(owner, true);
@@ -431,6 +458,7 @@ export class DedicatedServer {
     this.ledger.clear().forEach(({ owner }) => this.releaseOwner(owner, false));
     this.control = undefined;
     this.lobby.endMatch();
+    this.leaderActiveAt = this.now();
     this.remoteInputsBySlot = new Map();
     this.broadcastLobby();
     this.pushStatus();

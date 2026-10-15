@@ -111,3 +111,14 @@ test('redactConfig hides the password and API key only', () => {
   assert.equal(redacted.name, config.name);
   assert.equal(config.password, 'hunter2');
 });
+
+test('limits and idleLeaderMs have defaults, validate, and reject unknown keys', () => {
+  const { validateConfig } = require('../src/config');
+  const c = validateConfig({});
+  assert.equal(c.limits.maxConnectionsPerIp, 8);
+  assert.equal(c.gameplay.idleLeaderMs, 120000);
+  assert.equal(validateConfig({ gameplay: { idleLeaderMs: 0 }, limits: { idleTimeoutMs: 0 } }).gameplay.idleLeaderMs, 0);
+  assert.throws(() => validateConfig({ limits: { messagesPerSecond: 0 } }), /messagesPerSecond/);
+  assert.throws(() => validateConfig({ limits: { bogus: 1 } }), /limits\.bogus/);
+  assert.throws(() => validateConfig({ gameplay: { idleLeaderMs: -5 } }), /idleLeaderMs/);
+});

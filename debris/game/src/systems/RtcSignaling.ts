@@ -32,15 +32,43 @@ import {
  *
  * What actually carries the messages is a `HostSignalingChannel` (LAN UDP by default, the dedicated server's WebSocket bridge online); `iceServers` is the STUN list handed to every connection it creates (empty on a LAN).
  */
+/** More simultaneous half-finished handshakes than this are ignored: each holds a connection and a UDP port. */
+const MAX_PENDING_HANDSHAKES = 16;
+
 export class RtcSignalingHost {
   private readonly pending = new Map<string, RtcConnection>();
+  private readonly pendingPeer = new Map<string, string>(); // connectionId -> the peer that offered it
+  private readonly pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /**
+   * A handshake that has not finished after `handshakeTimeoutMs` is dropped, and so is one whose
+   * signaling peer went away - otherwise every half-open attempt (a client that vanished after its
+   * offer, or someone deliberately sending offers) would hold a connection and a UDP port forever.
+   */
   constructor(
     private readonly channel: HostSignalingChannel = new LanHostSignalingChannel(),
     private readonly iceServers: RTCIceServer[] = [],
+    private readonly handshakeTimeoutMs = 30000,
   ) {}
 
+  private dropPending(connectionId: string, close: boolean): void {
+    const connection = this.pending.get(connectionId);
+    clearTimeout(this.pendingTimers.get(connectionId));
+    this.pendingTimers.delete(connectionId);
+    this.pendingPeer.delete(connectionId);
+    this.pending.delete(connectionId);
+    if (close) connection?.close();
+  }
+
+  /** Handshakes currently in flight (for tests and the status log). */
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
   listen(onConnected: (connection: RtcConnection) => void): void {
+    this.channel.onPeerClosed?.((peer) => {
+      [...this.pendingPeer].filter(([, p]) => p === peer).forEach(([id]) => this.dropPending(id, true));
+    });
     this.channel.open((peer, data) => {
       const envelope = decodeSignal(data);
       if (!envelope) return;
@@ -52,32 +80,54 @@ export class RtcSignalingHost {
         );
 
       if (envelope.kind === 'offer') {
+        // A repeated offer id from the same peer replaces its earlier attempt rather than leaking it;
+        // from another peer it is ignored (an id is not something one peer may take over from another).
+        const owner = this.pendingPeer.get(envelope.connectionId);
+        if (owner !== undefined && owner !== peer) return;
+        if (owner === undefined && this.pending.size >= MAX_PENDING_HANDSHAKES) return;
+        let offer: RTCSessionDescriptionInit;
+        try {
+          offer = JSON.parse(envelope.payload) as RTCSessionDescriptionInit;
+        } catch {
+          return;
+        }
+        this.dropPending(envelope.connectionId, true);
         const connection = new RtcConnection(false, this.iceServers);
         this.pending.set(envelope.connectionId, connection);
+        this.pendingPeer.set(envelope.connectionId, peer);
+        this.pendingTimers.set(
+          envelope.connectionId,
+          setTimeout(() => this.dropPending(envelope.connectionId, true), this.handshakeTimeoutMs),
+        );
 
         connection.onLocalIceCandidate((candidate) => reply('ice-candidate', JSON.stringify(candidate)));
         connection.onConnected(() => {
-          this.pending.delete(envelope.connectionId);
+          this.dropPending(envelope.connectionId, false);
           onConnected(connection);
         });
 
-        const offer = JSON.parse(envelope.payload) as RTCSessionDescriptionInit;
-        void connection.createAnswer(offer).then((answer) => reply('answer', JSON.stringify(answer)));
+        connection
+          .createAnswer(offer)
+          .then((answer) => reply('answer', JSON.stringify(answer)))
+          .catch(() => this.dropPending(envelope.connectionId, true));
         return;
       }
 
       if (envelope.kind === 'ice-candidate') {
         const connection = this.pending.get(envelope.connectionId);
-        if (!connection) return;
-        void connection.addRemoteIceCandidate(JSON.parse(envelope.payload) as RTCIceCandidateInit);
+        if (!connection || this.pendingPeer.get(envelope.connectionId) !== peer) return;
+        try {
+          void connection.addRemoteIceCandidate(JSON.parse(envelope.payload) as RTCIceCandidateInit).catch(() => undefined);
+        } catch {
+          // a malformed candidate is just not added
+        }
       }
     });
   }
 
   stop(): void {
     this.channel.close();
-    this.pending.forEach((connection) => connection.close());
-    this.pending.clear();
+    [...this.pending.keys()].forEach((id) => this.dropPending(id, true));
   }
 }
 

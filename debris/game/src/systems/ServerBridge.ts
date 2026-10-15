@@ -26,6 +26,8 @@ export interface ServerRuntimeConfig {
     readonly maxPlayers: number;
     readonly returnToLobbyDelayMs: number;
     readonly reconnectGraceMs: number;
+    /** 0 = never; otherwise how long a leader may sit without a lobby command before the next player leads. */
+    readonly idleLeaderMs: number;
   };
   readonly network: { readonly stunServers: readonly string[] };
   readonly ops: { readonly snapshotHz: number };
@@ -67,6 +69,7 @@ declare global {
       reportResult: (report: ScoreReport) => void;
       onSignal: (callback: (payload: { peerId: string; data: string }) => void) => () => void;
       sendSignal: (peerId: string, data: string) => void;
+      onPeerClosed: (callback: (peerId: string) => void) => () => void;
       log: (level: ServerLogLevel, message: string) => void;
     };
   }
@@ -80,6 +83,7 @@ export function isServerMode(): boolean {
 /** Signaling for the dedicated server: WebSocket messages the main process forwards in, replies it sends back out. `peer` is the main process's per-socket id. */
 export class BridgeHostSignalingChannel implements HostSignalingChannel {
   private unsubscribe: (() => void) | undefined;
+  private unsubscribeClosed: (() => void) | undefined;
 
   open(onMessage: (peer: string, data: string) => void): void {
     this.unsubscribe = window.debrisServer?.onSignal(({ peerId, data }) => onMessage(peerId, data));
@@ -89,8 +93,14 @@ export class BridgeHostSignalingChannel implements HostSignalingChannel {
     window.debrisServer?.sendSignal(peer, data);
   }
 
+  onPeerClosed(listener: (peer: string) => void): void {
+    this.unsubscribeClosed = window.debrisServer?.onPeerClosed(listener);
+  }
+
   close(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.unsubscribeClosed?.();
+    this.unsubscribeClosed = undefined;
   }
 }

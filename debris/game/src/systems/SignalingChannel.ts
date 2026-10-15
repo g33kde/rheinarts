@@ -17,6 +17,8 @@ export interface HostSignalingChannel {
   open(onMessage: (peer: string, data: string) => void): void;
   send(peer: string, data: string): void;
   close(): void;
+  /** Optional: told when a peer's transport has gone (the server's WebSocket closed), so half-finished handshakes can be dropped. LAN UDP has no such moment. */
+  onPeerClosed?(listener: (peer: string) => void): void;
 }
 
 /** LAN signaling over the UDP socket `desktop/main.js` exposes as `window.debrisLan`. No-ops outside Electron, like everything else on that bridge. */

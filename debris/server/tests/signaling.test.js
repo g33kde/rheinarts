@@ -141,3 +141,79 @@ test('stays silent on a status query while the page has reported nothing yet', a
     await server.close();
   }
 });
+
+async function withLimits(limits, fn) {
+  const received = [];
+  const server = await createSignalingServer({
+    port: 0,
+    bindAddress: '127.0.0.1',
+    limits,
+    onMessage: (peerId, data) => received.push(data),
+  });
+  try {
+    await fn({ server, received });
+  } finally {
+    await server.close();
+  }
+}
+
+test('limits: connections beyond the per-address cap are refused, and freed again on close', async () => {
+  await withLimits({ maxConnectionsPerIp: 2 }, async ({ server }) => {
+    const a = await open(server.port);
+    const b = await open(server.port);
+    const c = await open(server.port); // the TCP/WS handshake succeeds, then the server closes it
+    assert.equal(await closed(c), 1013);
+    a.close();
+    await closed(a);
+    await new Promise((r) => setTimeout(r, 50));
+    const d = await open(server.port);
+    d.send('ok');
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(d.readyState, WebSocket.OPEN);
+    b.close();
+    d.close();
+  });
+});
+
+test('limits: the total connection cap holds', async () => {
+  await withLimits({ maxConnections: 1, maxConnectionsPerIp: 5 }, async ({ server }) => {
+    const a = await open(server.port);
+    const b = await open(server.port);
+    assert.equal(await closed(b), 1013);
+    assert.equal(a.readyState, WebSocket.OPEN);
+    a.close();
+  });
+});
+
+test('limits: a flood is cut off after the burst, a steady trickle is not', async () => {
+  await withLimits({ burstMessages: 20, messagesPerSecond: 10 }, async ({ server, received }) => {
+    const flood = await open(server.port);
+    const codePromise = closed(flood);
+    for (let i = 0; i < 60; i += 1) flood.send(`m${i}`);
+    assert.equal(await codePromise, 1008);
+    assert.ok(received.length <= 22, `burst let ${received.length} through`);
+
+    const steady = await open(server.port);
+    for (let i = 0; i < 12; i += 1) {
+      steady.send(`s${i}`);
+      await new Promise((r) => setTimeout(r, 150)); // ~7/s, under the 10/s refill
+    }
+    assert.equal(steady.readyState, WebSocket.OPEN);
+    steady.close();
+  });
+});
+
+test('limits: a silent socket is closed after the idle timeout; traffic keeps it alive', async () => {
+  await withLimits({ idleTimeoutMs: 300 }, async ({ server }) => {
+    const silent = await open(server.port);
+    const busy = await open(server.port);
+    const silentClosed = closed(silent);
+    for (let i = 0; i < 6; i += 1) {
+      busy.send('ping');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(await silentClosed, 1000);
+    assert.equal(busy.readyState, WebSocket.OPEN);
+    busy.close();
+  });
+});

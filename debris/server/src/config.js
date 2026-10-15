@@ -25,7 +25,8 @@ const DEFAULTS = Object.freeze({
     udpPortRange: [50000, 50100],
     stunServers: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'],
   },
-  gameplay: { defaultMode: 'cooperative', maxPlayers: 4, returnToLobbyDelayMs: 8000, reconnectGraceMs: 30000 },
+  gameplay: { defaultMode: 'cooperative', maxPlayers: 4, returnToLobbyDelayMs: 8000, reconnectGraceMs: 30000, idleLeaderMs: 120000 },
+  limits: { maxConnections: 64, maxConnectionsPerIp: 8, messagesPerSecond: 30, burstMessages: 80, idleTimeoutMs: 30000 },
   ops: { logLevel: 'info', logFile: null, snapshotHz: 30, highscoreApiUrl: null, highscoreApiKey: null },
 });
 
@@ -71,12 +72,14 @@ function validateConfig(input = {}) {
   const problems = [];
   if (!isPlainObject(input)) throw new ConfigError(['the config file must contain a JSON object']);
 
-  unknownKeys(input, ['name', 'motd', 'password', 'network', 'gameplay', 'ops'], '', problems);
+  unknownKeys(input, ['name', 'motd', 'password', 'network', 'gameplay', 'limits', 'ops'], '', problems);
   const network = section(input, 'network', problems);
   const gameplay = section(input, 'gameplay', problems);
+  const limits = section(input, 'limits', problems);
   const ops = section(input, 'ops', problems);
   unknownKeys(network, ['bindAddress', 'signalingPort', 'udpPortRange', 'stunServers'], 'network.', problems);
-  unknownKeys(gameplay, ['defaultMode', 'maxPlayers', 'returnToLobbyDelayMs', 'reconnectGraceMs'], 'gameplay.', problems);
+  unknownKeys(gameplay, ['defaultMode', 'maxPlayers', 'returnToLobbyDelayMs', 'reconnectGraceMs', 'idleLeaderMs'], 'gameplay.', problems);
+  unknownKeys(limits, ['maxConnections', 'maxConnectionsPerIp', 'messagesPerSecond', 'burstMessages', 'idleTimeoutMs'], 'limits.', problems);
   unknownKeys(ops, ['logLevel', 'logFile', 'snapshotHz', 'highscoreApiUrl', 'highscoreApiKey'], 'ops.', problems);
 
   const config = {
@@ -85,6 +88,7 @@ function validateConfig(input = {}) {
     password: input.password ?? DEFAULTS.password,
     network: { ...DEFAULTS.network, ...network },
     gameplay: { ...DEFAULTS.gameplay, ...gameplay },
+    limits: { ...DEFAULTS.limits, ...limits },
     ops: { ...DEFAULTS.ops, ...ops },
   };
 
@@ -110,6 +114,14 @@ function validateConfig(input = {}) {
   if (!isInt(config.gameplay.reconnectGraceMs, 0, 300000)) problems.push('"gameplay.reconnectGraceMs" must be an integer 0-300000 (0 = a dropped player is eliminated at once)');
   if (!isInt(config.gameplay.returnToLobbyDelayMs, 0, 60000)) problems.push('"gameplay.returnToLobbyDelayMs" must be an integer 0-60000 (how long the end screen shows)');
 
+  if (!isInt(config.gameplay.idleLeaderMs, 0, 3600000)) problems.push('"gameplay.idleLeaderMs" must be an integer 0-3600000 (0 = an idle leader keeps the lead; otherwise how long without a lobby command before the next player leads)');
+  const l = config.limits;
+  if (!isInt(l.maxConnections, 1, 10000)) problems.push('"limits.maxConnections" must be an integer 1-10000');
+  if (!isInt(l.maxConnectionsPerIp, 1, 10000)) problems.push('"limits.maxConnectionsPerIp" must be an integer 1-10000');
+  if (!isInt(l.messagesPerSecond, 1, 10000)) problems.push('"limits.messagesPerSecond" must be an integer 1-10000');
+  if (!isInt(l.burstMessages, 10, 100000)) problems.push('"limits.burstMessages" must be an integer 10-100000');
+  if (!isInt(l.idleTimeoutMs, 0, 3600000)) problems.push('"limits.idleTimeoutMs" must be an integer 0-3600000 (0 = never close idle sockets)');
+
   const o = config.ops;
   if (!LOG_LEVELS.includes(o.logLevel)) problems.push(`"ops.logLevel" must be one of: ${LOG_LEVELS.join(', ')}`);
   if (o.logFile !== null && !isNonEmptyString(o.logFile, 1024)) problems.push('"ops.logFile" must be a path string or null');
@@ -128,7 +140,7 @@ function validateConfig(input = {}) {
   // Freeze the nested objects too - nothing should mutate config at runtime.
   config.network.udpPortRange = Object.freeze([...config.network.udpPortRange]);
   config.network.stunServers = Object.freeze([...config.network.stunServers]);
-  for (const key of ['network', 'gameplay', 'ops']) Object.freeze(config[key]);
+  for (const key of ['network', 'gameplay', 'limits', 'ops']) Object.freeze(config[key]);
   return Object.freeze(config);
 }
 

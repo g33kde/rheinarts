@@ -97,6 +97,20 @@ export class DedicatedLobby {
     if (this.members.length === 0 && this.status === 'lobby') this.mode = this.defaultMode;
   }
 
+  get ownerCount(): number {
+    return this.members.length;
+  }
+
+  /**
+   * Hands leadership to the next-earliest joiner and sends the old leader to the back of the queue
+   * (still seated). Only while gathering and only if someone else is there. Returns whether it moved.
+   */
+  demoteLeader(): boolean {
+    if (this.status !== 'lobby' || this.members.length < 2) return false;
+    this.members.push(this.members.shift()!);
+    return true;
+  }
+
   /** An owner's command. Only the leader's count, and only while the lobby is gathering. */
   command(
     owner: number,

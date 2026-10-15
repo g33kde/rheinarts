@@ -45,7 +45,23 @@ default. All problems are reported at once. Not every key is acted on yet:
 | `password` | in use - empty = none; checked at join (constant-time compare). Sent over the plain `ws://` signaling channel, so it is only as private as that path |
 | `gameplay.returnToLobbyDelayMs` | in use - how long the end screen shows before the lobby reopens |
 | `gameplay.reconnectGraceMs` | in use - how long a mid-match drop keeps its seat (default 30000; 0 = eliminated at once) |
+| `gameplay.idleLeaderMs` | in use - a leader who sends no lobby command for this long (default 120000; 0 = never) hands the lead to the next player and goes to the back of the queue, still seated. Not with a single player, not mid-match |
+| `limits.*` | in use - see "Abuse limits" below |
 | `ops.highscoreApiUrl`, `ops.highscoreApiKey` | in use - where online results are posted and the key that lets the server write the online boards (both or neither) |
+
+### Abuse limits
+
+The signaling socket is open to the internet, so it is capped (`limits` in the
+config; defaults shown in `config.example.json`): at most `maxConnections`
+sockets in all and `maxConnectionsPerIp` from one address (refused with close
+code 1013), `messagesPerSecond` sustained with a `burstMessages` allowance per
+socket (a real handshake is a burst of ~30; beyond the allowance the socket is
+closed with 1008), and a socket silent for `idleTimeoutMs` is closed. Closing a
+signaling socket never disturbs a player already connected - only handshakes
+still in progress. In the game, a handshake that has not completed within 30 s,
+or whose signaling socket closed, is dropped and its connection and UDP port
+freed; at most 16 handshakes may be in flight; and one peer cannot take over
+another's handshake id. Refusals are logged at most once a minute.
 
 ### Firewall
 
@@ -96,6 +112,7 @@ npm run smoke -- --players=4               # in another: join 4, leader starts, 
 npm run smoke -- --scenario=lobby          # the lobby rules end to end (~30 s)
 npm run smoke -- --scenario=session --password=secret   # join checks, reconnect, two-player PC (needs the config below)
 npm run smoke -- --scenario=scoring [--api=http://host:8081/highscores]   # earns a score; with --api, checks the board
+npm run smoke -- --scenario=limits --password=<it>   # flood / per-address cap / idle leader (needs gameplay.idleLeaderMs ~3000)
 npm run smoke -- --scenario=leave --password=<it>     # a deliberate leave frees the seat at once; a drop holds it
 npm run e2e                                # the REAL game client, clicking through the Online screens
 npm run smoke -- --url=ws://host:8765 --stun=1   # against a remote server
@@ -211,22 +228,19 @@ machine, do it for the second.
 
 ## Known limits
 
-- Rate limiting, connection caps, an idle-leader timeout and TLS are phase 8.
-  A real-network test guide is in `TESTING-LINUX.md`.
+- Still to do (phase 8): TLS. Until then the password and reconnect token cross the
+  network in clear text. A real-network test guide is in `TESTING-LINUX.md`.
 - Chromium prints harmless `ERROR:...dcsctp_transport... Close called` /
   `DataChannel error ... Close called` lines to stderr (so the journal) every
   time a player leaves. They are not game errors; ignore them. (Switching
   Chromium's logging off through Electron's command-line switches did not
   work on macOS, so they are left alone rather than hidden by a fragile wrapper.)
   Likewise `Failed to connect to the bus` at startup (Chromium looking for a desktop D-Bus).
-- A leader who joins and goes idle blocks everyone from starting.
 - A player whose connection is *cut* (not closed) is only noticed after
   ICE's keep-alive timeout, several seconds. A deliberate leave is seen at
   once. (A dropped mid-match player keeps a ghost ship for the grace period
   either way; a ghost that was in the shop holds up the stage vote until the
   seat is released.)
-- A signaling socket that closes mid-handshake leaves its half-open
-  `RtcConnection` in `RtcSignalingHost.pending` (phase 8 cleanup).
 - Online play is desktop-only for now (the MULTIPLAYER menu entry is hidden
   in a plain browser tab), although nothing in the Online flow needs Node.
 - **Not tested from behind carrier-grade or symmetric NAT** (a phone hotspot,

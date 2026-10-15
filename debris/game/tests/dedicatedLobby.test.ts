@@ -252,3 +252,28 @@ describe('DedicatedLobby snapshot', () => {
     expect(snap.slots).toEqual([0]);
   });
 });
+
+describe('DedicatedLobby demoteLeader', () => {
+  it('passes leadership to the next joiner and keeps everyone seated', () => {
+    const l = lobby();
+    l.join(10, 1);
+    l.join(11, 2);
+    expect(l.leaderOwner).toBe(10);
+    expect(l.demoteLeader()).toBe(true);
+    expect(l.leaderOwner).toBe(11);
+    expect(l.slotsOf(10)).toEqual([0]);
+    expect(l.playerCount).toBe(3);
+    expect(l.demoteLeader()).toBe(true); // and back: they take turns
+    expect(l.leaderOwner).toBe(10);
+  });
+
+  it('does nothing for a lone player or during a match', () => {
+    const l = lobby();
+    l.join(10, 1);
+    expect(l.demoteLeader()).toBe(false);
+    l.join(11, 1);
+    l.command(10, { action: 'start' });
+    expect(l.demoteLeader()).toBe(false);
+    expect(l.leaderOwner).toBe(10);
+  });
+});

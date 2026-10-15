@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('debrisServer', {
     ipcRenderer.on('server:signal-in', listener);
     return () => ipcRenderer.removeListener('server:signal-in', listener);
   },
+  // A signaling socket closed (so a half-finished handshake from it can be dropped).
+  onPeerClosed: (callback) => {
+    const listener = (_event, peerId) => callback(peerId);
+    ipcRenderer.on('server:peer-closed', listener);
+    return () => ipcRenderer.removeListener('server:peer-closed', listener);
+  },
   sendSignal: (peerId, data) => ipcRenderer.send('server:signal-out', peerId, data),
   log: (level, message) => ipcRenderer.send('server:log', level, message),
 });

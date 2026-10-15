@@ -396,6 +396,50 @@ async function scenarioLeave() {
   back.close(); a.close();
 }
 
+async function scenarioLimits() {
+  say(`limits: abuse limits and the idle leader -> ${URL_} (needs gameplay.idleLeaderMs ~3000, default limits, no other clients)`);
+  const rawSocket = (url) => new Promise((resolve) => {
+    const ws = new WebSocket(url);
+    const info = { ws, code: null };
+    ws.onclose = (e) => { info.code = e.code; };
+    ws.onopen = () => resolve(info);
+    ws.onerror = () => resolve(info);
+  });
+
+  say('1. a message flood is cut off, and the server still serves a normal player afterwards');
+  const flooder = await rawSocket(URL_);
+  for (let i = 0; i < 400; i += 1) { try { flooder.ws.send('{"junk":' + i + '}'); } catch (e) { break; } }
+  await waitFor(() => flooder.code !== null, 5000, 'the flooding socket to be closed');
+  check(flooder.code === 1008, `the flooder was closed for rate limiting (code ${flooder.code})`);
+
+  say('2. more sockets from one address than the cap are refused');
+  const socks = [];
+  for (let i = 0; i < 12; i += 1) socks.push(await rawSocket(URL_));
+  await sleep(500);
+  const refused = socks.filter((s) => s.code === 1013).length;
+  check(refused >= 3, `sockets over the per-address cap were refused (${refused} of 12 got code 1013)`);
+  socks.forEach((s) => s.ws.close());
+  await sleep(500);
+
+  say('3. an idle leader hands the lead to the next player');
+  const a = await join('A', { password: PASSWORD }); const b = await join('B', { password: PASSWORD });
+  if (!check(!!(a.joined && b.joined), 'two players seated')) return;
+  await waitFor(() => b.lobby?.slots.length === 2, 5000, 'B sees both players');
+  check(b.lobby?.leaderSlot === 0, 'A leads at first');
+  b.command('start'); await sleep(800);
+  check(b.lobby?.status === 'lobby', 'B cannot start while A leads');
+  await waitFor(() => b.lobby?.leaderSlot === 1, 20000, 'the lead to pass to B');
+  check(b.lobby?.leaderSlot === 1 && a.lobby?.leaderSlot === 1, 'B now leads (both see it)');
+  check(a.lobby?.slots.length === 2, 'A is still seated');
+  a.command('start'); await sleep(800);
+  check(a.lobby?.status === 'lobby', 'A, no longer leader, cannot start');
+  b.startInput(); a.startInput();
+  b.command('start');
+  await waitFor(() => b.snaps > 5, 20000, 'B to start a match as the new leader');
+  check(b.snaps > 5, 'B started the match');
+  a.close(); b.close();
+}
+
 async function scenarioBot() {
   const leaveAfter = Number(q.get('leaveAfter') || 3000);
   const bot = await join('bot', { password: PASSWORD });
@@ -412,6 +456,7 @@ async function scenarioBot() {
   try {
     if (SCENARIO === 'bot') await scenarioBot();
     else if (SCENARIO === 'scoring') await scenarioScoring();
+    else if (SCENARIO === 'limits') await scenarioLimits();
     else if (SCENARIO === 'leave') await scenarioLeave();
     else if (SCENARIO === 'lobby') await scenarioLobby();
     else if (SCENARIO === 'session') await scenarioSession();

@@ -84,13 +84,13 @@ cp config.example.json config.json
 nano config.json
 ```
 
-For this test set (the smoke scenarios depend on the two timings; use any password and pass it as `--password=<it>`):
+For this test set (the smoke scenarios depend on the timings; use any password and pass it as `--password=<it>`):
 
 ```json
 {
   "name": "Debris Test",
   "password": "choose-one",
-  "gameplay": { "returnToLobbyDelayMs": 1000, "reconnectGraceMs": 3000 },
+  "gameplay": { "returnToLobbyDelayMs": 1000, "reconnectGraceMs": 3000, "idleLeaderMs": 3000 },
   "ops": {
     "logLevel": "debug",
     "highscoreApiUrl": "http://127.0.0.1:8081/highscores",
@@ -161,6 +161,7 @@ URL=ws://debris.rheinarts.de:8765
 npm run smoke -- --url=$URL --stun=1 --scenario=play --players=4 --password=choose-one --seconds=10
 npm run smoke -- --url=$URL --stun=1 --scenario=lobby --password=choose-one
 npm run smoke -- --url=$URL --stun=1 --scenario=session --password=choose-one
+npm run smoke -- --url=$URL --stun=1 --scenario=limits --password=choose-one
 npm run smoke -- --url=$URL --stun=1 --scenario=scoring --password=choose-one    # can take a minute or two
 ```
 
@@ -169,6 +170,7 @@ npm run smoke -- --url=$URL --stun=1 --scenario=scoring --password=choose-one   
   be 0).
 - `lobby` and `session` cover the rules: leader, mode, rejects, two-player PC,
   reconnect, takeover, seat release.
+- `limits` checks the abuse limits and the idle-leader hand-over (needs `idleLeaderMs` 3000, and no one else connected).
 - `scoring` earns a score and leaves. Check the board **on the SERVER**:
   ```bash
   curl -s 'localhost:8081/highscores?mode=onlineCooperative&version=2'
@@ -225,7 +227,7 @@ your password, **JOIN**, then **START**. Fly around. Then:
 ## Afterwards
 
 Put `returnToLobbyDelayMs` back to `8000` and `reconnectGraceMs` to `30000`
-(the defaults), set a real password (or `""` for none), and point
+(the defaults; `idleLeaderMs` to `120000`), set a real password (or `""` for none), and point
 `highscoreApiUrl` at the real API once it has the new image and key (see
 `DEPLOYMENT.md`, "Online boards and the server key"). The server stops cleanly
 on Ctrl-C / `SIGTERM`.
