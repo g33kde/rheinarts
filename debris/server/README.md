@@ -93,8 +93,9 @@ the service. Open the same ports in your hosting provider's panel yourself.
 - Logs go to the journal: `./deploy/debrisctl.sh logs [n]` prints the last n lines, `logs -f` follows. Set `ops.logFile` as well for a file.
 - After editing `config.json`: `./deploy/debrisctl.sh check` then `restart`
   (`npm run check-config` does the same check by hand).
-- After pulling a new version: rebuild (`cd ../game && npm run build:desktop`; `npm ci` here if
-  `package-lock.json` changed), then `restart`.
+- Updating to a new version: `sudo ./deploy/update.sh` (as root or with sudo). It pulls (fast-forward only) as the
+  account that owns the checkout, runs `npm ci` only where a lockfile changed, rebuilds the game, checks the
+  config and restarts the service. `--branch=<name>` switches branch first; `--no-restart` only updates.
 - Uninstall: `sudo systemctl disable --now debris-server && sudo rm /etc/systemd/system/debris-server.service`.
 
 ### macOS

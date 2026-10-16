@@ -23,6 +23,10 @@ not comparable. Decide how to handle that before tagging 2.0.0.
 
 ---
 
+## 2026-10-16 — `server/deploy/update.sh`
+
+`sudo ./deploy/update.sh [--branch=<name>] [--no-restart]` updates the installed server: fast-forward pull as the checkout's owner (nvm Node 22), `npm ci` only if a lockfile changed, game rebuild, config check, service restart. Prompted by a stale server build (old Node 18 in a login shell broke a manual rebuild). Not run on Linux from here; `bash -n` only.
+
 ## 2026-10-15 — Online/LAN clients draw the host's real asteroids
 
 A client used to draw every rock from its own fresh random roll: a plain outline,
